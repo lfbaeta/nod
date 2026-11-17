@@ -120,6 +120,7 @@ export function Onboarding({
   const { step, arrived } = position;
   const index = step === 'preferences' ? onboardingSteps.length : onboardingSteps.indexOf(step);
   const [preparation, setPreparation] = useState<'pending' | 'ready' | 'failed'>('pending');
+  const [preparationError, setPreparationError] = useState('');
   const [finishing, setFinishing] = useState(0);
   const [waitingForServices, setWaitingForServices] = useState(false);
   const [completionFailed, setCompletionFailed] = useState(false);
@@ -280,6 +281,7 @@ export function Onboarding({
     const request = new AbortController();
     preparationRequest.current = request;
     setPreparation('pending');
+    setPreparationError('');
     try {
       const response = await api<AccountPreparationResponse>('/api/account/prepare', {
         method: 'POST',
@@ -288,9 +290,12 @@ export function Onboarding({
       });
       if (response.ok !== true) throw new Error('Setup could not be completed.');
       if (!request.signal.aborted) setPreparation('ready');
-    } catch {
+    } catch (cause) {
       if (!request.signal.aborted) {
         setPreparation('failed');
+        setPreparationError(
+          `Setup preparation failed${cause instanceof ApiError ? ` (HTTP ${cause.status})` : ''}: ${errorMessage(cause)}`,
+        );
         capture('ui_error', { area: 'onboarding', action: 'prepare' });
       }
     } finally {
@@ -364,7 +369,10 @@ export function Onboarding({
     (waitingForServices || preparation !== 'ready' || completionFailed || runtimeError)
   ) {
     const failure =
-      runtimeError || error || (preparation === 'failed' ? 'Nod couldn’t finish setup.' : '');
+      runtimeError ||
+      error ||
+      preparationError ||
+      (preparation === 'failed' ? 'Nod couldn’t finish setup.' : '');
     const runtime = runtimeStatus?.runtime;
     const activeRuntime = runtime && runtime.phase !== 'ready' ? runtime : runtimeStatus;
     const title =
@@ -411,7 +419,10 @@ export function Onboarding({
   const recovery = desktop && (runtimeError || error || saving || preparation === 'failed') && (
     <div className="ob-runtime">
       <Notice>
-        {runtimeError || error || (saving ? 'Trying setup again…' : 'Setup needs another try.')}{' '}
+        {runtimeError ||
+          error ||
+          preparationError ||
+          (saving ? 'Trying setup again…' : 'Setup needs another try.')}{' '}
         <Button variant="ghost" disabled={saving} onClick={() => void retry()}>
           Try again
         </Button>

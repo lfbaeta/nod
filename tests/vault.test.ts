@@ -3643,7 +3643,7 @@ window.nodDesktop={
 const calls=[];
 window.fetch=globalThis.fetch=async(url,options={})=>{
  const path=new URL(url,window.location.href).pathname;calls.push(path);
- if(path==='/api/account/prepare')return new Promise(resolve=>{completePreparation=()=>resolve(Response.json({ok:true}))});
+ if(path==='/api/account/prepare')return new Promise(resolve=>{completePreparation=(response=Response.json({ok:true}))=>resolve(response)});
  if(path==='/api/models'){modelReads++;return Response.json({connections:modelConnected?[{id:'synthetic',provider:'anthropic',method:'api_key',label:'Synthetic model',managed:false,status:'connected',models:[{id:'synthetic-model',name:'Synthetic model',efforts:['medium'],images:false,contextWindow:1000}]}]:[],selection:modelConnected?{connectionId:'synthetic',modelId:'synthetic-model',effort:'medium'}:null,...(modelFailure?{selectionIssue:{reason:modelFailure}}:{})})}
  if(path==='/api/preferences')return Response.json({timeZone:'Europe/Lisbon',locale:'en-GB',hourCycle:'h23',quietHoursEnabled:false,quietStart:'22:00',quietEnd:'08:00',speechReply:'auto',speechVoice:null});
  if(path==='/api/speech')return Response.json({transcription:false,synthesis:false,voices:[],speechVoice:null,speechReply:'auto'});
@@ -3764,6 +3764,19 @@ await act(async()=>statusListener({phase:'ready',runtime:{phase:'ready'}}));
 await settle();
 assert.equal(completions,0,'Desktop readiness must not complete onboarding before server preparation');
 assert.ok(document.querySelector('.setup-progress [role="status"]'));
+const preparationFailure='Synthetic workspace could not mount its volume.';
+await act(async()=>completePreparation(Response.json({error:preparationFailure},{status:503})));
+await waitFor(()=>document.querySelector('.setup-progress [role="alert"]'));
+assert.ok(document.querySelector('.setup-progress [role="alert"]').textContent.includes(preparationFailure));
+assert.ok(document.querySelector('.setup-progress [role="alert"]').textContent.includes('503'));
+assert.equal(completions,0);
+await act(async()=>statusListener({phase:'ready',runtime:{phase:'ready'}}));
+assert.ok(document.querySelector('.setup-progress [role="alert"]').textContent.includes(preparationFailure));
+const preparationCalls=calls.filter(path=>path==='/api/account/prepare').length;
+await act(async()=>button('Try again').click());
+await waitFor(()=>calls.filter(path=>path==='/api/account/prepare').length===preparationCalls+1);
+assert.equal(document.querySelector('.setup-progress [role="alert"]'),null);
+assert.equal(completions,0);
 await act(async()=>{preparationCompleted=true;completePreparation()});
 await waitFor(()=>completions===1);
 await settle();

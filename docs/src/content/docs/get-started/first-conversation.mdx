@@ -49,7 +49,7 @@ flowchart TD
 
 </Steps>
 
-Setup finishes after the last step in the web app or a desktop client connected to a server. For a local assistant, Nod also turns on **Open at login** so it's ready when you sign in to your computer. You can turn it off in **Settings → General**. If its computer is still preparing, Nod shows a loading screen and opens chat when ready. Finishing setup always opens chat, even while first ideas are still being prepared. A startup failure offers **Try again** without clearing your connections. If setup needs a model connection, Nod sends you back to that step.
+Setup finishes after the last step in the web app or a desktop client connected to a server. For a local assistant, Nod also turns on **Open at login** so it's ready when you sign in to your computer. You can turn it off in **Settings → General**. If its computer is still preparing, Nod shows a loading screen and opens chat when ready. Finishing setup always opens chat, even while first ideas are still being prepared. A startup failure offers **Try again** without clearing your connections. If workspace preparation fails, Nod keeps the error returned by the service and its HTTP status, when available. Retrying clears that error while Nod checks readiness again. If setup needs a model connection, Nod sends you back to that step.
 
 You can add more later from **Apps** and **Channels** in the sidebar. See [Connect apps](/connect/apps/) and [Channels](/use/channels/).
 
