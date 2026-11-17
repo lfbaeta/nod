@@ -159,7 +159,7 @@ When the connection service refuses a file for an app, the error shows its HTTP 
 - For `tool_account_mismatch`, pick the account that belongs to that app.
 - For other reasons, try again later.
 
-If it keeps failing, [send feedback with a diagnostic report](/deploy/troubleshooting/#send-feedback-with-a-diagnostic-report).
+If it keeps failing, [report a bug with a diagnostic report](/deploy/troubleshooting/#report-a-bug-with-a-diagnostic-report).
 
 ### App sign-in opens an unreachable address on a remote server
 
