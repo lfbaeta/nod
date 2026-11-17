@@ -10987,6 +10987,15 @@ test(
       await remember([add('about', 'before-clear', beforeClear)], beforeClearMessage);
       assert.equal((await memory.view()).notes.length, 1);
       curator.curate = curate;
+
+      const older = await post('My synthetic library card renews in March.');
+      for (let index = 0; index < 10; index++) await post(`Synthetic filler ${index}.`);
+      const renewal = await post('Remember that renewal month.');
+      state.answer = () => ({ ops: [] });
+      await learning.remember({}, renewal.sourceMessageId);
+      assert.doesNotMatch(JSON.stringify(calls.at(-1)!.input), /renews in March/);
+      await learning.remember({ messages: [older.id] }, renewal.sourceMessageId);
+      assert.match(JSON.stringify(calls.at(-1)!.input), /renews in March/);
     } finally {
       await close();
     }

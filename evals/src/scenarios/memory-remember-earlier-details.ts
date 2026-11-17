@@ -87,7 +87,9 @@ export default scenario({
               call.input?.action === 'memory_learn' &&
               call.input?.args?.messages?.length &&
               call.isError &&
-              /could not use|own messages can be remembered|uuid/i.test(call.output),
+              /could not use|own messages can be remembered|"code":"(invalid_|too_big)/.test(
+                call.output,
+              ),
           );
           return {
             pass: refused.length === 0,
