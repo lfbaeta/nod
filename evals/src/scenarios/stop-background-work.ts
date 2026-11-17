@@ -16,7 +16,7 @@ export default scenario({
   user: {
     approve: true,
     persona:
-      'You are Alex Rivera. Nod keeps spending credits in the background and you want all of it to stop until you turn it back on yourself.',
+      'You are Alex Rivera. Nod keeps spending credits in the background and you want that work to stop until you turn it back on yourself. Your own Friday invoice reminder is cheap and useful: if Nod asks about it, keep it running.',
   },
   world() {
     return {
