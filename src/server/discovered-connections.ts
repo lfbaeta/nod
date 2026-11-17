@@ -1034,7 +1034,8 @@ export async function createDiscoveredConnections(
             owner,
             hash,
             outcome,
-            message && `Sign-in could not finish: ${redactSecretText(message).slice(0, 500)}`,
+            message &&
+              `Sign-in could not finish: ${redactSecretText(message.replaceAll('\0', '')).slice(0, 500)}`,
           ],
         );
         if (changed.rowCount) await options.grantVault.remove(pending.id, client);

@@ -6052,7 +6052,7 @@ test(
     assert.equal(
       await callback(
         states[2],
-        `error=invalid_request&error_description=${encodeURIComponent('Synthetic resource parameter refused. Bearer synthetic-private-leak')}`,
+        `error=invalid_request&error_description=${encodeURIComponent('Synthetic resource parameter refused.\0 Bearer synthetic-private-leak')}`,
       ),
       'failed',
     );
