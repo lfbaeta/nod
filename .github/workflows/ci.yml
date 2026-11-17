@@ -86,7 +86,9 @@ jobs:
         with:
           path: .local/ci-test-timings
           key: ci-test-timings-v2-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: ci-test-timings-v2-
+          restore-keys: |
+            ci-test-timings-v2-
+            ci-test-timings-v1-
       - name: Select tests with the installed tools
         id: scope
         env:

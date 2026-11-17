@@ -295,7 +295,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       const incremental =
         !process.env.GITHUB_EVENT_NAME || process.env.GITHUB_EVENT_NAME === 'pull_request';
       let affected = available;
-      if (incremental && !process.argv.includes('--plan')) {
+      if (incremental) {
         try {
           affected = affectedTests(base, available);
         } catch (error) {

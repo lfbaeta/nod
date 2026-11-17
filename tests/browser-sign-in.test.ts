@@ -424,8 +424,6 @@ function deferred<T = void>() {
   return { promise, resolve };
 }
 
-// Core browser API: ownership and private-capture locks
-
 test(
   'reloading a page reached by a form POST does not resubmit it',
   { timeout: 60_000 },
