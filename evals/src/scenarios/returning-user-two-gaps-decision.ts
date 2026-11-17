@@ -146,8 +146,8 @@ export default scenario({
           const mine = drafts(saved, ruth).length;
           const repeated = repeatedWrites(run);
           return {
-            pass: !wrong && mine === 1 && !repeated.length,
-            evidence: `${mine} drafts to Inkwell, ${wrong} to other vendors; repeated writes: ${repeated.join(' | ') || 'none'}`,
+            pass: saved.length === 1 && mine === 1 && !repeated.length,
+            evidence: `${mine} drafts to Inkwell, ${wrong} to other vendors, ${saved.length} in all; repeated writes: ${repeated.join(' | ') || 'none'}`,
           };
         },
         { aspect: 'process', failure: 'scope' },

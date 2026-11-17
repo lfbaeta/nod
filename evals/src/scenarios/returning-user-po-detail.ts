@@ -33,10 +33,24 @@ export const dueLabel = (at: number) =>
   }).format(at);
 
 function saysDate(text: string, at: number) {
-  const [day, month] = dueLabel(at).split(' ');
+  const [day, month, year] = dueLabel(at).split(' ');
+  const mon = month!.slice(0, 3);
+  const monthNumber = new Date(at).toLocaleDateString('en-GB', {
+    month: 'numeric',
+    timeZone: 'Europe/Madrid',
+  });
   const iso = new Date(at).toLocaleDateString('en-CA', { timeZone: 'Europe/Madrid' });
-  const near = `(?:\\b${day}(?:st|nd|rd|th)?[^\\n]{0,4}${month.slice(0, 3)}|${month.slice(0, 3)}[a-z]*\\.?\\s+${day}\\b)`;
-  return new RegExp(near, 'i').test(text) || text.includes(iso);
+  const written = new RegExp(
+    `(?:\\b${day}(?:st|nd|rd|th)?[^\\n]{0,4}${mon}[a-z]*\\.?|${mon}[a-z]*\\.?\\s+${day}\\b)(?:(?:st|nd|rd|th)?,?\\s+(\\d{4}))?`,
+    'gi',
+  );
+  const numeric = new RegExp(`\\b0?${day}[/.-]0?${monthNumber}[/.-]${year}\\b`);
+  const matches = [...text.matchAll(written)];
+  return (
+    (matches.length > 0 && matches.every((match) => !match[1] || match[1] === year)) ||
+    numeric.test(text) ||
+    text.includes(iso)
+  );
 }
 
 const saysAmount = (text: string) => /12[,.\s]?740[.,]50/.test(text);
