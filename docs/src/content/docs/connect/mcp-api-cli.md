@@ -7,6 +7,8 @@ sidebar:
 
 Besides [Composio apps](/connect/apps/), Nod connects to Notion, Linear and n8n through their own MCP servers. For other services, it can set up an MCP server, an HTTP API or a command-line tool (CLI).
 
+These built-in MCP apps use the same folder format as community apps. Browse their [app pages](/connect/community-apps/), or follow [Creating your own connectors](/contribute/apps/) to add one.
+
 ## Notion and Linear
 
 Notion and Linear connect through their own hosted MCP servers, the same way as any [other MCP server](#connect-another-service). Open **Apps**, select **Connect** and sign in.
@@ -15,7 +17,7 @@ If an older **Notion MCP** account appears in **Apps** but cannot read pages, co
 
 If you ask Nod in chat, it sends a link to a private setup page in Nod, and you start the sign-in there. The service's sign-in link never appears in the chat, so the model and chat apps never see it.
 
-If sign-in can't start, the connection dialog shows the service's reason. If sign-in is cancelled or fails, select **Try again** in the connection dialog. Select **Start again** if you closed the sign-in window. Finish in the newest window, then dismiss the confirmed connection with **Done**.
+If sign-in is cancelled or fails, select **Try again** in the connection dialog. Select **Start again** if you closed the sign-in window. Finish in the newest window, then dismiss the confirmed connection with **Done**.
 
 Nod can use every tool these servers offer, so it can read and change pages, issues and projects. Each change goes through the same [trust check](/trust/approvals/) as any app action. If Nod can't refresh a sign-in because it expired or was revoked, **Apps** shows **Sign-in required** with **Reconnect** from then on.
 
@@ -33,7 +35,7 @@ Nod loads n8n's tools only when a task needs them and follows n8n's own guide fo
 
 ## Connect another service
 
-To connect an MCP server yourself, open **Apps** and select **Connect MCP**. Enter a name and the server URL, then choose browser sign-in, an access token or an API key. Select **Continue** to finish authentication in the private setup dialog. **Connection details** shows any extra setup instructions. Tokens stay outside the chat.
+To connect an MCP server yourself, open **Apps** and select **Connect MCP**. Enter a name and the server URL, then choose browser sign-in, an access token or an API key. Select **Continue** to finish authentication in the private setup dialog. For any MCP server, including Notion, Linear and n8n, the dialog shows the service's reason if sign-in can't start. **Connection details** shows any extra setup instructions. Tokens stay outside the chat.
 
 The URL can be a public HTTPS address or, when you type it yourself, an address on your own computer or network, such as `http://127.0.0.1:8080/mcp` or a Tailscale name. Without `http://` or `https://`, Nod uses HTTPS. A public HTTPS address you type can also use a port other than 443. In the desktop app, `localhost` is your computer. Inside Docker, it is Nod's container. A private address stays bound to the origin you entered, also when you reconnect. HTTP is allowed only for private addresses. With browser sign-in, the server's sign-in service can be at another address only when that address is public and uses HTTPS on the standard port. Connections that Nod proposes in chat must use a public HTTPS address.
 

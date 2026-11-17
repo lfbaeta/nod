@@ -11,7 +11,19 @@ import {
   verify,
   webcrypto,
 } from 'node:crypto';
-import { chmod, copyFile, mkdir, mkdtemp, readdir, rm, stat, symlink } from 'node:fs/promises';
+import {
+  chmod,
+  copyFile,
+  mkdir,
+  mkdtemp,
+  readdir,
+  rm,
+  stat,
+  symlink,
+  cp,
+  readFile,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { type TestContext } from 'node:test';
@@ -72,6 +84,502 @@ import { connectedGmail } from '../src/shared/onboarding.ts';
 import { fileBytes } from '../src/shared/files.ts';
 import { connectionGroups } from '../src/web/lib/secondary-pages.ts';
 import { fakeComputer, fakeExecution, fakeWorkspace } from './runtime-fixtures.ts';
+import { bundledApps, loadAppCatalog } from '../src/server/app-catalog.ts';
+import { checkAppContract } from '../scripts/check-apps.ts';
+import { createApp } from '../scripts/create-app.ts';
+import { createSkillLibrary } from '../src/providers/pi/skills.ts';
+import { appDefinitionSchema, appContractSchema } from '../src/shared/app-definitions.ts';
+import { appSchemaFiles } from '../scripts/app-schemas.ts';
+import { Compile } from 'typebox/compile';
+
+test('app folders reject escaped paths, incomplete contracts, and unsupported server definitions', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'nod-app-profile-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const source = fileURLToPath(new URL('../src/apps/linear', import.meta.url));
+  async function fixture(name: string) {
+    const directory = join(root, name);
+    await mkdir(directory);
+    await cp(source, join(directory, 'linear'), { recursive: true });
+    return directory;
+  }
+  async function change(directory: string, file: string, update: (value: any) => void) {
+    const path = join(directory, 'linear', file);
+    const value = JSON.parse(await readFile(path, 'utf8'));
+    update(value);
+    await writeFile(path, JSON.stringify(value));
+  }
+  const valid = await fixture('valid');
+  await writeFile(join(valid, '.DS_Store'), 'synthetic system metadata');
+  await checkAppContract(loadAppCatalog(valid).get('linear')!);
+  const arrayApp = loadAppCatalog(valid).get('linear')!;
+  await checkAppContract({
+    ...arrayApp,
+    contract: { ...arrayApp.contract, output: [{ id: 'synthetic-array-record' }] },
+  });
+  const invalidJson = await fixture('invalid-json');
+  await writeFile(join(invalidJson, 'linear/plugin.json'), 'synthetic-private-value: {');
+  assert.throws(
+    () => loadAppCatalog(invalidJson),
+    (error: Error) => {
+      assert.match(error.message, /invalid JSON/);
+      assert(!error.message.includes('synthetic-private-value'));
+      return true;
+    },
+  );
+  const missing = await fixture('missing');
+  await rm(join(missing, 'linear/io.n8n.nod/contract.json'));
+  assert.throws(() => loadAppCatalog(missing), /contract.json/);
+  const escaped = await fixture('escaped');
+  await rm(join(escaped, 'linear/io.n8n.nod/icon.svg'));
+  await symlink(
+    join(valid, 'linear/io.n8n.nod/icon.svg'),
+    join(escaped, 'linear/io.n8n.nod/icon.svg'),
+  );
+  assert.throws(() => loadAppCatalog(escaped), /leaves the app directory/);
+  const linked = join(root, 'linked');
+  await mkdir(linked);
+  await symlink(join(valid, 'linear'), join(linked, 'linear'));
+  assert.throws(() => loadAppCatalog(linked), /without symbolic links/);
+  const cases: Array<[string, string, (value: any) => void, RegExp]> = [
+    [
+      'version',
+      'mcp.json',
+      (value) => {
+        value.$schema = 'https://agent-plugins.org/schemas/9.0.0/mcp.schema.json';
+      },
+      /Agent Plugins 1.0.0/,
+    ],
+    [
+      'secret',
+      'mcp.json',
+      (value) => {
+        value.mcpServers.linear.headers = { Authorization: 'synthetic-never-display-this' };
+      },
+      /headers are not supported/,
+    ],
+    [
+      'private',
+      'mcp.json',
+      (value) => {
+        value.mcpServers.linear.url = 'https://127.0.0.1/mcp';
+      },
+      /public HTTPS/,
+    ],
+    ...['?', '#'].map((delimiter, index): [string, string, (value: any) => void, RegExp] => [
+      `empty-url-delimiter-${index}`,
+      'mcp.json',
+      (value) => {
+        value.mcpServers.linear.url += delimiter;
+      },
+      /public HTTPS/,
+    ]),
+    [
+      'stdio',
+      'mcp.json',
+      (value) => {
+        value.mcpServers.linear = { type: 'stdio', command: 'node' };
+      },
+      /streamable-http/,
+    ],
+    [
+      'server',
+      'io.n8n.nod/app.json',
+      (value) => {
+        value.connection.server = 'missing';
+      },
+      /selected server/,
+    ],
+    [
+      'placeholder',
+      'io.n8n.nod/contract.json',
+      (value) => {
+        value.tool.name = 'replace_with_read_tool';
+      },
+      /invalid contract/,
+    ],
+  ];
+  for (const [name, file, update, reason] of cases) {
+    const directory = await fixture(name);
+    await change(directory, file, update);
+    assert.throws(
+      () => loadAppCatalog(directory),
+      (error: Error) => {
+        assert.match(error.message, reason);
+        assert(!error.message.includes('synthetic-never-display-this'));
+        return true;
+      },
+    );
+  }
+  const invalidInput = await fixture('input');
+  await change(invalidInput, 'io.n8n.nod/contract.json', (value) => {
+    value.input = { query: 42 };
+  });
+  await assert.rejects(
+    checkAppContract(loadAppCatalog(invalidInput).get('linear')!),
+    /does not match/,
+  );
+  const patternInput = await fixture('pattern-input');
+  await change(patternInput, 'io.n8n.nod/contract.json', (value) => {
+    value.tool.inputSchema.properties.query.pattern = '^allowed_';
+  });
+  await assert.rejects(
+    checkAppContract(loadAppCatalog(patternInput).get('linear')!),
+    /does not match/,
+  );
+  await change(patternInput, 'io.n8n.nod/contract.json', (value) => {
+    value.input.query = 'allowed_synthetic_query';
+  });
+  await checkAppContract(loadAppCatalog(patternInput).get('linear')!);
+  await change(patternInput, 'io.n8n.nod/contract.json', (value) => {
+    value.tool.inputSchema.required = 'query';
+  });
+  await assert.rejects(
+    checkAppContract(loadAppCatalog(patternInput).get('linear')!),
+    /not valid JSON Schema 2020-12/,
+  );
+});
+
+test('app scaffolding refuses replacement and requires contributors to complete the read contract', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'nod-app-scaffold-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const options = {
+    directory,
+    url: 'https://mcp.linear.app/mcp',
+    name: 'Synthetic app',
+    auth: 'oauth2',
+  };
+  for (const slug of ['../escape', 'trailing-', 'double--hyphen', 'a'])
+    await assert.rejects(createApp(slug, options));
+  for (const url of [
+    'https://127.0.0.1/mcp',
+    'https://[::1]/mcp',
+    'https://localhost/mcp',
+    'https://mcp.example.com/mcp',
+    'https://mcp.internal/mcp',
+    'https://mcp.test/mcp',
+    `${options.url}?`,
+    `${options.url}#`,
+  ])
+    await assert.rejects(createApp('synthetic-app', { ...options, url }), /public HTTPS/);
+  for (const name of ['', '   ', 'n'.repeat(81)])
+    await assert.rejects(createApp('synthetic-app', { ...options, name }), /app name/);
+  assert.deepEqual(await readdir(directory), []);
+  await createApp('synthetic-app', options);
+  await assert.rejects(createApp('synthetic-app', options), { code: 'EEXIST' });
+  assert.throws(() => loadAppCatalog(directory), /invalid contract/);
+  const manifestPath = join(directory, 'synthetic-app/plugin.json');
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+  manifest.author.name = 'Synthetic maintainer';
+  await writeFile(manifestPath, JSON.stringify(manifest));
+  const appPath = join(directory, 'synthetic-app/io.n8n.nod/app.json');
+  const app = JSON.parse(await readFile(appPath, 'utf8'));
+  app.requirements = ['A disposable account with read access.'];
+  app.limitations = ['Automatic monitoring is not supported.'];
+  await writeFile(appPath, JSON.stringify(app));
+  await writeFile(
+    join(directory, 'synthetic-app/io.n8n.nod/contract.json'),
+    JSON.stringify(bundledApps.get('linear')!.contract),
+  );
+  await checkAppContract(loadAppCatalog(directory).get('synthetic-app')!);
+});
+
+test('app skills cannot shadow core guides or load without a trusted root', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'nod-app-skills-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  assert.throws(() => createSkillLibrary([]), /At least one skill directory/);
+  const builtin = join(directory, 'builtin');
+  const apps = join(directory, 'apps');
+  await mkdir(join(builtin, 'artifacts'), { recursive: true });
+  await mkdir(join(apps, 'artifacts'), { recursive: true });
+  await writeFile(join(builtin, 'artifacts/SKILL.md'), 'Synthetic core guide.');
+  await writeFile(
+    join(apps, 'artifacts/SKILL.md'),
+    '---\nname: artifacts\ndescription: A synthetic app guide.\n---\nApp content.',
+  );
+  assert.throws(() => createSkillLibrary([builtin, apps], ['artifacts']), /conflicts with a core/);
+  await rm(join(apps, 'artifacts'), { recursive: true });
+  await mkdir(join(apps, 'community-guide'));
+  const body = '---\nname: community-guide\ndescription: A synthetic app guide.\n---\nApp content.';
+  await writeFile(join(apps, 'community-guide/SKILL.md'), body);
+  const library = createSkillLibrary([builtin, apps], ['artifacts']);
+  assert.equal(library.read('artifacts').content, 'Synthetic core guide.');
+  assert.equal(library.read('community-guide').content, body);
+  await mkdir(join(builtin, 'community-guide'));
+  await writeFile(join(builtin, 'community-guide/SKILL.md'), body);
+  assert.throws(() => createSkillLibrary([builtin, apps], ['artifacts']), /metadata is invalid/);
+});
+
+test('published app schemas reject unsupported definitions with the runtime validators', async () => {
+  const editorApp = Compile(appSchemaFiles['app.schema.json'] as Parameters<typeof Compile>[0]);
+  const editorContract = Compile(
+    appSchemaFiles['contract.schema.json'] as Parameters<typeof Compile>[0],
+  );
+  const app = JSON.parse(
+    await readFile(new URL('../src/apps/linear/io.n8n.nod/app.json', import.meta.url), 'utf8'),
+  );
+  const instance = JSON.parse(
+    await readFile(new URL('../src/apps/n8n/io.n8n.nod/app.json', import.meta.url), 'utf8'),
+  );
+  assert(editorApp.Check(app));
+  assert(editorApp.Check(instance));
+  for (const change of [
+    (value: any) => {
+      value.displayName = 42;
+    },
+    (value: any) => {
+      value.displayName = '   ';
+    },
+    (value: any) => {
+      value.displayName = ' Leading space';
+    },
+    (value: any) => {
+      value.requirements = ['   '];
+    },
+    (value: any) => {
+      value.unknownSetting = true;
+    },
+    (value: any) => {
+      value.$schema = value.$schema.replace('/v1/', '/v2/');
+    },
+    (value: any) => {
+      value.prompts = 'Read my records.';
+    },
+    (value: any) => {
+      value.connection.authentication = ['password'];
+    },
+    (value: any) => {
+      value.connection.authentication = ['bearer'];
+    },
+    (value: any) => {
+      value.connection.authentication = ['oauth2', 'bearer'];
+    },
+    (value: any) => {
+      value.connection.endpoint = { source: 'owner', path: '/mcp' };
+    },
+    (value: any) => {
+      value.connection.headers = { Authorization: 'synthetic-private-token' };
+    },
+  ]) {
+    const invalid: unknown = structuredClone(app);
+    change(invalid);
+    assert.equal(appDefinitionSchema.safeParse(invalid).success, false);
+    assert.equal(editorApp.Check(invalid), false);
+  }
+  const contract = structuredClone(bundledApps.get('linear')!.contract);
+  assert(editorContract.Check(contract));
+  for (const change of [
+    (value: any) => {
+      value.extraSetting = true;
+    },
+    (value: any) => {
+      value.source = 'http://provider.invalid/docs';
+    },
+    (value: any) => {
+      value.tool.annotations.readOnlyHint = false;
+    },
+    (value: any) => {
+      value.tool.inputSchema.type = 'array';
+    },
+    (value: any) => {
+      value.tool.name = 'replace_with_read_tool';
+    },
+  ]) {
+    const invalid: unknown = structuredClone(contract);
+    change(invalid);
+    assert.equal(appContractSchema.safeParse(invalid).success, false);
+    assert.equal(editorContract.Check(invalid), false);
+  }
+});
+
+test('every shipped app passes the required offline MCP contract suite', async (t) => {
+  t.mock.method(globalThis, 'fetch', async () =>
+    assert.fail('App contract checks must not make external requests.'),
+  );
+  for (const app of bundledApps.values()) await t.test(app.slug, () => checkAppContract(app));
+});
+
+for (const authentication of ['oauth2', 'bearer', 'x-api-key'] as const)
+  test(
+    `an added app folder uses private setup, account binding, and credential removal with ${authentication}`,
+    { skip: !process.env.TEST_DATABASE_URL },
+    async (t) => {
+      t.mock.method(globalThis, 'fetch', async () =>
+        assert.fail('App setup must use the synthetic provider.'),
+      );
+      const directory = await mkdtemp(join(tmpdir(), 'nod-app-connection-'));
+      t.after(() => rm(directory, { recursive: true, force: true }));
+      await cp(
+        fileURLToPath(new URL('../src/apps/linear', import.meta.url)),
+        join(directory, 'community-fixture'),
+        { recursive: true },
+      );
+      const manifestPath = join(directory, 'community-fixture/plugin.json');
+      const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+      manifest.name = 'community-fixture';
+      await writeFile(manifestPath, JSON.stringify(manifest));
+      const appPath = join(directory, 'community-fixture/io.n8n.nod/app.json');
+      const app = JSON.parse(await readFile(appPath, 'utf8'));
+      app.displayName = 'Community fixture';
+      app.connection.authentication = [authentication];
+      if (authentication !== 'oauth2') delete app.connection.scopes;
+      await writeFile(appPath, JSON.stringify(app));
+      const apps = loadAppCatalog(directory);
+      const definition = apps.get('community-fixture')!;
+      const database = await hostedDatabase();
+      const server = Fastify();
+      t.after(async () => {
+        await server.close();
+        await database.close();
+      });
+      const token = 'synthetic-app-private-token';
+      let state = '';
+      let dispatched = 0;
+      const transport = createDiscoveredTransport(
+        async (input, init) => {
+          const request = new Request(input, init);
+          assert.equal(request.url, definition.endpoint);
+          assert.equal(
+            request.headers.get(authentication === 'x-api-key' ? 'x-api-key' : 'authorization'),
+            authentication === 'x-api-key' ? token : `Bearer ${token}`,
+          );
+          if (request.method === 'GET') return new Response(null, { status: 405 });
+          if (request.method === 'DELETE') return new Response(null, { status: 200 });
+          const message = JSON.parse(await request.text());
+          if (message.id === undefined) return new Response(null, { status: 202 });
+          if (message.method === 'tools/call') dispatched++;
+          return Response.json({
+            jsonrpc: '2.0',
+            id: message.id,
+            result:
+              message.method === 'initialize'
+                ? {
+                    protocolVersion: message.params.protocolVersion,
+                    capabilities: { tools: {} },
+                    serverInfo: { name: 'synthetic', version: '1' },
+                  }
+                : message.method === 'tools/list'
+                  ? { tools: [definition.contract.tool] }
+                  : {
+                      content: [
+                        {
+                          type: 'text',
+                          text: JSON.stringify({
+                            ...(definition.contract.output as Record<string, unknown>),
+                            privateToken: token,
+                          }),
+                        },
+                      ],
+                    },
+          });
+        },
+        async (value) => {
+          assert.equal(value, definition.endpoint);
+          return value;
+        },
+      );
+      const discovered = await createDiscoveredConnections(database.pool, {
+        apps,
+        ownerId: 'synthetic-owner',
+        baseUrl: 'http://localhost:4310',
+        transport,
+        grantVault: await createAppGrantVault(database.pool, {
+          ownerId: 'synthetic-owner',
+          keyStore: installationKeyStore,
+        }),
+        oauth: {
+          begin: async (endpoint, redirectUri, nextState, scope) => {
+            assert.equal(endpoint, definition.endpoint);
+            assert.equal(scope, 'read write');
+            state = nextState;
+            return { url: `https://consent.example.test/?state=${state}`, saved: { redirectUri } };
+          },
+          finish: async (_endpoint, saved) => ({
+            ...saved,
+            tokens: { access_token: token, token_type: 'Bearer' },
+          }),
+          refresh: async () => assert.fail('A fresh connection must not refresh.'),
+        },
+      });
+      const provider = fakeProvider({
+        id: 'unused',
+        authorize: async () => assert.fail('Use app setup.'),
+        search: async () => ({ tools: {}, suggestions: [] }),
+        execute: async () => assert.fail('Use the app transport.'),
+      });
+      provider.configured = false;
+      const integrations = await createIntegrations(database.pool, {
+        ownerId: 'synthetic-owner',
+        provider,
+        discovered,
+        baseUrl: 'http://localhost:4310',
+        wake: async () => {},
+      });
+      integrations.registerRoutes(server);
+      const catalog = (await server.inject('/api/apps/catalog')).json<AppConnection[]>();
+      assert(catalog.some((app) => app.slug === definition.slug && app.name === definition.name));
+      const listed = await integrations.list('synthetic-owner', { refresh: false });
+      assert(listed.some((app) => app.slug === definition.slug && app.direct));
+      assert.equal(
+        (await server.inject(`/api/apps/catalog/${definition.slug}/icon`)).statusCode,
+        200,
+      );
+      const start = await server.inject({
+        method: 'POST',
+        url: `/api/apps/${definition.slug}/connect`,
+      });
+      assert.equal(start.statusCode, 200, start.body);
+      assert(!start.body.includes(token));
+      if (authentication === 'oauth2') {
+        const callback = await server.inject(
+          `/api/apps/callback?state=${state}&code=synthetic-code`,
+        );
+        assert.equal(
+          new URL(callback.headers.location!).searchParams.get('connection'),
+          'connected',
+        );
+      } else {
+        assert.equal(state, '');
+        const id = new URL(start.json().url, 'http://localhost:4310').searchParams.get('connect');
+        const completed = await server.inject({
+          method: 'POST',
+          url: `/api/apps/discovery/${id}/complete`,
+          payload: { token, accountName: 'Synthetic account' },
+        });
+        assert.equal(completed.statusCode, 200, completed.body);
+      }
+      const connected = (await discovered.list()).find((app) => app.slug === definition.slug)!;
+      assert(connected?.connectionId);
+      const known = (await discovered.servers())[0];
+      const args = {
+        connectionId: connected.connectionId,
+        pathId: known.pathId,
+        tool: definition.contract.tool.name,
+        input: definition.contract.input,
+      };
+      const output = await discovered.execute('CONNECTED_MCP_CALL', args, {
+        threadId: randomUUID(),
+        turnId: randomUUID(),
+      });
+      assert(!JSON.stringify(output).includes(token));
+      assert.equal(dispatched, 1);
+      await assert.rejects(
+        discovered.execute(
+          'CONNECTED_MCP_CALL',
+          { ...args, pathId: randomUUID() },
+          { threadId: randomUUID(), turnId: randomUUID() },
+        ),
+      );
+      assert.equal(dispatched, 1);
+      await discovered.disconnect(connected.connectionId, definition.slug);
+      await assert.rejects(
+        discovered.execute('CONNECTED_MCP_CALL', args, {
+          threadId: randomUUID(),
+          turnId: randomUUID(),
+        }),
+      );
+      assert.equal(dispatched, 1);
+    },
+  );
 
 const fixtureIdentityCheckpoint = {
   read: async () => undefined,
@@ -4265,6 +4773,24 @@ test(
         assert.equal(rejected.statusCode, 502, rejected.body);
         assert.match(rejected.body, /Synthetic redirect address not approved\./);
         assert.doesNotMatch(rejected.body, /synthetic-provider-secret/);
+        for (const [cause, expected] of [
+          [Object.assign(new Error(''), { errorCode: 'invalid_client' }), 'invalid_client'],
+          [new Error('x'.repeat(5000)), 'x'.repeat(500)],
+        ] as const) {
+          rejection = cause;
+          const refused = await app.inject({
+            method: 'POST',
+            url: `/api/apps/discovery/${id}/authorize`,
+            headers,
+            payload: {},
+          });
+          rejection = undefined;
+          assert.equal(
+            refused.json().error,
+            `The service sign-in could not start: ${expected}`,
+            refused.body,
+          );
+        }
         const begin = await app.inject({
           method: 'POST',
           url: `/api/apps/discovery/${id}/authorize`,

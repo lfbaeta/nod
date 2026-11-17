@@ -2650,6 +2650,8 @@ test('secret redaction hides every bearer token character', () => {
     redactSecretText('Rejected Bearer synthetic~private+token/1== for this client'),
     'Rejected [redacted] for this client',
   );
+  const basic = Buffer.from('synthetic-user:synthetic-password').toString('base64');
+  assert.equal(redactSecretText(`Rejected Basic ${basic}~tail`), 'Rejected [redacted]~tail');
 });
 
 test('secret redaction keeps valid tokens when another token is missing', () => {

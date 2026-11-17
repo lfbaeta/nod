@@ -153,6 +153,8 @@ jobs:
           pids=()
           (node --test .github/scripts/ci-scope.test.mjs && node .github/scripts/ci-scope.mjs --format) &
           pids+=("$!")
+          pnpm run check:apps &
+          pids+=("$!")
           if [[ "$NOD_CHECK_LINT" == true ]]; then
             pnpm run lint &
             pids+=("$!")
