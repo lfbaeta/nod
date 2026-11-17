@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { FeedbackReceipt, FeedbackReport } from '../../shared/feedback';
-import { api, ApiError, errorMessage, post } from '../lib/api';
+import { api, ApiError, errorMessage } from '../lib/api';
 import { feedbackActivitySnapshot } from '../lib/feedback-activity';
 import { feedbackClientState } from '../lib/feedback-client';
 import { feedbackErrorsAvailable, feedbackErrorsSnapshot } from '../lib/feedback-errors';
@@ -175,6 +175,21 @@ export function BugReportCard({
               <AlertCircle size={16} aria-hidden="true" />
               Sent without the diagnostic report
             </p>
+            {error && (
+              <p className="action-card-error" role="alert">
+                {error}
+              </p>
+            )}
+            {sent.issueUrl && (
+              <a
+                className="bug-report-card-link"
+                href={sent.issueUrl}
+                target="_blank"
+                rel="noreferrer"
+              >
+                View report
+              </a>
+            )}
             {sent.canRetryAttachments && (
               <button
                 type="button"
@@ -183,7 +198,13 @@ export function BugReportCard({
                 onClick={async () => {
                   setBusy(true);
                   try {
-                    applyReceipt(await post<FeedbackReceipt>(`/api/feedback/${draftId}/retry`));
+                    applyReceipt(
+                      await api<FeedbackReceipt>(`/api/feedback/${draftId}/retry`, {
+                        method: 'POST',
+                        body: '{}',
+                        signal: AbortSignal.timeout(90_000),
+                      }),
+                    );
                   } catch (cause) {
                     setError(errorMessage(cause));
                   } finally {

@@ -2517,6 +2517,42 @@ test('observer tools reject invalid read modes and incomplete saves before serve
   assert.equal(updates, 4);
 });
 
+test('bug report actions stay out of background work without a task', async () => {
+  const managed: string[] = [];
+  const manage = async (action: string) => {
+    managed.push(action);
+    return 'ok';
+  };
+  const draft = { action: 'bug_report_draft', args: { summary: 'Synthetic failure.' } };
+  await fixture(
+    async (tools) => {
+      await assert.rejects(
+        call(tools, 'manage_personal_context', draft),
+        /only for work the owner follows/,
+      );
+    },
+    { background: true, manage },
+  );
+  assert.deepEqual(managed, []);
+  await fixture(
+    async (tools) => {
+      await call(tools, 'manage_personal_context', draft);
+    },
+    {
+      background: true,
+      manage,
+      taskContext: {
+        id: randomUUID(),
+        title: 'Synthetic task',
+        brief: 'Find the synthetic result.',
+        doneWhen: 'The result is delivered.',
+        revision: 1,
+      },
+    },
+  );
+  assert.deepEqual(managed, ['bug_report_draft']);
+});
+
 test('proactive work has no write routes and cannot send model text', async () => {
   let handoffs = 0;
   let forbidden = 0;
