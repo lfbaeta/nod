@@ -135,6 +135,7 @@ Model `request_kind` separates `chat`, `task`, `observer`, `helper`, `compaction
 | `message_reaction_changed`, `message_action`      | Fixed reaction/action, input method, and assistant/user role. Copy follows clipboard success.                                                       |
 | `attachment_added`                                | Picker/drop/paste, first-file category, and count bucket (`1`, `2-5`, `6+`).                                                                        |
 | `app_connect_clicked`, `app_connection_completed` | Entry point and whether access setup was needed, or completed connection flow.                                                                      |
+| `app_connection_chat_requested`                   | Selection of Open chat in an Apps connection-success notice. No app, account, sign-in link, or message content.                                     |
 | `model_selected`                                  | Provider, settings/onboarding entry, and whether the recommendation was chosen.                                                                     |
 | `ui_error`                                        | Fixed area and action, without error text.                                                                                                          |
 | `feedback_sent`                                   | Bug/feature/other category and attachment/report booleans, without feedback content.                                                                |
@@ -150,6 +151,8 @@ After **Get started** saves a local choice with usage sharing on, `local_setup_o
 Startup-path events from these builds include `local_setup_telemetry_available=true`. Use this marker and a complete observation window for local setup cohorts. State observations do not prove that the web setup page appeared or that an owner finished onboarding. A missing observation can result from closure, opt-out, or failed delivery.
 
 Native first opens from builds that can emit `server_connection_verified` include `server_connection_telemetry_available=true`. Use that marker to limit the first-day server-connection rate to eligible first-open cohorts; older native opens lack it. There is no separate install event.
+
+After a confirmed connection from Apps, selecting **Open chat** records `app_connection_chat_requested`. It records a navigation request, not a message, task, or successful goal. It does not send a message or start work. The event has no connection name, account, or sign-in address.
 
 ### Runs, models, and connected services
 

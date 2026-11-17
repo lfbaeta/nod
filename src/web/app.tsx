@@ -268,7 +268,9 @@ function Workspace({
                 <Vault hidden={path !== '/vault'} onAsk={askInChat} />
               </>
             )}
-            {path === '/apps' && <Apps configuration={state?.configuration} onAsk={askInChat} />}
+            {path === '/apps' && (
+              <Apps key={session.user!.id} configuration={state?.configuration} onAsk={askInChat} />
+            )}
             {path === '/channels' && <Channels />}
             {path === '/tasks' && (
               <Scheduled onAsk={askInChat} activity={connected ? state?.activity : undefined} />

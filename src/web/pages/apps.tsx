@@ -16,6 +16,7 @@ import { AppAccountManager } from '../components/app-account-manager';
 import { api, ApiError, errorMessage } from '../lib/api';
 import { connectionUrl, setupLinkHash } from '../lib/connection-url';
 import { searchApps } from '../lib/app-search';
+import { navigate } from '../lib/navigation';
 import { desktopLinksAvailable, openConnection } from '../lib/desktop';
 import {
   connectionGroups,
@@ -101,6 +102,7 @@ export function Apps({
   const [visibleCount, setVisibleCount] = useState(24);
   const [error, setError] = useState('');
   const [announcement, setAnnouncement] = useState('');
+  const [connectedApp, setConnectedApp] = useState('');
   const [busy, setBusy] = useState('');
   const [signIn, setSignIn] = useState<
     AppSignIn & {
@@ -117,6 +119,7 @@ export function Apps({
   const manualMcpOrigin = useRef<HTMLButtonElement | null>(null);
   const manualMcpAnalytics = useRef<ReturnType<typeof appConnectionAnalytics> | null>(null);
   function openManualMcp(trigger: HTMLButtonElement) {
+    setConnectedApp('');
     captureAnalytics('app_connect_clicked', { entry: 'apps', result: 'opened' });
     manualMcpAnalytics.current = appConnectionAnalytics('apps');
     manualMcpOrigin.current = trigger;
@@ -181,7 +184,7 @@ export function Apps({
     actionRequest.current?.abort();
     actionRequest.current = null;
     setBusy('');
-    if (signIn?.outcome === 'connected') setAnnouncement(`${signIn.name} connected.`);
+    if (signIn?.outcome === 'connected') setConnectedApp(signIn.name);
     setSignIn(undefined);
   }
   useEffect(() => {
@@ -369,6 +372,7 @@ export function Apps({
     );
     setError('');
     setAnnouncement('');
+    setConnectedApp('');
     const context = {
       service: connection.slug,
       name: connection.name,
@@ -460,6 +464,7 @@ export function Apps({
   }
   async function disconnect(connection: Connection) {
     if (!connection.connectionId || actionRequest.current || busy) return;
+    setConnectedApp('');
     const capture = analyticsForCurrentSession();
     const request = new AbortController();
     actionRequest.current = request;
@@ -623,6 +628,23 @@ export function Apps({
         </Button>
       </header>
       {configuration && <SetupNotice configuration={configuration} />}
+      {connectedApp && (
+        <Notice kind="success" onDismiss={() => setConnectedApp('')}>
+          {connectedApp} connected.
+          <div className="notice-actions">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                captureAnalytics('app_connection_chat_requested');
+                navigate('/');
+              }}
+            >
+              Open chat
+            </Button>
+          </div>
+        </Notice>
+      )}
       {error && <Notice onDismiss={() => setError('')}>{error}</Notice>}
       {loadError && (
         <Notice>
@@ -902,7 +924,7 @@ export function Apps({
           onConnected={(name) => {
             window.history.replaceState(null, '', '/apps');
             setDiscoveryId(null);
-            setAnnouncement(`${name} connected.`);
+            setConnectedApp(name);
             void refresh();
             void refreshCatalog();
           }}

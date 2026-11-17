@@ -7202,6 +7202,100 @@ test('analytics follow visible Settings sections, Apps tabs and the Scheduled pa
   assert.equal(result.exitCode, 0, result.stdout + result.stderr);
 });
 
+test('a verified app connection opens chat only on request and keeps private details out of analytics', async () => {
+  const result = await runProcess(process.execPath, ['--import', 'tsx', '--input-type=module'], {
+    timeoutMs: 20_000,
+    input: String.raw`
+      import assert from 'node:assert/strict';
+      import { JSDOM } from 'jsdom';
+      const dom = new JSDOM('<!doctype html><div id="root"></div>', { url: 'https://nod.fixture.invalid/apps', pretendToBeVisual: true });
+      Object.assign(globalThis, { window: dom.window, document: dom.window.document, localStorage: dom.window.localStorage,
+        IS_REACT_ACT_ENVIRONMENT: true, getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
+        requestAnimationFrame: dom.window.requestAnimationFrame.bind(dom.window), cancelAnimationFrame: dom.window.cancelAnimationFrame.bind(dom.window) });
+      for (const name of ['Node', 'Element', 'HTMLElement', 'HTMLInputElement', 'HTMLTextAreaElement', 'HTMLButtonElement', 'Event', 'CustomEvent', 'MutationObserver', 'NodeFilter', 'DocumentFragment']) globalThis[name] = dom.window[name];
+      Object.defineProperty(globalThis, 'navigator', { configurable: true, value: dom.window.navigator });
+      window.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
+      window.HTMLElement.prototype.scrollTo = function() {};
+      const channels = [];
+      globalThis.BroadcastChannel = class { constructor() { channels.push(this); } close() {} };
+      window.open = () => ({ closed: false, location: { href: '' }, document: { title: '', body: { textContent: '' } }, close() { this.closed = true; } });
+      const { createElement, act } = await import('react');
+      const { createRoot } = await import('react-dom/client');
+      const { Apps } = await import('./src/web/pages/apps.tsx');
+      const { pageDataCache } = await import('./src/web/lib/page-data-cache.ts');
+      const { setRequestAccount } = await import('./src/web/lib/api.ts');
+      const { setupLinkHash } = await import('./src/web/lib/connection-url.ts');
+      const { configureAnalytics, setAnalyticsClient } = await import('./src/web/lib/analytics.ts');
+      const privateName = 'PRIVATE_CONNECTION_NAME';
+      const url = 'https://example.test/sign-in';
+      const hash = await setupLinkHash(url);
+      const attempt = 'A'.repeat(43);
+      let connected = false, statusReads = 0;
+      const requests = [], captured = [];
+      const app = { slug: 'gmail', name: privateName, status: 'disconnected', triggersEnabled: false, direct: true };
+      globalThis.fetch = async (path, options = {}) => {
+        requests.push([path, options.method ?? 'GET']);
+        if (path === '/api/apps') return Response.json(connected ? [{ ...app, status: 'connected', connectionId: 'private-connection' }] : []);
+        if (path === '/api/apps/catalog') return Response.json([app]);
+        if (path === '/api/apps/gmail/connect') return Response.json({ url, attempt });
+        if (path === '/api/apps/setup-status') { statusReads++; return Response.json({ completed: connected ? [hash] : [], apps: [{ hash, slug: 'gmail', name: privateName, available: true }] }); }
+        throw new Error('Unexpected fixture request: ' + path);
+      };
+      setRequestAccount('synthetic-owner');
+      setAnalyticsClient({ init(_key, options) { this.options = options; }, capture(event, properties = {}) {
+        const value = this.options.before_send({ event, properties }); if (value) captured.push(value); return value;
+      }, _send_request() {}, set_config(options) { this.options = { ...this.options, ...options }; }, reset() {} });
+      configureAnalytics({ enabled: true, distinctId: 'synthetic-installation', environment: 'development' }, 'web');
+      const root = createRoot(document.querySelector('#root'));
+      const settle = async check => { for (let i = 0; i < 50; i++) { await act(async () => new Promise(resolve => setTimeout(resolve, 5))); if (check()) return; } assert.fail('The app state did not settle.'); };
+      try {
+        await act(async () => root.render(createElement(Apps, { onAsk() { assert.fail('Navigation must not send a request.'); } })));
+        await settle(() => document.querySelector('[data-connect-service="gmail"]'));
+        await act(async () => document.querySelector('[data-connect-service="gmail"]').click());
+        await settle(() => statusReads > 0 && channels.length > 0);
+        await act(async () => channels.at(-1).onmessage({ data: { service: 'gmail', attempt, connection: 'connected' } }));
+        await settle(() => statusReads > 1);
+        const handoff = () => document.querySelector('.notice-success .notice-actions button');
+        assert.equal(handoff(), null);
+        connected = true;
+        await act(async () => window.dispatchEvent(new Event('focus')));
+        await settle(() => captured.some(item => item.event === 'app_connection_completed'));
+        await settle(() => handoff());
+        assert.equal(window.location.pathname, '/apps');
+        assert.equal(requests.filter(([path]) => path === '/api/messages').length, 0);
+        await act(async () => handoff().click());
+        assert.equal(window.location.pathname, '/');
+        assert.equal(requests.filter(([path]) => path === '/api/messages').length, 0);
+        const clicks = captured.filter(item => item.event === 'app_connection_chat_requested');
+        assert.equal(clicks.length, 1);
+        assert.equal(JSON.stringify(captured).includes(privateName), false);
+        assert.equal(JSON.stringify(captured).includes(url), false);
+        assert.equal(JSON.stringify(captured).includes(hash), false);
+        configureAnalytics(undefined);
+        await act(async () => root.render(null));
+        pageDataCache.clear();
+        setRequestAccount('synthetic-owner-two');
+        connected = false;
+        statusReads = 0;
+        window.history.replaceState(null, '', '/apps');
+        await act(async () => root.render(createElement(Apps, { key: 'synthetic-owner-two', onAsk() { assert.fail('Navigation must not send a request.'); } })));
+        await settle(() => document.querySelector('[data-connect-service="gmail"]'));
+        assert.equal(handoff(), null);
+        await act(async () => document.querySelector('[data-connect-service="gmail"]').click());
+        await settle(() => statusReads > 0);
+        connected = true;
+        await act(async () => window.dispatchEvent(new Event('focus')));
+        await settle(() => handoff());
+        await act(async () => handoff().click());
+        assert.equal(window.location.pathname, '/');
+        assert.equal(captured.filter(item => item.event === 'app_connection_chat_requested').length, 1);
+        assert.equal(requests.filter(([path]) => path === '/api/messages').length, 0);
+      } finally { await act(async () => root.unmount()); dom.window.close(); }
+    `,
+  });
+  assert.equal(result.exitCode, 0, result.stdout + result.stderr);
+});
+
 test('Quiet hours follow the clock preference and preserve canonical values', async () => {
   const result = await runProcess(process.execPath, ['--import', 'tsx', '--input-type=module'], {
     timeoutMs: 20_000,
