@@ -12675,7 +12675,7 @@ test(
         CREATE TABLE tasks(id uuid PRIMARY KEY, owner_id text NOT NULL, session_id uuid, title text, now_text text,
           message_id uuid, created_at timestamptz DEFAULT now());
         CREATE TABLE turn_events(id uuid PRIMARY KEY DEFAULT gen_random_uuid(), turn_id uuid, type text, summary text DEFAULT '',
-          site text, call_id uuid, created_at timestamptz DEFAULT now());
+          site text, call_id uuid, run_id uuid, created_at timestamptz DEFAULT now());
         CREATE TABLE messages(id uuid PRIMARY KEY, owner_id text, turn_id uuid, role text, created_at timestamptz DEFAULT now())`);
       const threadId = randomUUID();
       const scheduled = randomUUID();
