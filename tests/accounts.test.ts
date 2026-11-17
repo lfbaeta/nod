@@ -3668,6 +3668,36 @@ describe('model connections', { skip: !process.env.TEST_DATABASE_URL }, () => {
     });
   });
 
+  test('automatic preparation names the model it cannot price until a priced model does the work', async (t) => {
+    const f = await fixture(t);
+    const original = await f.backend.catalog('openai', 'api_key', {
+      type: 'api_key',
+      key: 'fixture-preparation-price-catalog',
+    });
+    const owner = await f.create('fixture-preparation-price', {
+      ...f.backend,
+      catalog: async () =>
+        original.map((definition) =>
+          definition.choice.id === 'gpt-6.1-sol'
+            ? { ...definition, spec: { ...definition.spec, cost: { input: 0, output: 0 } } }
+            : definition,
+        ),
+    });
+    const connectionId = await owner.addKey('openai', 'fixture-preparation-price-key');
+    const unpriced = original.find((definition) => definition.choice.id === 'gpt-6.1-sol')!;
+    assert.equal(owner.view().selection?.modelId, 'gpt-6.1-sol');
+    assert.equal(owner.unpricedPreparationModel(), unpriced.choice.name);
+    assert.equal(owner.view().unpricedPreparationModel, unpriced.choice.name);
+    const priced = original.find((definition) => definition.choice.id === 'gpt-6-luna')!;
+    await owner.setRoute('background', {
+      connectionId,
+      modelId: priced.choice.id,
+      effort: priced.choice.efforts[0]!,
+    });
+    assert.equal(owner.unpricedPreparationModel(), undefined);
+    assert.equal(owner.view().unpricedPreparationModel, undefined);
+  });
+
   test('classification keeps subscription access on the approved small model', async (t) => {
     const f = await fixture(t);
     const catalog = await f.backend.catalog('openai', 'api_key', {

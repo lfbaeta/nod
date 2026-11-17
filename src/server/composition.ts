@@ -1251,12 +1251,17 @@ async function initializeApplication(
     trash: adapters.trash,
     available: Boolean(adapters.trash),
   });
+  const preparationBlocked = async () => {
+    if ((await ledger.preparationLimit()).reached)
+      return 'the monthly preparation allowance is reached';
+    const unpriced = adapters.models?.unpricedPreparationModel();
+    if (unpriced) return `${unpriced} has no price, so the preparation allowance cannot bound it`;
+  };
   const preparationPause = async () => {
     const prefs = await speechPreferences.get();
     if (prefs.proactivePaused) return 'automatic preparation is paused';
     if (isQuietTime(prefs)) return 'it is quiet hours';
-    if ((await ledger.preparationLimit()).reached)
-      return 'the monthly preparation allowance is reached';
+    return preparationBlocked();
   };
   const integrations = await createIntegrations(pool, {
     localFiles,
@@ -1972,7 +1977,7 @@ async function initializeApplication(
     curator: adapters.classificationCurator && ledger.curator(adapters.classificationCurator),
     analytics: captureAnalytics,
     modelAvailable: async () =>
-      !(await ledger.preparationLimit()).reached &&
+      !(await preparationBlocked()) &&
       (adapters.models
         ? await adapters.models.automaticRequestsAllowed({ kind: 'background' }, true)
         : adapters.model.configured),
