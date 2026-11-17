@@ -8,6 +8,10 @@ import { createHash } from 'node:crypto';
 import { serviceEnvironment } from '../process.ts';
 import type { ConnectedCli } from '../../ports/computer.ts';
 import { threadIdentity } from '../../ports/thread-identity.ts';
+import {
+  appEnvironmentNamePattern,
+  appEnvironmentNameMaxLength,
+} from '../../shared/app-definitions.ts';
 import type { CommandProcess } from '../command-process.ts';
 
 const cliInstallProgram = `import bz2,fcntl,gzip,hashlib,json,lzma,os,shutil,subprocess,sys
@@ -88,7 +92,7 @@ try:
  r=json.loads(line)
  if not isinstance(r['args'],list) or not all(isinstance(v,str) for v in r['args']): raise ValueError()
  env=r.get('environment',{})
- if not isinstance(env,dict) or not all(isinstance(k,str) and re.fullmatch(r'[A-Z][A-Z0-9_]{0,63}(?:TOKEN|KEY|SECRET|PASSWORD|_ID|_SID)',k) and isinstance(v,str) and v for k,v in env.items()): raise ValueError()
+ if not isinstance(env,dict) or not all(isinstance(k,str) and len(k)<=${appEnvironmentNameMaxLength} and re.fullmatch(${JSON.stringify(appEnvironmentNamePattern.source)},k) and isinstance(v,str) and v for k,v in env.items()): raise ValueError()
  limit=int(r['maxBytes'])
  timeout=float(r['timeoutMs'])/1000
  if limit<1 or not 0<timeout: raise ValueError()

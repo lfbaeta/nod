@@ -7,6 +7,10 @@ import { coreSkills } from '../src/runtime/prompt.ts';
 import { fileURLToPath } from 'node:url';
 import { posix } from 'node:path';
 import { readFileSync } from 'node:fs';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { runProcess } from '../src/providers/process.ts';
+import { appRequestUrl, appRequestHeaders } from '../src/server/app-requests.ts';
 import { join } from 'node:path';
 import { appSchemaDirectory, appSchemaFiles } from './app-schemas.ts';
 import { Meta } from 'typebox/schema';
@@ -14,6 +18,8 @@ import { Meta } from 'typebox/schema';
 const schemaCheck = Compile(Meta['https://json-schema.org/draft/2020-12/schema']);
 
 export async function checkAppContract(app: BundledApp) {
+  if (app.kind === 'http') return checkHttpContract(app);
+  if (app.kind === 'cli') return checkCliContract(app);
   const { contract } = app;
   const schema = contract.tool.inputSchema;
   assert.equal(schema.type, 'object', `${app.slug}: the read tool needs an object input schema.`);
@@ -115,6 +121,131 @@ export async function checkAppContract(app: BundledApp) {
   assert.equal(calls, before, `${app.slug}: a stopped call reached the provider.`);
 }
 
+async function checkHttpContract(app: Extract<BundledApp, { kind: 'http' }>) {
+  const { contract } = app;
+  const endpoint = appRequestUrl(app.endpoint, contract.request.path);
+  const credential = 'synthetic-app-contract-token';
+  const headers = appRequestHeaders(app, credential);
+  let status = 200;
+  let calls = 0;
+  const transport = createDiscoveredTransport(
+    async (input, init) => {
+      const request = new Request(input, init);
+      calls++;
+      assert.equal(request.url, endpoint, `${app.slug}: the read left the saved API address.`);
+      assert.equal(request.method, contract.request.method);
+      assert.equal(
+        request.headers.get(
+          app.auth === 'x-api-key' ? (app.apiKeyHeader ?? 'X-API-Key') : 'Authorization',
+        ),
+        app.auth === 'x-api-key' ? credential : `Bearer ${credential}`,
+      );
+      assert.deepEqual(
+        await request.text(),
+        contract.request.method === 'POST' ? JSON.stringify(contract.request.body) : '',
+      );
+      return Response.json(
+        status === 200
+          ? contract.output
+          : { error: status === 403 ? 'synthetic_permission_denied' : 'synthetic_rate_limit' },
+        { status },
+      );
+    },
+    async (value) => value,
+  );
+  const read = (signal?: AbortSignal) =>
+    transport.http(
+      endpoint,
+      headers,
+      contract.request.method,
+      contract.request.method === 'POST' ? contract.request.body : undefined,
+      signal,
+    );
+  const result = await read();
+  assert('body' in result);
+  assert.deepEqual(result.body, contract.output);
+  for (const failure of [403, 429]) {
+    status = failure;
+    const before = calls;
+    await assert.rejects(
+      read(),
+      failure === 403 ? /synthetic_permission_denied/ : /synthetic_rate_limit/,
+    );
+    assert.equal(calls, before + 1, `${app.slug}: the failed API read was sent more than once.`);
+  }
+  const stopped = new AbortController();
+  stopped.abort(new Error('synthetic_stop'));
+  const before = calls;
+  await assert.rejects(read(stopped.signal), /synthetic_stop/);
+  assert.equal(calls, before, `${app.slug}: a stopped API read reached the provider.`);
+}
+
+async function checkCliContract(app: Extract<BundledApp, { kind: 'cli' }>) {
+  const { contract } = app;
+  const directory = await mkdtemp(join(tmpdir(), 'nod-app-cli-check-'));
+  try {
+    const launches = join(directory, 'launches');
+    const environment = Object.fromEntries(
+      Object.keys(app.environment).map((name) => [name, `synthetic-${name.toLowerCase()}`]),
+    );
+    const program = `import assert from 'node:assert/strict';
+import { readFileSync, appendFileSync } from 'node:fs';
+const fixture = JSON.parse(readFileSync(0, 'utf8'));
+appendFileSync(fixture.launches, 'x');
+assert.deepEqual(process.argv.slice(1), fixture.argv);
+for (const [name, value] of Object.entries(fixture.environment)) assert.equal(process.env[name], value);
+if (fixture.status) { process.stderr.write(fixture.status === 86 ? 'synthetic_permission_denied' : 'synthetic_rate_limit'); process.exit(fixture.status); }
+process.stdout.write(fixture.format === 'json' ? JSON.stringify(fixture.output) : fixture.output);`;
+    const read = (status: number, signal?: AbortSignal) =>
+      runProcess(
+        process.execPath,
+        ['--input-type=module', '--eval', program, '--', ...contract.argv],
+        {
+          env: environment,
+          input: JSON.stringify({
+            launches,
+            argv: contract.argv,
+            environment,
+            status,
+            format: contract.format,
+            output: contract.output,
+          }),
+          signal,
+          timeoutMs: contract.timeoutSeconds * 1000,
+        },
+      );
+    const result = await read(0);
+    assert.equal(result.exitCode, 0, result.stderr);
+    assert.deepEqual(
+      contract.format === 'json' ? JSON.parse(result.stdout) : result.stdout,
+      contract.output,
+    );
+    for (const status of [86, 87]) {
+      const failed = await read(status);
+      assert.equal(failed.exitCode, status);
+      assert.match(
+        failed.stderr,
+        status === 86 ? /synthetic_permission_denied/ : /synthetic_rate_limit/,
+      );
+    }
+    assert.equal(
+      await readFile(launches, 'utf8'),
+      'xxx',
+      `${app.slug}: a failed command was sent more than once.`,
+    );
+    const stopped = new AbortController();
+    stopped.abort(new Error('synthetic_stop'));
+    await assert.rejects(async () => read(0, stopped.signal), /synthetic_stop/);
+    assert.equal(
+      await readFile(launches, 'utf8'),
+      'xxx',
+      `${app.slug}: a stopped command reached the provider.`,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
 if (import.meta.main) {
   for (const [name, schema] of Object.entries(appSchemaFiles))
     assert.deepEqual(
@@ -148,6 +279,6 @@ if (import.meta.main) {
   }
   for (const app of apps as BundledApp[]) {
     await checkAppContract(app);
-    console.log(`${app.slug}: format, discovery, read, errors, rate limit, and Stop passed.`);
+    console.log(`${app.slug}: format, read, authentication, errors, rate limit, and Stop passed.`);
   }
 }
