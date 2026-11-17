@@ -12555,6 +12555,21 @@ test(
       item = await live();
       assert.equal(item.step, null);
       assert.ok(item.tool);
+      await pool.query(
+        "INSERT INTO turn_events(turn_id,type,summary,site) VALUES($1,'tool_complete','apps','Gmail'),($1,'tool_complete','files','Local files')",
+        [chat],
+      );
+      const recentActions = (await live()).recent;
+      assert.ok(
+        recentActions?.some(
+          (entry) => entry.summary === 'Used a connected app' && entry.site === 'Gmail',
+        ),
+      );
+      assert.ok(
+        recentActions?.some(
+          (entry) => entry.summary === 'Handled local files' && entry.site === 'Local files',
+        ),
+      );
       const mainRun = randomUUID();
       const helperRun = randomUUID();
       const recentCall = randomUUID();
@@ -12563,12 +12578,12 @@ test(
         [chat, mainRun],
       );
       await pool.query(
-        "INSERT INTO turn_events(turn_id,type,summary,run_id,call_id) VALUES($1,'tool_start','read',$2,$3)",
-        [chat, mainRun, recentCall],
-      );
-      await pool.query(
         "INSERT INTO turn_events(turn_id,type,summary,run_id) VALUES($1,'step','Checking a separate helper source',$2)",
         [chat, helperRun],
+      );
+      await pool.query(
+        "INSERT INTO turn_events(turn_id,type,summary,run_id,call_id) VALUES($1,'tool_start','read',$2,$3)",
+        [chat, mainRun, recentCall],
       );
       const completed = await pool.query<{ id: string }>(
         "INSERT INTO turn_events(turn_id,type,summary,run_id,call_id) VALUES($1,'tool_complete','read',$2,$3) RETURNING id",

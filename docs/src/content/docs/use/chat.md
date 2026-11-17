@@ -114,7 +114,7 @@ The message box stays open while Nod works, so you can send another message at a
 
 The line describes the work instead of showing internal tool names. When Nod hasn't named a step, it names the app, website or kind of work that's active, or the model Nod is waiting for. It never counts seconds or guesses when Nod will finish. When Nod answers, the answer takes its place. It clears when Nod asks you something or stops, and hides while the app reconnects. A failed send clears the line and shows an error. Steps come from Nod's own short descriptions, which appear as soon as Nod starts the tool they describe, and, when your model shares a summary of its reasoning, from that summary's heading, such as "Researching Málaga travel ideas".
 
-After an operation finishes, up to four recent operations appear below the line, with the newest first. Select the line to hide or show them. The current activity stays visible. The list uses saved activity records and needs no extra model request.
+After an operation finishes, up to four recent operations appear below the line, with the newest first. Select the line to hide or show them. The current activity stays visible. The list covers only the current work and clears when a new request starts. It uses saved activity records and needs no extra model request.
 
 ![The current activity above four completed operations, beside the Nod mark and above the message box.](../../../assets/screens/chat-recent-activity.png)
 

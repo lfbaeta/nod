@@ -502,10 +502,8 @@
   font-size: var(--text-control);
   line-height: 1.5;
 }
-.chat-page .working-text svg {
-  display: inline-block;
-  margin-right: 4px;
-  vertical-align: -2px;
+.chat-page .thinking[hidden] {
+  display: none;
 }
 @keyframes working-shine {
   from {

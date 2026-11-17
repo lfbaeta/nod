@@ -333,6 +333,9 @@
 .tasks-page .task-preview-body {
   padding: 20px 24px 24px;
 }
+.tasks-page .task-preview-live-line {
+  padding: 0 24px 24px;
+}
 
 .task-preview-meta > svg,
 .task-preview-steps svg {
@@ -373,10 +376,16 @@
   .tasks-page .task-preview-body {
     padding: 16px;
   }
+  .tasks-page .task-preview-live-line {
+    padding: 0 16px 16px;
+  }
   .task-preview-actions .button,
   .tasks-page .saved-plan-footer .button {
     min-height: 40px;
   }
+}
+.tasks-page .task-preview-head-live {
+  padding-bottom: 4px;
 }
 @media (prefers-reduced-motion: reduce) {
   .task-preview-chevron,
