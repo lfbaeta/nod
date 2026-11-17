@@ -3891,6 +3891,11 @@ test('each model call yields one chat-format trace without image data', async ()
   assert.deepEqual(trace.tools, ['fixture_tool']);
   assert.equal(trace.usage.outputTokens, 3);
   assert.equal(trace.metadata.session_id, 'fixture-session');
+  assert.equal(trace.metadata.request_kind, 'regular');
+  assert.equal(
+    piModelTrace({ ...calls[0], request: undefined }, {}).metadata.request_kind,
+    undefined,
+  );
   assert.ok(!JSON.stringify(trace).includes(image));
   const { untrustedBlock } = await import('../src/shared/untrusted.ts');
   const result = (toolCallId: string, toolName: string, text: string) => ({
@@ -4049,6 +4054,7 @@ test('a long tool call does not send model requests without usage records', asyn
         status?: string;
         costUsd?: number | null;
       }> = [];
+      const traces: import('../src/ports/traces.ts').ModelTrace[] = [];
       let holdRefresh = false;
       let refreshStarted: (() => void) | undefined;
       let releaseRefresh: (() => void) | undefined;
@@ -4168,6 +4174,7 @@ test('a long tool call does not send model requests without usage records', asyn
         provider: 'compatible',
         sessionRoot,
         resolve: async () => access,
+        traces: { active: () => true, record: (trace) => traces.push(trace) },
         createSession: async (options) => {
           const result = await createAgentSession(options);
           current = result.session;
@@ -4222,10 +4229,20 @@ test('a long tool call does not send model requests without usage records', asyn
       });
       await session.prompt('Run the synthetic wait.', []);
       await session.dispose();
+      await new Promise((resolve) => setImmediate(resolve));
       assert.equal(tools, 1);
       assert.equal(realRequests, 2);
       assert.ok(requests > realRequests);
       assert.equal(usage.length, requests);
+      assert.equal(traces.length, requests);
+      assert.equal(
+        traces.filter((trace) => trace.metadata.request_kind === 'regular').length,
+        realRequests,
+      );
+      assert.equal(
+        traces.filter((trace) => trace.metadata.request_kind === 'cache_warm').length,
+        requests - realRequests,
+      );
       assert.equal(new Set(usage.map((row) => row.id)).size, requests);
       const refreshes = usage.filter((row) => row.operation === 'cache_warm');
       assert.equal(refreshes.length, requests - realRequests);
