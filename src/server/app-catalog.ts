@@ -8,24 +8,71 @@ import {
   appContractSchema,
   appExtensionSchema,
   type AppContract,
+  type AppDefinition,
+  type AppOAuthMetadata,
 } from '../shared/app-definitions.ts';
+import { appRequestUrl } from './app-requests.ts';
+import { appAccessSchema } from './app-access.ts';
 import pluginSchema from './agent-plugins/plugin.schema.json' with { type: 'json' };
 import mcpSchema from './agent-plugins/mcp.schema.json' with { type: 'json' };
 
 const manifestCheck = Compile(pluginSchema as Parameters<typeof Compile>[0]);
 const mcpCheck = Compile(mcpSchema as Parameters<typeof Compile>[0]);
-export interface BundledApp {
+type AppMetadata = {
   slug: string;
   name: string;
   description: string;
   categories: string[];
   endpoint?: string;
   instancePath?: string;
-  auth: 'oauth' | 'bearer' | 'x-api-key';
   scope?: string;
   icon?: { bytes: Uint8Array; mimeType: string };
   skills?: string;
-  contract: AppContract;
+};
+export type BundledApp = AppMetadata &
+  (
+    | {
+        kind: 'mcp';
+        auth: 'oauth' | 'bearer' | 'x-api-key';
+        contract: Extract<AppContract, { type: 'mcp' }>;
+      }
+    | {
+        kind: 'http';
+        endpoint: string;
+        auth: 'oauth' | 'bearer' | 'x-api-key';
+        apiKeyHeader?: string;
+        oauth?: AppOAuthMetadata;
+        clientIdRequired?: boolean;
+        contract: Extract<AppContract, { type: 'http' }>;
+      }
+    | {
+        kind: 'cli';
+        auth: 'env';
+        command: string;
+        source: Extract<AppDefinition['connection'], { type: 'cli' }>['source'];
+        environment: Record<string, string>;
+        contract: Extract<AppContract, { type: 'cli' }>;
+      }
+  );
+
+function publicAddress(value: string, name: string, query = false) {
+  const url = URL.parse(value);
+  if (
+    !url ||
+    url.protocol !== 'https:' ||
+    url.username ||
+    url.password ||
+    (url.port !== '' && url.port !== '80' && url.port !== '443') ||
+    (query ? /#/.test(value) : /[?#]/.test(value)) ||
+    isIP(url.hostname.replace(/^\[|\]$/g, '')) ||
+    /(?:^|\.)(?:localhost|local|internal|invalid|test|example|example\.(?:com|org|net))$/.test(
+      url.hostname.replace(/\.$/, ''),
+    )
+  )
+    throw new Error(
+      `App ${name}: use a fixed public HTTPS address without credentials, a query, or a fragment.`,
+    );
+  return url.href;
 }
 
 export function loadAppCatalog(directory = fileURLToPath(new URL('../apps/', import.meta.url))) {
@@ -111,58 +158,124 @@ export function loadAppCatalog(directory = fileURLToPath(new URL('../apps/', imp
       throw new Error(`App ${entry.name}: invalid contract.json: ${contract.error.message}`);
     if (
       !manifest.author?.name?.trim() ||
-      JSON.stringify({ manifest, app }).includes('Replace with') ||
-      contract.data.source.includes('replace-with-')
+      /Replace with|replace[_-]with[_-]/.test(
+        JSON.stringify({ manifest, app, contract: contract.data }),
+      )
     )
       throw new Error(
         `App ${entry.name}: complete the maintainer, provider documentation, requirements, and limits.`,
       );
     const connection = app.connection;
-    const instance = 'endpoint' in connection;
-    const scopes = 'scopes' in connection ? connection.scopes : undefined;
-    let server: { url: string } | undefined;
-    if (existsSync(resolve(base, 'mcp.json'))) {
-      const rawMcp = json('mcp.json');
-      if (!mcpCheck.Check(rawMcp))
-        throw new Error(
-          `App ${entry.name}: mcp.json does not match Agent Plugins 1.0.0: ${mcpCheck
-            .Errors(rawMcp)
-            .slice(0, 3)
-            .map((error) => `${error.instancePath || '/'} ${error.message}`)
-            .join('; ')}`,
-        );
-      const mcp = rawMcp as {
-        mcpServers: Record<string, { type: string; url: string; headers?: Record<string, string> }>;
+    const fixture = contract.data;
+    if (fixture.type !== connection.type)
+      throw new Error(`App ${entry.name}: the read fixture must use the app connection type.`);
+    const setup = (() => {
+      if (connection.type === 'cli' && fixture.type === 'cli') {
+        if (existsSync(resolve(base, 'mcp.json')))
+          throw new Error(`App ${entry.name}: only MCP apps can include mcp.json.`);
+        if ('url' in connection.source) publicAddress(connection.source.url, entry.name);
+        return {
+          kind: 'cli' as const,
+          auth: 'env' as const,
+          command: connection.command,
+          source: connection.source,
+          environment: connection.environment,
+          contract: fixture,
+        };
+      }
+      if (connection.type === 'http' && fixture.type === 'http') {
+        if (existsSync(resolve(base, 'mcp.json')))
+          throw new Error(`App ${entry.name}: only MCP apps can include mcp.json.`);
+        const endpoint = publicAddress(connection.url, entry.name);
+        const apiKeyHeader = 'apiKeyHeader' in connection ? connection.apiKeyHeader : undefined;
+        const oauth = 'oauth' in connection ? connection.oauth : undefined;
+        if (oauth) {
+          publicAddress(oauth.issuer, entry.name);
+          for (const url of [
+            oauth.authorization_endpoint,
+            oauth.token_endpoint,
+            oauth.registration_endpoint,
+          ].filter((value): value is string => Boolean(value))) {
+            publicAddress(url, entry.name, true);
+            if (new URL(url).port && new URL(url).port !== '443')
+              throw new Error(
+                `App ${entry.name}: OAuth endpoints must use the standard HTTPS port.`,
+              );
+          }
+          if (
+            !oauth.registration_endpoint &&
+            !('clientIdRequired' in connection && connection.clientIdRequired)
+          )
+            throw new Error(
+              `App ${entry.name}: require a client ID when the configured OAuth server has no registration endpoint.`,
+            );
+        }
+        appRequestUrl(endpoint, fixture.request.path);
+        return {
+          kind: 'http' as const,
+          endpoint,
+          auth:
+            connection.authentication[0] === 'oauth2'
+              ? ('oauth' as const)
+              : connection.authentication[0],
+          ...(apiKeyHeader ? { apiKeyHeader } : {}),
+          ...(oauth ? { oauth } : {}),
+          ...('clientIdRequired' in connection && connection.clientIdRequired
+            ? { clientIdRequired: true }
+            : {}),
+          ...('scopes' in connection && connection.scopes?.length
+            ? { scope: connection.scopes.join(' ') }
+            : {}),
+          contract: fixture,
+        };
+      }
+      if (connection.type !== 'mcp' || fixture.type !== 'mcp')
+        throw new Error(`App ${entry.name}: invalid connection and read fixture.`);
+      const instance = 'endpoint' in connection;
+      const scopes = 'scopes' in connection ? connection.scopes : undefined;
+      let endpoint: string | undefined;
+      if (existsSync(resolve(base, 'mcp.json'))) {
+        const rawMcp = json('mcp.json');
+        if (!mcpCheck.Check(rawMcp))
+          throw new Error(
+            `App ${entry.name}: mcp.json does not match Agent Plugins 1.0.0: ${mcpCheck
+              .Errors(rawMcp)
+              .slice(0, 3)
+              .map((error) => `${error.instancePath || '/'} ${error.message}`)
+              .join('; ')}`,
+          );
+        const mcp = rawMcp as {
+          mcpServers: Record<
+            string,
+            { type: string; url: string; headers?: Record<string, string> }
+          >;
+        };
+        if (instance || Object.keys(mcp.mcpServers).length !== 1)
+          throw new Error(
+            `App ${entry.name}: fixed apps need one MCP server; owner-supplied endpoints must omit mcp.json.`,
+          );
+        const selected = mcp.mcpServers[!instance ? connection.server : ''];
+        if (!selected || selected.type !== 'streamable-http')
+          throw new Error(`App ${entry.name}: the selected server must use streamable-http.`);
+        endpoint = publicAddress(selected.url, entry.name);
+        if (Object.keys(selected.headers ?? {}).length)
+          throw new Error(
+            `App ${entry.name}: fixed MCP headers are not supported. Use private connection setup for credentials.`,
+          );
+      } else if (!instance)
+        throw new Error(`App ${entry.name}: add mcp.json for the selected server.`);
+      return {
+        kind: 'mcp' as const,
+        auth:
+          connection.authentication[0] === 'oauth2'
+            ? ('oauth' as const)
+            : connection.authentication[0],
+        ...(endpoint ? { endpoint } : {}),
+        ...(instance ? { instancePath: connection.endpoint.path } : {}),
+        ...(scopes?.length ? { scope: scopes.join(' ') } : {}),
+        contract: fixture,
       };
-      if (instance || Object.keys(mcp.mcpServers).length !== 1)
-        throw new Error(
-          `App ${entry.name}: fixed apps need one MCP server; owner-supplied endpoints must omit mcp.json.`,
-        );
-      const selected = mcp.mcpServers[!instance ? connection.server : ''];
-      if (!selected || selected.type !== 'streamable-http')
-        throw new Error(`App ${entry.name}: the selected server must use streamable-http.`);
-      const url = URL.parse(selected.url);
-      if (
-        !url ||
-        url.protocol !== 'https:' ||
-        url.username ||
-        url.password ||
-        /[?#]/.test(selected.url) ||
-        isIP(url.hostname.replace(/^\[|\]$/g, '')) ||
-        /(?:^|\.)(?:localhost|local|internal|invalid|test|example|example\.(?:com|org|net))$/.test(
-          url.hostname.replace(/\.$/, ''),
-        )
-      )
-        throw new Error(
-          `App ${entry.name}: use a fixed public HTTPS MCP address without credentials, a query, or a fragment.`,
-        );
-      if (Object.keys(selected.headers ?? {}).length)
-        throw new Error(
-          `App ${entry.name}: fixed MCP headers are not supported. Use private connection setup for credentials.`,
-        );
-      server = { url: url.href };
-    } else if (!instance)
-      throw new Error(`App ${entry.name}: add mcp.json for the selected server.`);
+    })();
     let icon: BundledApp['icon'];
     if (app.icon) {
       if (!app.icon.startsWith('./io.n8n.nod/'))
@@ -181,21 +294,54 @@ export function loadAppCatalog(directory = fileURLToPath(new URL('../apps/', imp
       if (!skills.startsWith(base + sep) || !statSync(skills).isDirectory())
         throw new Error(`App ${entry.name}: skills must be a directory inside the app.`);
     }
-    result.set(manifest.name, {
+    const definition: BundledApp = {
+      ...setup,
       slug: manifest.name,
       name: app.displayName,
       description: manifest.description.trim(),
       categories: app.categories,
-      auth: connection.authentication[0] === 'oauth2' ? 'oauth' : connection.authentication[0],
-      ...(server ? { endpoint: server.url } : {}),
-      ...(instance ? { instancePath: connection.endpoint.path } : {}),
-      ...(scopes?.length ? { scope: scopes.join(' ') } : {}),
       ...(icon ? { icon } : {}),
       ...(skills ? { skills } : {}),
-      contract: contract.data,
-    });
+    };
+    if (!definition.instancePath) appAccessSchema.parse(appAccessPath(definition));
+    result.set(manifest.name, definition);
   }
   return result;
 }
 
 export const bundledApps = loadAppCatalog();
+
+export function appAccessPath(app: BundledApp) {
+  if (app.kind === 'cli')
+    return {
+      kind: 'cli' as const,
+      command: app.command,
+      auth: 'env' as const,
+      env: Object.keys(app.environment),
+      source: app.source,
+      testArgv: app.contract.argv,
+      testTimeoutSeconds: app.contract.timeoutSeconds,
+      testFormat: app.contract.format,
+    };
+  if (app.kind === 'http')
+    return {
+      kind: 'http' as const,
+      endpoint: app.endpoint,
+      auth: app.auth,
+      testPath: app.contract.request.path,
+      testMethod: app.contract.request.method,
+      ...(app.contract.request.method === 'POST' ? { testBody: app.contract.request.body } : {}),
+      ...(app.apiKeyHeader ? { apiKeyHeader: app.apiKeyHeader } : {}),
+      ...(app.oauth ? { oauth: app.oauth } : {}),
+      ...(app.scope ? { scope: app.scope } : {}),
+      ...(app.clientIdRequired ? { clientIdRequired: true } : {}),
+    };
+  if (!app.endpoint)
+    throw new Error(`App ${app.slug}: enter the instance address before connecting.`);
+  return {
+    kind: 'mcp' as const,
+    endpoint: app.endpoint,
+    auth: app.auth,
+    ...(app.scope ? { scope: app.scope } : {}),
+  };
+}

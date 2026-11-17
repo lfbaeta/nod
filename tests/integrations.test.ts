@@ -66,6 +66,7 @@ import {
   safeRemoteFetch,
 } from '../src/providers/discovered/remote.ts';
 import { createAgentRuntime } from '../src/runtime/index.ts';
+import { createDiscoveredOAuth } from '../src/providers/discovered/oauth.ts';
 import { createDiscoveredConnections } from '../src/server/discovered-connections.ts';
 import { registerLocalAccess } from '../src/server/access.ts';
 import { createIntegrations, initializeIntegrationSchema } from '../src/server/integrations.ts';
@@ -84,11 +85,18 @@ import { connectedGmail } from '../src/shared/onboarding.ts';
 import { fileBytes } from '../src/shared/files.ts';
 import { connectionGroups } from '../src/web/lib/secondary-pages.ts';
 import { fakeComputer, fakeExecution, fakeWorkspace } from './runtime-fixtures.ts';
-import { bundledApps, loadAppCatalog } from '../src/server/app-catalog.ts';
+import { appAccessPath, bundledApps, loadAppCatalog } from '../src/server/app-catalog.ts';
+import { appAccessSchema } from '../src/server/app-access.ts';
 import { checkAppContract } from '../scripts/check-apps.ts';
-import { createApp } from '../scripts/create-app.ts';
+import { createApp, type CreateAppOptions } from '../scripts/create-app.ts';
+import { appRequestUrl } from '../src/server/app-requests.ts';
 import { createSkillLibrary } from '../src/providers/pi/skills.ts';
-import { appDefinitionSchema, appContractSchema } from '../src/shared/app-definitions.ts';
+import {
+  appDefinitionSchema,
+  appContractSchema,
+  appContractSchemaId,
+  type AppContractInput,
+} from '../src/shared/app-definitions.ts';
 import { appSchemaFiles } from '../scripts/app-schemas.ts';
 import { Compile } from 'typebox/compile';
 
@@ -112,6 +120,7 @@ test('app folders reject escaped paths, incomplete contracts, and unsupported se
   await writeFile(join(valid, '.DS_Store'), 'synthetic system metadata');
   await checkAppContract(loadAppCatalog(valid).get('linear')!);
   const arrayApp = loadAppCatalog(valid).get('linear')!;
+  assert(arrayApp.kind === 'mcp');
   await checkAppContract({
     ...arrayApp,
     contract: { ...arrayApp.contract, output: [{ id: 'synthetic-array-record' }] },
@@ -162,6 +171,14 @@ test('app folders reject escaped paths, incomplete contracts, and unsupported se
       'mcp.json',
       (value) => {
         value.mcpServers.linear.url = 'https://127.0.0.1/mcp';
+      },
+      /public HTTPS/,
+    ],
+    [
+      'port',
+      'mcp.json',
+      (value) => {
+        value.mcpServers.linear.url = 'https://mcp.linear.app:8443/mcp';
       },
       /public HTTPS/,
     ],
@@ -246,7 +263,7 @@ test('app scaffolding refuses replacement and requires contributors to complete 
     directory,
     url: 'https://mcp.linear.app/mcp',
     name: 'Synthetic app',
-    auth: 'oauth2',
+    auth: 'oauth2' as const,
   };
   for (const slug of ['../escape', 'trailing-', 'double--hyphen', 'a'])
     await assert.rejects(createApp(slug, options));
@@ -257,6 +274,7 @@ test('app scaffolding refuses replacement and requires contributors to complete 
     'https://mcp.example.com/mcp',
     'https://mcp.internal/mcp',
     'https://mcp.test/mcp',
+    'https://mcp.linear.app:8443/mcp',
     `${options.url}?`,
     `${options.url}#`,
   ])
@@ -282,6 +300,685 @@ test('app scaffolding refuses replacement and requires contributors to complete 
   );
   await checkAppContract(loadAppCatalog(directory).get('synthetic-app')!);
 });
+
+const communityAccessCases: Array<{
+  slug: string;
+  options: CreateAppOptions;
+  contract: AppContractInput;
+}> = [
+  {
+    slug: 'sample-api',
+    options: { type: 'http', url: 'https://api.synthetic-nod.dev/v1', auth: 'bearer' },
+    contract: {
+      $schema: appContractSchemaId,
+      type: 'http',
+      source: 'https://docs.synthetic-nod.dev/api',
+      request: { method: 'GET', path: 'account' },
+      annotations: { readOnlyHint: true },
+      output: { id: 'synthetic-account' },
+    },
+  },
+  {
+    slug: 'sample-api-key',
+    options: { type: 'http', url: 'https://api.synthetic-nod.dev/v1', auth: 'x-api-key' },
+    contract: {
+      $schema: appContractSchemaId,
+      type: 'http',
+      source: 'https://docs.synthetic-nod.dev/api',
+      request: { method: 'GET', path: 'account' },
+      annotations: { readOnlyHint: true },
+      output: [{ id: 'synthetic-account' }],
+    },
+  },
+  {
+    slug: 'sample-graphql',
+    options: { type: 'http', url: 'https://api.synthetic-nod.dev', auth: 'bearer' },
+    contract: {
+      $schema: appContractSchemaId,
+      type: 'http',
+      source: 'https://docs.synthetic-nod.dev/graphql',
+      request: { method: 'POST', path: 'graphql', body: { query: 'query { viewer { id } }' } },
+      annotations: { readOnlyHint: true },
+      output: { data: { viewer: { id: 'synthetic-account' } } },
+    },
+  },
+  {
+    slug: 'sample-cli',
+    options: {
+      type: 'cli',
+      command: 'samplecli',
+      source: { npm: '@synthetic/cli@1.2.3' },
+      auth: 'env',
+      environment: { SAMPLE_TOKEN: 'Access token', SAMPLE_ACCOUNT_ID: 'Account ID' },
+    },
+    contract: {
+      $schema: appContractSchemaId,
+      type: 'cli',
+      source: 'https://docs.synthetic-nod.dev/cli',
+      argv: ['account', 'view', '--json', 'two words; $(not-a-command)'],
+      format: 'json',
+      timeoutSeconds: 30,
+      annotations: { readOnlyHint: true },
+      output: { id: 'synthetic-account' },
+    },
+  },
+  {
+    slug: 'sample-text-cli',
+    options: {
+      type: 'cli',
+      command: 'samplecli',
+      source: { pypi: 'synthetic-cli==1.2.3' },
+      auth: 'env',
+      environment: { SAMPLE_TOKEN: 'Access token' },
+    },
+    contract: {
+      $schema: appContractSchemaId,
+      type: 'cli',
+      source: 'https://docs.synthetic-nod.dev/cli',
+      argv: ['account', 'view'],
+      format: 'text',
+      timeoutSeconds: 30,
+      annotations: { readOnlyHint: true },
+      output: 'Synthetic account',
+    },
+  },
+];
+
+async function completedCommunityApp(
+  directory: string,
+  fixture: (typeof communityAccessCases)[number],
+) {
+  await createApp(fixture.slug, {
+    ...fixture.options,
+    name: fixture.slug === 'sample-api' ? 'Équipe +' : 'Sample app',
+    directory,
+  });
+  const base = join(directory, fixture.slug);
+  const manifest = JSON.parse(await readFile(join(base, 'plugin.json'), 'utf8'));
+  manifest.author.name = 'Synthetic maintainer';
+  await writeFile(join(base, 'plugin.json'), JSON.stringify(manifest));
+  const definition = JSON.parse(await readFile(join(base, 'io.n8n.nod/app.json'), 'utf8'));
+  definition.requirements = ['An account with read access.'];
+  definition.limitations = ['No automatic background checks.'];
+  if (fixture.slug === 'sample-api-key') definition.connection.apiKeyHeader = 'X-Access-Key';
+  await writeFile(join(base, 'io.n8n.nod/app.json'), JSON.stringify(definition));
+  await writeFile(join(base, 'io.n8n.nod/contract.json'), JSON.stringify(fixture.contract));
+  return loadAppCatalog(directory).get(fixture.slug)!;
+}
+
+test('API and CLI app scaffolds pass real transport and process contracts and reject unsafe definitions', async (t) => {
+  t.mock.method(globalThis, 'fetch', async () =>
+    assert.fail('Community contracts must stay offline.'),
+  );
+  const directory = await mkdtemp(join(tmpdir(), 'nod-community-contracts-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const editor = Compile(appSchemaFiles['app.schema.json'] as Parameters<typeof Compile>[0]);
+  const editorContract = Compile(
+    appSchemaFiles['contract.schema.json'] as Parameters<typeof Compile>[0],
+  );
+  for (const fixture of communityAccessCases) {
+    const app = await completedCommunityApp(directory, fixture);
+    await checkAppContract(app);
+    const path = join(directory, fixture.slug, 'io.n8n.nod/app.json');
+    const definition: Record<string, any> = JSON.parse(await readFile(path, 'utf8'));
+    assert(editor.Check(definition));
+    assert(editorContract.Check(fixture.contract));
+    assert(appContractSchema.safeParse(fixture.contract).success);
+    for (const connection of fixture.options.type === 'cli'
+      ? [
+          { ...definition.connection, source: { npm: '@synthetic/cli@latest' } },
+          { ...definition.connection, source: { npm: '@synthetic/cli@1.2.3 --force' } },
+          { ...definition.connection, source: { url: 'https://downloads.synthetic-nod.dev/cli' } },
+          { ...definition.connection, command: 'bash' },
+          { ...definition.connection, command: 'BaSh' },
+          { ...definition.connection, command: 'PyThOn3' },
+          { ...definition.connection, environment: {} },
+          { ...definition.connection, environment: { LD_PRELOAD: 'Library' } },
+          { ...definition.connection, authentication: ['bearer'] },
+        ]
+      : [
+          { ...definition.connection, authentication: ['env'] },
+          { ...definition.connection, authentication: ['oauth2', 'bearer'] },
+          { ...definition.connection, apiKeyHeader: 'Host' },
+          { ...definition.connection, headers: { Authorization: 'synthetic-token' } },
+        ]) {
+      const invalid = { ...definition, connection };
+      assert.equal(appDefinitionSchema.safeParse(invalid).success, false);
+      assert.equal(editor.Check(invalid), false);
+    }
+    const saved = JSON.stringify(definition);
+    for (const connection of fixture.options.type === 'cli'
+      ? [
+          {
+            ...definition.connection,
+            source: { url: 'https://127.0.0.1/cli', sha256: 'a'.repeat(64) },
+          },
+        ]
+      : [
+          { ...definition.connection, url: 'https://127.0.0.1/api' },
+          { ...definition.connection, url: 'https://api.synthetic-nod.dev/v1?token=synthetic' },
+          { ...definition.connection, url: 'https://api.synthetic-nod.dev:8443/v1' },
+        ]) {
+      await writeFile(path, JSON.stringify({ ...definition, connection }));
+      assert.throws(() => loadAppCatalog(directory), /public HTTPS/);
+    }
+    await writeFile(path, saved);
+    const contractPath = join(directory, fixture.slug, 'io.n8n.nod/contract.json');
+    await writeFile(contractPath, JSON.stringify(bundledApps.get('linear')!.contract));
+    assert.throws(() => loadAppCatalog(directory), /connection type/);
+    await writeFile(contractPath, JSON.stringify(fixture.contract));
+  }
+});
+
+test('app access paths reject inconsistent API reads and more than 16 CLI fields', () => {
+  const path = { kind: 'http', endpoint: 'https://api.synthetic-nod.dev/v1', testPath: 'account' };
+  assert(appAccessSchema.safeParse(path).success);
+  for (const extra of [
+    { testMethod: 'GET', testBody: { query: 'synthetic' } },
+    { testMethod: 'POST' },
+    { apiKeyHeader: 'X-Access-Key' },
+    { clientIdRequired: true },
+  ])
+    assert.equal(appAccessSchema.safeParse({ ...path, ...extra }).success, false);
+  assert.equal(
+    appAccessSchema.safeParse({
+      kind: 'cli',
+      command: 'synthetic',
+      source: { npm: 'synthetic' },
+      env: Array.from({ length: 17 }, (_, i) => `FIXTURE_${i}_TOKEN`),
+    }).success,
+    false,
+  );
+  assert.throws(() => appRequestUrl(path.endpoint, 'account#private'), /path/);
+});
+
+test(
+  'API and CLI app folders use common setup, verify access, preserve account bindings and remove credentials',
+  { skip: !process.env.TEST_DATABASE_URL },
+  async (t) => {
+    for (const fixture of communityAccessCases)
+      await t.test(fixture.slug, async (t) => {
+        const diagnostics: unknown[] = [];
+        await withFailureLog(
+          (event, error, context) => diagnostics.push({ event, error, context }),
+          async () => {
+            const directory = await mkdtemp(join(tmpdir(), 'nod-community-lifecycle-'));
+            t.after(() => rm(directory, { recursive: true, force: true }));
+            const definition = await completedCommunityApp(directory, fixture);
+            const apps = loadAppCatalog(directory);
+            const database = await hostedDatabase();
+            const server = Fastify();
+            t.after(async () => {
+              await server.close();
+              await database.close();
+            });
+            const ownerId = 'synthetic-owner';
+            const values =
+              definition.kind === 'cli'
+                ? Object.fromEntries(
+                    Object.keys(definition.environment).map((name) => [
+                      name,
+                      name.endsWith('_ID')
+                        ? '42'
+                        : name.endsWith('_EMAIL')
+                          ? 'synthetic@example.test'
+                          : 'synthetic-private-cli-token',
+                    ]),
+                  )
+                : { token: 'synthetic-private-api-token' };
+            const secrets = Object.values(values);
+            let failure: 'permission' | 'rate' | 'invalid-json' | undefined;
+            let calls = 0;
+            const transport = createDiscoveredTransport(
+              async (input, init) => {
+                assert(definition.kind === 'http');
+                const request = new Request(input, init);
+                const read = definition.contract.request;
+                assert.equal(request.url, appRequestUrl(definition.endpoint, read.path));
+                assert.equal(request.method, read.method);
+                assert.equal(
+                  request.headers.get(
+                    definition.auth === 'x-api-key' ? 'X-Access-Key' : 'Authorization',
+                  ),
+                  definition.auth === 'x-api-key' ? values.token : `Bearer ${values.token}`,
+                );
+                assert.equal(
+                  await request.text(),
+                  read.method === 'POST' ? JSON.stringify(read.body) : '',
+                );
+                calls++;
+                if (failure)
+                  return Response.json(
+                    { error: `synthetic_${failure} ${secrets.join(' ')}` },
+                    { status: failure === 'rate' ? 429 : 403 },
+                  );
+                return Response.json({ data: definition.contract.output, secrets });
+              },
+              async (endpoint) => {
+                assert.equal(endpoint, definition.endpoint);
+                return endpoint;
+              },
+            );
+            const cli = async (
+              command: import('../src/ports/computer.ts').ConnectedCli,
+              argv: string[],
+              environment: Record<string, string>,
+              timeout?: number,
+            ) => {
+              assert(definition.kind === 'cli');
+              assert.equal(command.command, definition.command);
+              assert.deepEqual(command.source, definition.source);
+              assert.deepEqual(argv, definition.contract.argv);
+              assert.deepEqual(environment, values);
+              assert.equal(timeout, definition.contract.timeoutSeconds);
+              calls++;
+              const output =
+                definition.contract.format === 'json'
+                  ? JSON.stringify({ data: definition.contract.output, secrets })
+                  : `Synthetic account ${secrets.join(' ')}`;
+              return {
+                exitCode: failure === 'permission' || failure === 'rate' ? 7 : 0,
+                output: failure ? `synthetic_${failure} ${secrets.join(' ')}` : output,
+                stdout: failure ? `synthetic_${failure} ${secrets.join(' ')}` : output,
+                stderr: 'Synthetic warning on stderr.',
+              };
+            };
+            const grantVault = await createAppGrantVault(database.pool, {
+              ownerId,
+              keyStore: installationKeyStore,
+            });
+            const options = {
+              apps,
+              ownerId,
+              baseUrl: 'http://localhost:4310',
+              grantVault,
+              transport,
+              oauth: {
+                begin: async () => assert.fail('Token apps do not start OAuth.'),
+                finish: async () => assert.fail('Token apps do not finish OAuth.'),
+                refresh: async () => assert.fail('Token apps do not refresh OAuth.'),
+              },
+              runCli: async (
+                _thread: string,
+                command: import('../src/ports/computer.ts').ConnectedCli,
+                argv: string[],
+                environment: Record<string, string>,
+                timeout?: number,
+              ) => cli(command, argv, environment, timeout),
+              verifyCli: cli,
+            };
+            const discovered = await createDiscoveredConnections(database.pool, options);
+            const reviewed = appAccessSchema.parse(appAccessPath(definition));
+            await assert.rejects(
+              discovered.propose({
+                service: definition.slug,
+                name: definition.name,
+                paths: [
+                  reviewed.kind === 'cli'
+                    ? { ...reviewed, source: { npm: '@synthetic/cli' } }
+                    : { ...reviewed, endpoint: 'https://other.synthetic-nod.dev/api' },
+                ],
+              }),
+              /reviewed connection/,
+            );
+            assert.equal(calls, 0);
+            const provider = fakeProvider({
+              id: 'unused',
+              authorize: async () => assert.fail('Use app setup.'),
+              search: async () => ({ tools: {}, suggestions: [] }),
+              execute: async () => assert.fail('Use the app access path.'),
+            });
+            provider.configured = false;
+            const integrations = await createIntegrations(database.pool, {
+              ownerId,
+              provider,
+              discovered,
+              baseUrl: 'http://localhost:4310',
+              wake: async () => {},
+            });
+            integrations.registerRoutes(server);
+            const catalog = (await server.inject('/api/apps/catalog')).json<AppConnection[]>();
+            assert(
+              catalog.some((app) => app.slug === definition.slug && app.name === definition.name),
+            );
+            const start = await server.inject({
+              method: 'POST',
+              url: `/api/apps/${definition.slug}/connect`,
+            });
+            assert.equal(start.statusCode, 200, start.body);
+            const id = new URL(start.json().url, 'http://localhost:4310').searchParams.get(
+              'connect',
+            )!;
+            const setup = await server.inject(`/api/apps/discovery/${id}`);
+            assert.equal(setup.statusCode, 200, setup.body);
+            assert.equal(setup.json().catalogApp, true);
+            if (definition.kind === 'cli')
+              assert.deepEqual(setup.json().credentialLabels, definition.environment);
+            const complete = (proposalId = id) =>
+              server.inject({
+                method: 'POST',
+                url: `/api/apps/discovery/${proposalId}/complete`,
+                payload: {
+                  token: definition.kind === 'cli' ? values : values.token,
+                  accountName: 'Synthetic account',
+                },
+              });
+            failure = 'permission';
+            const denied = await complete();
+            assert.equal(denied.statusCode, 409, denied.body);
+            assert.match(denied.body, /synthetic_permission/);
+            assert(diagnostics.length);
+            for (const secret of secrets) {
+              assert(!denied.body.includes(secret));
+              assert(!JSON.stringify(diagnostics).includes(secret));
+            }
+            assert.equal(
+              (await database.pool.query('SELECT id FROM discovered_connections')).rowCount,
+              0,
+            );
+            if (definition.kind === 'cli' && definition.contract.format === 'json') {
+              failure = 'invalid-json';
+              const invalid = await complete();
+              assert.equal(invalid.statusCode, 409, invalid.body);
+              assert.match(invalid.body, /valid JSON/);
+            }
+            failure = undefined;
+            const connected = await complete();
+            assert.equal(connected.statusCode, 200, connected.body);
+            const saved = (await discovered.list()).find((app) => app.slug === definition.slug)!;
+            assert(saved?.connectionId);
+            const account = (await discovered.search(definition.name, saved.connectionId))
+              .accounts[0];
+            const pathId = account.paths[0].id;
+            const args =
+              definition.kind === 'http'
+                ? {
+                    connectionId: saved.connectionId,
+                    pathId,
+                    method: definition.contract.request.method,
+                    path: definition.contract.request.path,
+                    ...(definition.contract.request.method === 'POST'
+                      ? { body: definition.contract.request.body }
+                      : {}),
+                  }
+                : definition.kind === 'cli'
+                  ? {
+                      connectionId: saved.connectionId,
+                      pathId,
+                      argv: definition.contract.argv,
+                      timeoutSeconds: definition.contract.timeoutSeconds,
+                    }
+                  : assert.fail('Use an API or CLI fixture.');
+            const action = definition.kind === 'http' ? 'CONNECTED_HTTP' : 'CONNECTED_CLI';
+            const ref = { threadId: randomUUID(), turnId: randomUUID() };
+            const output = await discovered.execute(action, args, ref);
+            for (const secret of secrets) assert(!JSON.stringify(output).includes(secret));
+            const before = calls;
+            await assert.rejects(
+              discovered.execute(action, args, ref, undefined, 'stale-binding'),
+              /changed/,
+            );
+            await assert.rejects(
+              discovered.execute(action, { ...args, pathId: randomUUID() }, ref),
+              /unavailable/,
+            );
+            const stopped = new AbortController();
+            stopped.abort(new Error('synthetic_stop'));
+            await assert.rejects(
+              discovered.execute(action, args, ref, stopped.signal),
+              /synthetic_stop/,
+            );
+            const foreign = await createDiscoveredConnections(database.pool, {
+              ...options,
+              ownerId: 'synthetic-other-owner',
+            });
+            await assert.rejects(foreign.execute(action, args, ref), /unavailable/);
+            assert.equal(calls, before);
+            failure = 'rate';
+            if (definition.kind === 'http')
+              await assert.rejects(discovered.execute(action, args, ref), (error: Error) => {
+                assert.match(error.message, /429.*synthetic_rate/);
+                for (const secret of secrets) assert(!error.message.includes(secret));
+                return true;
+              });
+            else
+              assert.equal(
+                ((await discovered.execute(action, args, ref)) as { exitCode: number }).exitCode,
+                7,
+              );
+            assert.equal(calls, before + 1);
+            failure = undefined;
+            const reconnect = await discovered.reconnect(definition.slug, saved.connectionId);
+            const nextId = new URL(reconnect.url, 'http://localhost:4310').searchParams.get(
+              'connect',
+            )!;
+            const next = await server.inject(`/api/apps/discovery/${nextId}`);
+            assert.deepEqual(next.json().paths, setup.json().paths);
+            assert.equal((await complete(nextId)).statusCode, 200);
+            const current = (await discovered.list()).find((app) => app.slug === definition.slug)!;
+            assert(current?.connectionId);
+            const currentPath = (await discovered.search(definition.name, current.connectionId))
+              .accounts[0].paths[0].id;
+            await discovered.disconnect(current.connectionId, definition.slug);
+            const afterDisconnect = calls;
+            await assert.rejects(
+              discovered.execute(
+                action,
+                { ...args, connectionId: current.connectionId, pathId: currentPath },
+                ref,
+              ),
+              /unavailable/,
+            );
+            assert.equal(calls, afterDisconnect);
+          },
+        );
+      });
+  },
+);
+
+test(
+  'API apps use standard OAuth with PKCE, registration or an owner client ID, refresh and issuer checks',
+  { skip: !process.env.TEST_DATABASE_URL },
+  async (t) => {
+    for (const registered of [false, true])
+      await t.test(registered ? 'owner client ID' : 'dynamic registration', async (t) => {
+        const directory = await mkdtemp(join(tmpdir(), 'nod-community-oauth-'));
+        t.after(() => rm(directory, { recursive: true, force: true }));
+        const fixture = {
+          ...communityAccessCases[0],
+          slug: 'sample-oauth',
+          options: {
+            type: 'http' as const,
+            url: 'https://api.synthetic-nod.dev/v1',
+            auth: 'oauth2' as const,
+          },
+        };
+        await completedCommunityApp(directory, fixture);
+        const path = join(directory, fixture.slug, 'io.n8n.nod/app.json');
+        const config = JSON.parse(await readFile(path, 'utf8'));
+        config.connection.scopes = ['records:read'];
+        config.connection.oauth = {
+          issuer: 'https://auth.synthetic-nod.dev',
+          authorization_endpoint: 'https://auth.synthetic-nod.dev/authorize',
+          token_endpoint: 'https://auth.synthetic-nod.dev/token',
+          ...(registered
+            ? {}
+            : { registration_endpoint: 'https://auth.synthetic-nod.dev/register' }),
+          authorization_response_iss_parameter_supported: true,
+        };
+        if (registered) config.connection.clientIdRequired = true;
+        await writeFile(path, JSON.stringify(config));
+        const apps = loadAppCatalog(directory);
+        const definition = apps.get(fixture.slug)!;
+        assert(definition.kind === 'http' && definition.auth === 'oauth');
+        const database = await hostedDatabase();
+        const server = Fastify();
+        t.after(async () => {
+          await server.close();
+          await database.close();
+        });
+        const ownerId = 'synthetic-owner';
+        const grantVault = await createAppGrantVault(database.pool, {
+          ownerId,
+          keyStore: installationKeyStore,
+        });
+        let registrations = 0;
+        let exchanges = 0;
+        let reads = 0;
+        let token = 'synthetic-oauth-access-token';
+        let codeChallenge = '';
+        const oauth = createDiscoveredOAuth(
+          async (input, init) => {
+            const request = new Request(input, init);
+            const url = new URL(request.url);
+            if (url.pathname.startsWith('/.well-known/'))
+              return new Response(null, { status: 404 });
+            assert.equal(url.origin, 'https://auth.synthetic-nod.dev');
+            if (url.pathname === '/register') {
+              assert.equal(registered, false);
+              registrations++;
+              const body = JSON.parse(await request.text());
+              assert.equal(body.token_endpoint_auth_method, 'none');
+              return Response.json(
+                { client_id: 'synthetic-dynamic-client', ...body },
+                { status: 201 },
+              );
+            }
+            assert.equal(url.pathname, '/token');
+            const body = new URLSearchParams(await request.text());
+            assert.equal(
+              body.get('client_id'),
+              registered ? 'synthetic-owner-client' : 'synthetic-dynamic-client',
+            );
+            if (body.get('grant_type') === 'authorization_code') {
+              assert.equal(body.get('code'), 'synthetic-authorization-code');
+              assert.equal(
+                createHash('sha256').update(body.get('code_verifier')!).digest('base64url'),
+                codeChallenge,
+              );
+            } else {
+              assert.equal(body.get('grant_type'), 'refresh_token');
+              assert.equal(body.get('refresh_token'), 'synthetic-oauth-refresh-token');
+              token = 'synthetic-refreshed-oauth-access-token';
+            }
+            exchanges++;
+            return Response.json({
+              access_token: token,
+              refresh_token: 'synthetic-oauth-refresh-token',
+              token_type: 'Bearer',
+              expires_in: 3600,
+            });
+          },
+          async (url) => {
+            assert.equal(new URL(url).origin, 'https://auth.synthetic-nod.dev');
+            return url;
+          },
+        );
+        const discovered = await createDiscoveredConnections(database.pool, {
+          apps,
+          ownerId,
+          baseUrl: 'http://localhost:4310',
+          grantVault,
+          oauth,
+          transport: createDiscoveredTransport(
+            async (input, init) => {
+              const request = new Request(input, init);
+              assert.equal(request.url, 'https://api.synthetic-nod.dev/v1/account');
+              assert.equal(request.method, 'GET');
+              assert.equal(request.headers.get('authorization'), `Bearer ${token}`);
+              reads++;
+              return Response.json({ id: 'synthetic-account', token });
+            },
+            async (value) => value,
+          ),
+        });
+        const provider = fakeProvider({
+          id: 'unused',
+          authorize: async () => assert.fail('Use app OAuth.'),
+          search: async () => ({ tools: {}, suggestions: [] }),
+          execute: async () => assert.fail('Use the API app.'),
+        });
+        provider.configured = false;
+        const integrations = await createIntegrations(database.pool, {
+          ownerId,
+          provider,
+          discovered,
+          baseUrl: 'http://localhost:4310',
+          wake: async () => {},
+        });
+        integrations.registerRoutes(server);
+        const start = await server.inject({
+          method: 'POST',
+          url: `/api/apps/${fixture.slug}/connect`,
+        });
+        assert.equal(start.statusCode, 200, start.body);
+        let link = start.json().url;
+        if (registered) {
+          assert(link.startsWith('/apps?connect='));
+          const id = new URL(link, 'http://localhost').searchParams.get('connect');
+          const setup = await server.inject(`/api/apps/discovery/${id}`);
+          assert.equal(setup.json().callbackUrl, 'http://127.0.0.1:4310/api/apps/callback');
+          const authorize = await server.inject({
+            method: 'POST',
+            url: `/api/apps/discovery/${id}/authorize`,
+            payload: { clientId: 'synthetic-owner-client' },
+          });
+          assert.equal(authorize.statusCode, 200, authorize.body);
+          link = authorize.json().url;
+        }
+        const signIn = new URL(link);
+        assert.equal(signIn.origin, 'https://auth.synthetic-nod.dev');
+        assert.equal(signIn.searchParams.get('code_challenge_method'), 'S256');
+        assert.equal(signIn.searchParams.get('scope'), 'records:read');
+        codeChallenge = signIn.searchParams.get('code_challenge')!;
+        assert(codeChallenge);
+        const callback = await server.inject(
+          `/api/apps/callback?${new URLSearchParams({ state: signIn.searchParams.get('state')!, code: 'synthetic-authorization-code', iss: 'https://auth.synthetic-nod.dev' })}`,
+        );
+        assert.equal(
+          new URL(callback.headers.location!).searchParams.get('connection'),
+          'connected',
+        );
+        assert.equal(registrations, registered ? 0 : 1);
+        assert.equal(reads, 1);
+        const saved = (await discovered.list()).find((app) => app.slug === fixture.slug)!;
+        assert(saved?.connectionId);
+        const grant = await grantVault.read(saved.connectionId);
+        const state = JSON.parse(grant.value);
+        state.expiresAt = Date.now() - 120_000;
+        await grantVault.replace(saved.connectionId, grant.version, JSON.stringify(state));
+        const access = (await discovered.search(definition.name, saved.connectionId)).accounts[0]
+          .paths[0];
+        const result = await discovered.execute('CONNECTED_HTTP', {
+          connectionId: saved.connectionId,
+          pathId: access.id,
+          method: 'GET',
+          path: 'account',
+        });
+        assert(!JSON.stringify(result).includes(token));
+        assert.equal(exchanges, 2);
+        assert.equal(reads, 2);
+        const reconnect = await discovered.reconnect(fixture.slug, saved.connectionId);
+        const id = new URL(reconnect.url, 'http://localhost').searchParams.get('connect');
+        const retry = await server.inject({
+          method: 'POST',
+          url: `/api/apps/discovery/${id}/authorize`,
+          payload: registered ? { clientId: 'synthetic-owner-client' } : {},
+        });
+        assert.equal(retry.statusCode, 200, retry.body);
+        const retryLink = new URL(retry.json().url);
+        const before = exchanges;
+        const refused = await discovered.completeOAuth({
+          state: retryLink.searchParams.get('state')!,
+          code: 'synthetic-authorization-code',
+          iss: 'https://wrong-issuer.synthetic-nod.dev',
+        });
+        assert.equal(refused?.outcome, 'failed');
+        assert.equal(exchanges, before);
+        await discovered.disconnect(saved.connectionId, fixture.slug);
+      });
+  },
+);
 
 test('app skills cannot shadow core guides or load without a trusted root', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'nod-app-skills-'));
@@ -391,7 +1088,7 @@ test('published app schemas reject unsupported definitions with the runtime vali
   }
 });
 
-test('every shipped app passes the required offline MCP contract suite', async (t) => {
+test('every shipped app passes the required offline connection contract suite', async (t) => {
   t.mock.method(globalThis, 'fetch', async () =>
     assert.fail('App contract checks must not make external requests.'),
   );
@@ -425,6 +1122,7 @@ for (const authentication of ['oauth2', 'bearer', 'x-api-key'] as const)
       await writeFile(appPath, JSON.stringify(app));
       const apps = loadAppCatalog(directory);
       const definition = apps.get('community-fixture')!;
+      assert(definition.kind === 'mcp');
       const database = await hostedDatabase();
       const server = Fastify();
       t.after(async () => {

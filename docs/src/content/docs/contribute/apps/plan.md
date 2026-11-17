@@ -1,50 +1,54 @@
 ---
 title: Plan the app
-description: Choose a supported connection method and define the app's scope before you build it.
+description: Choose a supported interface, authentication method, scope, and maintainer.
 sidebar:
   order: 3
 ---
 
-Use the provider's supported remote MCP server when one exists.
+Choose the provider interface that supports the work your app promises. MCP, API, and CLI apps use the same contribution process.
 
-## Check the connection method
+## Choose the connection
 
-| Provider interface                    | Current app format                              |
-| ------------------------------------- | ----------------------------------------------- |
-| Fixed public HTTPS MCP address        | Supported through `mcp.json`                    |
-| Owner-supplied HTTPS instance address | Supported through the Nod setup extension       |
-| Local n8n instance                    | Supported through n8n's existing address checks |
-| REST, GraphQL, or SDK without MCP     | Supply an MCP server first                      |
-| Local stdio server or MCPB package    | Requires additional runtime support             |
+| Provider interface          | App definition                 | Private setup                                |
+| --------------------------- | ------------------------------ | -------------------------------------------- |
+| Remote MCP server           | `type: "mcp"`, plus `mcp.json` | OAuth, access token, or API key              |
+| REST or GraphQL API         | `type: "http"`                 | OAuth, access token, or API key              |
+| Non-interactive service CLI | `type: "cli"`                  | Named credential fields                      |
+| User-supplied n8n instance  | MCP owner endpoint             | Instance address, then OAuth or access token |
 
-Other Agent Plugins clients can support more transports. Nod checks its narrower app profile before a contribution can ship.
+Nod's API and CLI adapters connect directly. You do not need to build an MCP wrapper.
 
-## Define the scope
+A user sees one app card and selects **Connect**. The app chooses its connection method. Users enter only the address or credentials the app needs. Protocol and install details stay under **Connection details**.
 
-Write down the service, users, accounts, and operations the app supports. One folder describes one service. The first version uses one fixed server or one instance setup.
+## Define useful scope
 
-Choose the smallest useful OAuth scopes. Explain any write scope. Identify paid-plan requirements, administrator restrictions, and version requirements. Check whether a disconnected or revoked account can reconnect.
+List the service, accounts, read operations, and write operations the app supports. Add concrete example requests. State required plans, roles, scopes, and provider versions.
 
-Check OAuth registration and consent with Nod itself. Another client's working configuration does not prove that Nod supports the same setup. Add runtime support and tests before advertising a method the app profile cannot express.
+One app folder describes one service and one connection method. Choose one documented authentication method for a fixed connection. The existing n8n instance setup supports its two declared methods.
 
-Use a separate account for each identity. Do not make the model select or handle credentials. Nod's private setup owns credential entry and storage.
+Use the provider's supported API or CLI when it better covers the intended work. A connection should not promise operations its interface cannot perform.
 
-## Check the server
+## Confirm the provider contract
 
-Confirm the exact address from provider documentation. A website home page, legacy SSE endpoint, or API root is not necessarily an MCP endpoint.
+For MCP, confirm the Streamable HTTP address and read tool schema.
 
-Check the server's tool names and schemas. Select one read tool for the contract fixture. Include required inputs and a synthetic response. Do not copy an account's private records into the repository.
+For an API, confirm the HTTPS base address, header or OAuth scheme, read check, request methods, and response shape. Use the provider's OpenAPI document when available. The adapter uses HTTP directly; it does not import an OpenAPI document.
 
-MCP tool descriptions and read-only hints do not grant permission. Nod keeps its normal Trust checks for every app call.
+For a CLI, confirm the official install source, exact version, command name, credential environment names, and non-interactive read command. Check its Linux support. Nod runs connected CLIs in its private Linux workspace on every host platform.
 
-## Plan the public page
+CLI reads can return JSON or text. Keep arguments as an array. JSON output must go to stdout. Diagnostic text can go to stderr.
 
-Choose two to four useful example requests. State account requirements and limits. Keep these examples within the access the server actually provides.
+## Plan account setup and maintenance
 
-Do not describe event monitoring, email checks, or automatic work as supported unless the connection implements the required change signals.
+Use the least access needed for the advertised work. Add a named maintainer and a public contact link. Record provider changes that could require a new version or reconnect.
+
+The read check runs after the user selects **Connect**. It must only verify account access. Never use a write, payment, deletion, message send, or GraphQL mutation as that check.
+
+App metadata, read-only hints, and bundled guides do not grant permission for later calls. Nod applies its normal Trust checks to MCP, API, and CLI actions.
 
 ## Related resources
 
-- [Build an app for Nod](/contribute/apps/)
 - [Build your first app](/contribute/apps/build/)
-- [Approval requirements](/contribute/apps/approval/)
+- [API and CLI examples](/contribute/apps/api-and-cli/)
+- [Format reference](/contribute/apps/format/)
+- [Trust and approvals](/trust/approvals/)

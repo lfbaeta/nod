@@ -2,7 +2,7 @@
 title: Get an app approved
 description: The required evidence and maintainer review before an app connection ships with Nod.
 sidebar:
-  order: 7
+  order: 8
 ---
 
 An app ships after its required tests pass and a maintainer approves the pull request.
@@ -13,7 +13,7 @@ Passing a schema check does not make a connection approved. An AI-generated fold
 
 | Area              | Required evidence                                                                                  |
 | ----------------- | -------------------------------------------------------------------------------------------------- |
-| Provider contract | Official documentation for the address, authentication, scopes, and read tool                      |
+| Provider contract | Official documentation for the interface, authentication, permissions, and read operation          |
 | Account setup     | Separate provider acceptance for each advertised authentication method                             |
 | Useful scope      | Concrete example requests, account requirements, and honest limits                                 |
 | Required tests    | Passing `pnpm check:apps` and the applicable integration checks                                    |
@@ -22,6 +22,10 @@ Passing a schema check does not make a connection approved. An AI-generated fold
 | Writes            | Any advertised write checked with a reversible synthetic record; no automatic replay after failure |
 | Public page       | Correct name, icon rights, requirements, examples, limits, links, and social preview               |
 | Maintenance       | A named maintainer and a way to report a provider change                                           |
+
+For CLI apps, also check the official source, exact version or download hash, Linux support, private credential fields, and read command. The setup must refuse a failed read. Verify that the command cannot be replaced by ordinary workspace code.
+
+For API apps, check the base address, authentication header or OAuth metadata, read request, and prefix limits. Review any GraphQL read body.
 
 When the contributor supplies the MCP server, include its source or supported service documentation and its own test results. A Nod protocol fixture cannot prove that server's internal behavior.
 
