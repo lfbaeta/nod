@@ -93,8 +93,12 @@ test('only a terminal context failure requests a chat context restart', async (t
           if (ending === 'context' || ending === 'context-length')
             return error instanceof ContextLimitError;
           if (ending === 'quota' || ending === 'summary-access')
-            return error instanceof ModelRequestError && !(error instanceof ContextLimitError);
-          return error instanceof Error && !(error instanceof ContextLimitError);
+            return (
+              error instanceof ModelRequestError &&
+              !(error instanceof ContextLimitError) &&
+              error.message.includes(ending === 'quota' ? 'Synthetic quota exceeded.' : 'HTTP 401')
+            );
+          return error instanceof Error && error.constructor === Error;
         });
     });
 });
