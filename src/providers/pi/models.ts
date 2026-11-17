@@ -1025,27 +1025,25 @@ function portableToolCallIds(messages: Context['messages'], model: string): Cont
 function recordedNamespaces(input: Array<Record<string, unknown>>, messages: Context['messages']) {
   const loaded = new Set(
     input.flatMap((item) =>
-      (item.type === 'additional_tools' || item.type === 'tool_search_output') &&
-      Array.isArray(item.tools)
+      item.type === 'additional_tools' && Array.isArray(item.tools)
         ? item.tools.map((tool: { name?: unknown }) => tool.name)
         : [],
     ),
   );
   const recorded = new Map(
     messages.flatMap((message) =>
-      message.role === 'assistant' && Array.isArray(message.content)
+      message.role === 'assistant'
         ? message.content.flatMap((part) =>
             part.type === 'toolCall' && part.namespace
-              ? [[`${part.id.split('|')[0]}\n${part.name}`, part.namespace] as const]
+              ? [[part.id.split('|')[0], part.namespace] as const]
               : [],
           )
         : [],
     ),
   );
   return input.map((item) => {
-    const namespace = recorded.get(`${item.call_id}\n${item.name}`);
+    const namespace = recorded.get(item.call_id as string);
     return (item.type === 'function_call' || item.type === 'custom_tool_call') &&
-      item.namespace === undefined &&
       namespace &&
       loaded.has(item.name)
       ? { ...item, namespace }
