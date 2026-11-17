@@ -9,13 +9,13 @@ Create an app folder with the scaffold command, then replace its unfinished fiel
 
 ## Generate the files
 
-From the repository root, run:
+Replace the example address with the provider's real public MCP address. Then run this command from the repository root:
 
 ```sh
 pnpm create:app my-app --name "My App" --url https://mcp.example.com/mcp
 ```
 
-This example address is a placeholder. Enter the provider's real public MCP address when you build your app. The command writes files only. It does not contact the provider or create a connection.
+The command rejects private, local, and reserved example addresses. It writes files only. It does not contact the provider or create a connection.
 
 For a fixed token or API key, add `--auth bearer` or `--auth x-api-key`. OAuth is the default.
 

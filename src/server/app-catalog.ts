@@ -107,7 +107,11 @@ export function loadAppCatalog(directory = fileURLToPath(new URL('../apps/', imp
       extensions?: Record<string, unknown>;
       author?: { name?: string };
     };
-    if (manifest.name !== entry.name || !/^[a-z][a-z0-9-]{1,39}$/.test(manifest.name))
+    if (
+      manifest.name !== entry.name ||
+      !/^[a-z][a-z0-9-]{0,38}[a-z0-9]$/.test(manifest.name) ||
+      /--/.test(manifest.name)
+    )
       throw new Error(
         `App ${entry.name}: name must match its folder and use two to 40 lowercase letters, digits, or hyphens.`,
       );
@@ -209,8 +213,7 @@ export function loadAppCatalog(directory = fileURLToPath(new URL('../apps/', imp
         url.protocol !== 'https:' ||
         url.username ||
         url.password ||
-        url.hash ||
-        url.search ||
+        /[?#]/.test(selected.url) ||
         isIP(url.hostname.replace(/^\[|\]$/g, '')) ||
         /(?:^|\.)(?:localhost|local|internal|invalid|test|example|example\.(?:com|org|net))$/.test(
           url.hostname.replace(/\.$/, ''),

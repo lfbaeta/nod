@@ -2,6 +2,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
+import { isIP } from 'node:net';
 
 export async function createApp(
   slug: string,
@@ -12,14 +13,25 @@ export async function createApp(
       'Use two to 40 lowercase letters, digits, or single hyphens. Start with a letter and end with a letter or digit.',
     );
   const url = URL.parse(options.url);
-  if (!url || url.protocol !== 'https:' || url.username || url.password || url.hash || url.search)
+  if (
+    !url ||
+    url.protocol !== 'https:' ||
+    url.username ||
+    url.password ||
+    /[?#]/.test(options.url) ||
+    isIP(url.hostname.replace(/^\[|\]$/g, '')) ||
+    /(?:^|\.)(?:localhost|local|internal|invalid|test|example|example\.(?:com|org|net))$/.test(
+      url.hostname.replace(/\.$/, ''),
+    )
+  )
     throw new Error(
       'Enter the public HTTPS MCP address without credentials, a query, or a fragment.',
     );
   const auth = options.auth ?? 'oauth2';
   if (!['oauth2', 'bearer', 'x-api-key'].includes(auth))
     throw new Error('Select oauth2, bearer, or x-api-key authentication.');
-  const name = options.name ?? slug;
+  const name = (options.name ?? slug).trim();
+  if (!name || name.length > 80) throw new Error('Enter an app name with one to 80 characters.');
   const root = resolve(
     options.directory ?? fileURLToPath(new URL('../src/apps/', import.meta.url)),
   );

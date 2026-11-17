@@ -3,14 +3,13 @@ import { Compile } from 'typebox/compile';
 import { bundledApps, type BundledApp } from '../src/server/app-catalog.ts';
 import { createDiscoveredTransport } from '../src/providers/discovered/remote.ts';
 import { createSkillLibrary } from '../src/providers/pi/skills.ts';
-import { withoutSchemaPatterns } from '../src/shared/json-schema.ts';
 import { coreSkills } from '../src/runtime/prompt.ts';
 import { fileURLToPath } from 'node:url';
 import { posix } from 'node:path';
 
 export async function checkAppContract(app: BundledApp) {
   const { contract } = app;
-  const schema = withoutSchemaPatterns(contract.tool.inputSchema) as Record<string, unknown>;
+  const schema = contract.tool.inputSchema as Record<string, unknown>;
   assert.equal(schema.type, 'object', `${app.slug}: the read tool needs an object input schema.`);
   assert(
     Compile(schema as Parameters<typeof Compile>[0]).Check(contract.input),
@@ -117,14 +116,14 @@ if (import.meta.main) {
     ],
     coreSkills,
   );
-  for (const skill of library.catalog) {
+  for (const name of [...coreSkills, ...library.catalog.map((skill) => skill.name)]) {
     const pending = ['SKILL.md'];
     const checked = new Set<string>();
     while (pending.length) {
       const path = pending.pop()!;
       if (checked.has(path)) continue;
       checked.add(path);
-      const { content } = library.read(skill.name, path);
+      const { content } = library.read(name, path);
       for (const match of content.matchAll(/\[[^\]]*\]\(([^)\s]+\.md(?:#[^)\s]*)?)\)/g)) {
         if (/^[a-z]+:|^\//i.test(match[1])) continue;
         pending.push(posix.join(posix.dirname(path), decodeURIComponent(match[1].split('#')[0])));

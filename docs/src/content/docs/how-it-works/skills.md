@@ -30,7 +30,7 @@ The connected apps, schedules and watches, artifacts, and video links guides use
 
 ## The task guides
 
-The library combines task guides in [`src/runtime/skills`](https://github.com/n8n-io/nod/tree/main/src/runtime/skills) with app guides in [`src/apps`](https://github.com/n8n-io/nod/tree/main/src/apps). The n8n guide lives with its app definition.
+The library combines task guides in [`src/runtime/skills`](https://github.com/n8n-io/nod/tree/main/src/runtime/skills) with app guides in [`src/apps`](https://github.com/n8n-io/nod/tree/main/src/apps). The table includes both sources. The n8n guide lives with its app definition.
 
 | Home and life             | Work                    | Mail, files and research |
 | ------------------------- | ----------------------- | ------------------------ |

@@ -57,7 +57,7 @@ Select one named server from `mcp.json`:
 }
 ```
 
-The `scopes` field is optional. Fixed connections select one authentication method: `oauth2`, `bearer`, or `x-api-key`. Nod sends API keys in `X-API-Key`.
+The `scopes` field is optional and is valid only with `oauth2`. Fixed connections select one authentication method: `oauth2`, `bearer`, or `x-api-key`. Nod sends API keys in `X-API-Key`.
 
 `mcp.json` must target the matching Agent Plugins schema version. It must contain exactly one server with `type: "streamable-http"`. Its address must be public HTTPS without credentials, a query, or a fragment. DNS and network checks also run when Nod connects.
 
@@ -105,6 +105,8 @@ Every folder includes `io.n8n.nod/contract.json`:
 ```
 
 Use a documented read tool. `input` must match its schema. `output` must contain synthetic JSON data. Objects, arrays, strings, numbers, booleans, and null are supported. The read-only hint describes the fixture; it does not bypass Trust.
+
+The tool name must have one to 100 characters and must not start with `replace_`. The description must have one to 2,000 characters. Set `inputSchema.type` to `object`. The framework checks the complete input schema, including its patterns.
 
 The fixture exercises Nod's MCP transport. It does not prove the external server still offers that tool. Provider acceptance remains a separate review requirement.
 

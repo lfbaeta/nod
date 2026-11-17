@@ -7,7 +7,7 @@ Build the app in the Nod repository. Read `AGENTS.md` and `docs/src/content/docs
 
 Use official provider documentation for the MCP address, authentication, scopes, required plan, and read-tool contract. Do not guess a server address or claim an API is MCP. State any required MCP server work before proceeding with an unsupported service.
 
-Use `pnpm create:app <app-id> --name <display-name> --url <public-mcp-url>` for a fixed server. Use n8n's existing app folder as the source example for owner-supplied instances. Keep the app ID stable when changing an existing app.
+Use `pnpm create:app <app-id> --name <display-name> --url <public-mcp-url> --auth <oauth2|bearer|x-api-key>` for a fixed server. Select the authentication method from the provider documentation. Use n8n's existing app folder as the source example for owner-supplied instances. Keep the app ID stable when changing an existing app.
 
 Complete all generated fields. Add concrete prompts, requirements, limits, maintainer details, and a synthetic read fixture. Use the documented tool name and input schema. Keep credentials and private content out of files and prompts.
 

@@ -10,6 +10,7 @@ export function createSkillLibrary(
   const roots = (typeof directory === 'string' ? [directory] : directory).map((path) =>
     realpathSync(path),
   );
+  if (!roots.length) throw new Error('At least one skill directory is required.');
   const checkedPath = (base: string, file: string) => {
     const path = realpathSync(resolve(base, file));
     if (!path.startsWith(base + sep) || !path.endsWith('.md'))
@@ -17,12 +18,14 @@ export function createSkillLibrary(
     if (!statSync(path).isFile()) throw new Error('The skill file must be a regular file.');
     return path;
   };
-  const skillPaths = roots.flatMap((root) =>
+  const skillPaths = roots.flatMap((root, index) =>
     readdirSync(root, { withFileTypes: true })
-      .filter(
-        (entry) =>
-          entry.isDirectory() && !entry.name.startsWith('.') && !excluded.includes(entry.name),
-      )
+      .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
+      .filter((entry) => {
+        if (!excluded.includes(entry.name)) return true;
+        if (index === 0) return false;
+        throw new Error(`The app skill ${entry.name} conflicts with a core skill.`);
+      })
       .sort((a, b) => a.name.localeCompare(b.name))
       .map((entry) => checkedPath(resolve(root, entry.name), 'SKILL.md')),
   );

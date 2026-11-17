@@ -17,9 +17,11 @@ App folders use [Agent Plugins 1.0.0](https://agent-plugins.org/specification). 
 - Set up a [source install](/get-started/install-from-source/).
 - Learn the provider's MCP address, authentication methods, scopes, and limits.
 - Find a documented read tool for the required synthetic fixture.
-- Check the [app catalog](/connect/community-apps/) for an existing connection.
+- Check the [app catalog](/connect/community-apps/) for an existing app entry.
 
 You do not need to write TypeScript for a supported MCP connection. A service without MCP needs an MCP server before it can use this format.
+
+App-only contributions that use this profile can start with a folder and a PR. If the app needs a Nod runtime change, open an issue or discussion before you implement that change.
 
 ## Build and submit
 

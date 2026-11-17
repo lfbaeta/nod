@@ -30,6 +30,7 @@
     }
   },
   "author": {
-    "name": "Nod contributors"
+    "name": "n8n",
+    "url": "https://github.com/n8n-io/nod"
   }
 }

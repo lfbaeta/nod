@@ -83,6 +83,7 @@ import { fakeComputer, fakeExecution, fakeWorkspace } from './runtime-fixtures.t
 import { bundledApps, loadAppCatalog } from '../src/server/app-catalog.ts';
 import { checkAppContract } from '../scripts/check-apps.ts';
 import { createApp } from '../scripts/create-app.ts';
+import { createSkillLibrary } from '../src/providers/pi/skills.ts';
 
 test('app folders reject escaped paths, incomplete contracts, and unsupported server definitions', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'nod-app-profile-'));
@@ -156,6 +157,14 @@ test('app folders reject escaped paths, incomplete contracts, and unsupported se
       },
       /public HTTPS/,
     ],
+    ...['?', '#'].map((delimiter, index): [string, string, (value: any) => void, RegExp] => [
+      `empty-url-delimiter-${index}`,
+      'mcp.json',
+      (value) => {
+        value.mcpServers.linear.url += delimiter;
+      },
+      /public HTTPS/,
+    ]),
     [
       'stdio',
       'mcp.json',
@@ -201,6 +210,18 @@ test('app folders reject escaped paths, incomplete contracts, and unsupported se
     checkAppContract(loadAppCatalog(invalidInput).get('linear')!),
     /does not match/,
   );
+  const patternInput = await fixture('pattern-input');
+  await change(patternInput, 'io.n8n.nod/contract.json', (value) => {
+    value.tool.inputSchema.properties.query.pattern = '^allowed_';
+  });
+  await assert.rejects(
+    checkAppContract(loadAppCatalog(patternInput).get('linear')!),
+    /does not match/,
+  );
+  await change(patternInput, 'io.n8n.nod/contract.json', (value) => {
+    value.input.query = 'allowed_synthetic_query';
+  });
+  await checkAppContract(loadAppCatalog(patternInput).get('linear')!);
 });
 
 test('app scaffolding refuses replacement and requires contributors to complete the read contract', async (t) => {
@@ -209,6 +230,20 @@ test('app scaffolding refuses replacement and requires contributors to complete 
   const options = { directory, url: 'https://mcp.linear.app/mcp', name: 'Synthetic app' };
   for (const slug of ['../escape', 'trailing-', 'double--hyphen', 'a'])
     await assert.rejects(createApp(slug, options));
+  for (const url of [
+    'https://127.0.0.1/mcp',
+    'https://[::1]/mcp',
+    'https://localhost/mcp',
+    'https://mcp.example.com/mcp',
+    'https://mcp.internal/mcp',
+    'https://mcp.test/mcp',
+    `${options.url}?`,
+    `${options.url}#`,
+  ])
+    await assert.rejects(createApp('synthetic-app', { ...options, url }), /public HTTPS/);
+  for (const name of ['', '   ', 'n'.repeat(81)])
+    await assert.rejects(createApp('synthetic-app', { ...options, name }), /app name/);
+  assert.deepEqual(await readdir(directory), []);
   await createApp('synthetic-app', options);
   await assert.rejects(createApp('synthetic-app', options), { code: 'EEXIST' });
   assert.throws(() => loadAppCatalog(directory), /invalid contract/);
@@ -223,6 +258,32 @@ test('app scaffolding refuses replacement and requires contributors to complete 
     JSON.stringify(bundledApps.get('linear')!.contract),
   );
   await checkAppContract(loadAppCatalog(directory).get('synthetic-app')!);
+});
+
+test('app skills cannot shadow core guides or load without a trusted root', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'nod-app-skills-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  assert.throws(() => createSkillLibrary([]), /At least one skill directory/);
+  const builtin = join(directory, 'builtin');
+  const apps = join(directory, 'apps');
+  await mkdir(join(builtin, 'artifacts'), { recursive: true });
+  await mkdir(join(apps, 'artifacts'), { recursive: true });
+  await writeFile(join(builtin, 'artifacts/SKILL.md'), 'Synthetic core guide.');
+  await writeFile(
+    join(apps, 'artifacts/SKILL.md'),
+    '---\nname: artifacts\ndescription: A synthetic app guide.\n---\nApp content.',
+  );
+  assert.throws(() => createSkillLibrary([builtin, apps], ['artifacts']), /conflicts with a core/);
+  await rm(join(apps, 'artifacts'), { recursive: true });
+  await mkdir(join(apps, 'community-guide'));
+  const body = '---\nname: community-guide\ndescription: A synthetic app guide.\n---\nApp content.';
+  await writeFile(join(apps, 'community-guide/SKILL.md'), body);
+  const library = createSkillLibrary([builtin, apps], ['artifacts']);
+  assert.equal(library.read('artifacts').content, 'Synthetic core guide.');
+  assert.equal(library.read('community-guide').content, body);
+  await mkdir(join(builtin, 'community-guide'));
+  await writeFile(join(builtin, 'community-guide/SKILL.md'), body);
+  assert.throws(() => createSkillLibrary([builtin, apps], ['artifacts']), /metadata is invalid/);
 });
 
 test('every shipped app passes the required offline MCP contract suite', async (t) => {
