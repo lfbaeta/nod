@@ -4167,6 +4167,7 @@ test(
         return true;
       };
       let discoveredState = '';
+      let rejection: Error | undefined;
       const discovered = await createDiscoveredConnections(f.pool, {
         ownerId,
         baseUrl: 'http://127.0.0.1:4310',
@@ -4180,6 +4181,7 @@ test(
         },
         oauth: {
           begin: async (_endpoint, redirectUri, state) => {
+            if (rejection) throw rejection;
             discoveredState = state;
             return { url: 'https://fixture.example/authorize', saved: { redirectUri } };
           },
@@ -4250,6 +4252,19 @@ test(
           turn,
         );
         const id = new URL(proposal.url, 'http://localhost').searchParams.get('connect');
+        rejection = new Error(
+          'Synthetic redirect address not approved. Bearer synthetic-provider-secret',
+        );
+        const rejected = await app.inject({
+          method: 'POST',
+          url: `/api/apps/discovery/${id}/authorize`,
+          headers,
+          payload: {},
+        });
+        rejection = undefined;
+        assert.equal(rejected.statusCode, 502, rejected.body);
+        assert.match(rejected.body, /Synthetic redirect address not approved\./);
+        assert.doesNotMatch(rejected.body, /synthetic-provider-secret/);
         const begin = await app.inject({
           method: 'POST',
           url: `/api/apps/discovery/${id}/authorize`,
@@ -4345,6 +4360,7 @@ test(
           ...(await f.session.authorize(service, callback)),
           authConfigId: 'synthetic-auth-config',
         });
+        let rejection: Error | undefined;
         const discovered = await createDiscoveredConnections(f.pool, {
           ownerId,
           baseUrl,
@@ -4360,10 +4376,13 @@ test(
             callTool: async () => ({}),
           },
           oauth: {
-            begin: async (_endpoint, redirectUri, state) => ({
-              url: `https://consent.fixture.example/authorize?state=${state}`,
-              saved: { redirectUri },
-            }),
+            begin: async (_endpoint, redirectUri, state) => {
+              if (rejection) throw rejection;
+              return {
+                url: `https://consent.fixture.example/authorize?state=${state}`,
+                saved: { redirectUri },
+              };
+            },
             finish: async (_endpoint, saved) => ({
               ...saved,
               tokens: { access_token: 'synthetic-access-token', token_type: 'Bearer' },
@@ -4443,6 +4462,14 @@ test(
           await complete(restarted.json().attempt, returnTo, 'notion');
           const addressed = await post('/api/apps/n8n/connect', { returnTo });
           const proposalId = new URL(addressed.json().url, baseUrl).searchParams.get('connect');
+          rejection = new Error('Synthetic metadata not found.');
+          const refused = await post(`/api/apps/discovery/${proposalId}/instance`, {
+            instanceUrl: `https://${returnTo}.n8n.example`,
+            returnTo,
+          });
+          rejection = undefined;
+          assert.equal(refused.statusCode, 502, refused.body);
+          assert.match(refused.body, /did not answer at .*Synthetic metadata not found\./);
           const instance = await post(`/api/apps/discovery/${proposalId}/instance`, {
             instanceUrl: `https://${returnTo}.n8n.example`,
             returnTo,
