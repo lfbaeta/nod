@@ -283,6 +283,116 @@ test(
         [next.id, { type: 'copy' }],
         [next.id, { type: 'copy' }],
       ]);
+      const viewId = `fixture-${randomUUID()}`;
+      let yieldedSecondFrame = false;
+      onView = async function* (signal) {
+        try {
+          yield Buffer.from('first-frame');
+          yieldedSecondFrame = true;
+          yield Buffer.from('second-frame');
+          await new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }));
+        } finally {
+          oldViewClosed.resolve();
+        }
+      };
+      const oldViewClosed = deferred();
+      const frameController = new AbortController();
+      const frameStream = await app.inject({
+        url: `/api/browser-handoff/stream?turnId=${nextTurnId}&view=${viewId}`,
+        headers,
+        payloadAsStream: true,
+        signal: frameController.signal,
+      });
+      assert.equal(frameStream.statusCode, 200);
+      const frameReader = frameStream.stream()[Symbol.asyncIterator]();
+      let frameBytes = Buffer.alloc(0);
+      const readFrame = async () => {
+        while (frameBytes.length < 4) {
+          const { value, done } = await frameReader.next();
+          assert.equal(done, false);
+          frameBytes = Buffer.concat([frameBytes, Buffer.from(value)]);
+        }
+        const size = frameBytes.readUInt32BE(0);
+        while (frameBytes.length < size + 4) {
+          const { value, done } = await frameReader.next();
+          assert.equal(done, false);
+          frameBytes = Buffer.concat([frameBytes, Buffer.from(value)]);
+        }
+        const frame = frameBytes.subarray(4, size + 4).toString();
+        frameBytes = frameBytes.subarray(size + 4);
+        return frame;
+      };
+      try {
+        assert.equal(await readFrame(), 'first-frame');
+        assert.equal(yieldedSecondFrame, false);
+        assert.equal(
+          (await post('/api/browser-handoff/frame-ack', { view: viewId })).statusCode,
+          200,
+        );
+        assert.equal(await readFrame(), 'second-frame');
+        assert.equal(yieldedSecondFrame, true);
+      } finally {
+        frameController.abort();
+        await oldViewClosed.promise;
+        onView = undefined;
+      }
+      const reconnectViewId = `fixture-${randomUUID()}`;
+      let yieldedReconnectFrame = false;
+      const reconnectViewClosed = deferred();
+      onView = async function* (signal) {
+        try {
+          yield Buffer.from('reconnected-first-frame');
+          yieldedReconnectFrame = true;
+          yield Buffer.from('reconnected-second-frame');
+          await new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }));
+        } finally {
+          reconnectViewClosed.resolve();
+        }
+      };
+      const reconnectController = new AbortController();
+      const reconnectStream = await app.inject({
+        url: `/api/browser-handoff/stream?turnId=${nextTurnId}&view=${reconnectViewId}`,
+        headers,
+        payloadAsStream: true,
+        signal: reconnectController.signal,
+      });
+      assert.equal(reconnectStream.statusCode, 200);
+      const reconnectReader = reconnectStream.stream()[Symbol.asyncIterator]();
+      let reconnectBytes = Buffer.alloc(0);
+      const readReconnectFrame = async () => {
+        while (reconnectBytes.length < 4) {
+          const { value, done } = await reconnectReader.next();
+          assert.equal(done, false);
+          reconnectBytes = Buffer.concat([reconnectBytes, Buffer.from(value)]);
+        }
+        const size = reconnectBytes.readUInt32BE(0);
+        while (reconnectBytes.length < size + 4) {
+          const { value, done } = await reconnectReader.next();
+          assert.equal(done, false);
+          reconnectBytes = Buffer.concat([reconnectBytes, Buffer.from(value)]);
+        }
+        const frame = reconnectBytes.subarray(4, size + 4).toString();
+        reconnectBytes = reconnectBytes.subarray(size + 4);
+        return frame;
+      };
+      try {
+        assert.equal(await readReconnectFrame(), 'reconnected-first-frame');
+        assert.equal(
+          (await post('/api/browser-handoff/frame-ack', { view: viewId })).statusCode,
+          409,
+        );
+        assert.equal(yieldedReconnectFrame, false);
+        assert.equal(
+          (await post('/api/browser-handoff/frame-ack', { view: reconnectViewId })).statusCode,
+          200,
+        );
+        assert.equal(await readReconnectFrame(), 'reconnected-second-frame');
+        assert.equal(yieldedReconnectFrame, true);
+      } finally {
+        reconnectController.abort();
+        await reconnectViewClosed.promise;
+        onView = undefined;
+      }
       const copyStarted = deferred();
       const copyRelease = deferred();
       onCopy = async () => {
@@ -2922,6 +3032,7 @@ test('browser handoff preserves platform editing chords, text input and paste', 
             closeHandoffStream = () => controller.error(new DOMException('Handoff ended.', 'AbortError'));
             options.signal.addEventListener('abort', () => controller.error(options.signal.reason), { once: true });
           } }));
+        if (path === '/api/browser-handoff/frame-ack') return Response.json({ ok: true });
         assert.equal(path, '/api/browser-handoff');
         const inputs = JSON.parse(options.body).inputs;
         received.push(...inputs);

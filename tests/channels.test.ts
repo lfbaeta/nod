@@ -15,7 +15,8 @@ import { createCommunication } from '../src/server/communication.ts';
 import { createVault } from '../src/server/vault.ts';
 import { locksTable } from '../src/server/locks.ts';
 import { createChatSdkTransport } from '../src/providers/chat-sdk/index.ts';
-import type { MessagingTransport } from '../src/ports/messaging.ts';
+import { MessagingAttachmentError, type MessagingTransport } from '../src/ports/messaging.ts';
+import { telegramAttachments, telegramMessage } from '../src/providers/chat-sdk/telegram.ts';
 import {
   createWhatsAppLinkedTransport,
   type WhatsAppDrop,
@@ -1496,6 +1497,57 @@ test('Telegram media keeps native replies and checks the sender before any downl
     0,
   );
   assert.equal(requests.length, 0);
+});
+
+test('Telegram downloads stop at 20 MB whatever size the sender, Bot API or file server reports', async () => {
+  const limit = 20 * 1024 * 1024;
+  const message = telegramMessage.parse({
+    message_id: 1,
+    date: 1,
+    from: { id: 1, is_bot: false, first_name: 'Fixture' },
+    chat: { id: 1, type: 'private' },
+    document: { file_id: 'fixture-document' },
+  });
+  const download = (fileSize: number | undefined, file: () => Response) =>
+    telegramAttachments(message, 'token', async (input) =>
+      String(input).endsWith('/getFile')
+        ? Response.json({
+            ok: true,
+            result: { file_path: 'documents/fixture.bin', file_size: fileSize },
+          })
+        : file(),
+    )[0].read();
+  await assert.rejects(
+    download(limit + 1, () => new Response('unrequested')),
+    MessagingAttachmentError,
+  );
+  await assert.rejects(
+    download(
+      undefined,
+      () => new Response('short', { headers: { 'content-length': String(limit + 1) } }),
+    ),
+    MessagingAttachmentError,
+  );
+  await assert.rejects(
+    download(
+      undefined,
+      () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(new Uint8Array(limit));
+              controller.enqueue(new Uint8Array(1));
+              controller.close();
+            },
+          }),
+        ),
+    ),
+    MessagingAttachmentError,
+  );
+  assert.equal(
+    (await download(undefined, () => new Response(new Uint8Array(limit)))).byteLength,
+    limit,
+  );
 });
 
 test('speech uses a bounded transcription request and generates Ogg voice output without exposing credentials', async () => {
