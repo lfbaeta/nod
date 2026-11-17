@@ -79,7 +79,7 @@ export function trustDecision(words: TrustWords) {
   };
 }
 
-const identifier = /[@/\\]|[\p{L}\p{N}][.:][\p{L}\p{N}]/u;
+const identifier = /[@/\\]|[\p{L}\p{N}]\p{M}*\.[\p{L}\p{N}]/u;
 
 const plain = (text: string) =>
   text
