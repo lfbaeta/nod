@@ -1874,7 +1874,7 @@ test(
   'a sign-in that returns after its link expired records a timeout',
   { skip: !process.env.TEST_DATABASE_URL },
   async (t) => {
-    for (const clock of ['in-sync', 'server-behind-database'] as const)
+    for (const clock of ['in-sync', 'server-behind-database', 'server-ahead-of-database'] as const)
       await t.test(clock, async (t) => {
         const captured: import('../src/server/analytics.ts').AnalyticsEvent[] = [];
         const f = await appsFixture(t, {}, { analytics: (event) => captured.push(event) });
@@ -1886,27 +1886,31 @@ test(
         assert.equal(started.statusCode, 200, started.body);
         const callback = new URL(f.callbacks.at(-1)!);
         callback.searchParams.set('account', [...f.accounts.keys()].at(-1)!);
-        await f.pool.query("UPDATE app_connections SET callback_expires=now()-interval '1 minute'");
-        if (clock === 'server-behind-database') {
-          const now = Date.now() - 5 * 60_000;
+        const valid = clock === 'server-ahead-of-database';
+        if (!valid)
+          await f.pool.query(
+            "UPDATE app_connections SET callback_expires=now()-interval '1 minute'",
+          );
+        if (clock !== 'in-sync') {
+          const now = Date.now() + (valid ? 15 : -5) * 60_000;
           t.mock.method(Date, 'now', () => now);
         }
         const late = await f.app.inject({ url: callback.pathname + callback.search });
-        assert.equal(new URL(late.headers.location!).searchParams.get('connection'), 'expired');
+        assert.equal(
+          new URL(late.headers.location!).searchParams.get('connection'),
+          valid ? 'connected' : 'expired',
+        );
         assert.deepEqual(
           captured.flatMap((entry) =>
             entry.event === 'connection_changed'
               ? [[entry.properties.status, entry.properties.failure_reason]]
               : [],
           ),
-          [
-            ['started', undefined],
-            ['failed', 'timeout'],
-          ],
+          [['started', undefined], valid ? ['connected', undefined] : ['failed', 'timeout']],
         );
         assert.equal(
           (await f.pool.query('SELECT count(*)::int AS n FROM app_connections')).rows[0].n,
-          0,
+          valid ? 1 : 0,
         );
       });
   },
