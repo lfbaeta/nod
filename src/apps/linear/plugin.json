@@ -7,24 +7,7 @@
   "license": "Apache-2.0",
   "extensions": {
     "io.n8n.nod": {
-      "displayName": "Linear",
-      "icon": "./io.n8n.nod/icon.svg",
-      "categories": ["Project management"],
-      "connection": {
-        "type": "mcp",
-        "server": "linear",
-        "authentication": ["oauth2"],
-        "scopes": ["read", "write"]
-      },
-      "prompts": [
-        "Find issues assigned to me that need a reply.",
-        "Create a draft issue description from these notes."
-      ],
-      "requirements": ["A Linear account with access to the workspace you want to connect."],
-      "limitations": [
-        "Workspace permissions and granted OAuth scopes limit access.",
-        "This app does not start automatic monitoring from its MCP connection alone."
-      ]
+      "app": "./io.n8n.nod/app.json"
     }
   },
   "author": {

@@ -10,7 +10,7 @@ Add an app folder, run the required checks, and submit a pull request.
 
 This guide is for community contributors and partners. An app is a service listed in **Apps**. A connection is one account or instance of that service. Nod stores account credentials separately from the app files.
 
-App folders use [Agent Plugins 1.0.0](https://agent-plugins.org/specification). The `io.n8n.nod` extension supplies Nod's display and setup fields. The current format supports remote MCP servers and owner-supplied instance addresses. It does not execute package code or install dependencies.
+App folders use [Agent Plugins 1.0.0](https://agent-plugins.org/specification). The `io.n8n.nod` extension points to a settings file with Nod's display and setup fields. Versioned schemas, TypeScript types, runtime validation, and required checks share one source. The current format supports remote MCP servers and owner-supplied instance addresses. It does not execute package code or install dependencies.
 
 ## Before you start
 

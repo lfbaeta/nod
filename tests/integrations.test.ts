@@ -84,6 +84,9 @@ import { bundledApps, loadAppCatalog } from '../src/server/app-catalog.ts';
 import { checkAppContract } from '../scripts/check-apps.ts';
 import { createApp } from '../scripts/create-app.ts';
 import { createSkillLibrary } from '../src/providers/pi/skills.ts';
+import { appDefinitionSchema, appContractSchema } from '../src/shared/app-definitions.ts';
+import { appSchemaFiles } from '../scripts/app-schemas.ts';
+import { Compile } from 'typebox/compile';
 
 test('app folders reject escaped paths, incomplete contracts, and unsupported server definitions', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'nod-app-profile-'));
@@ -175,9 +178,9 @@ test('app folders reject escaped paths, incomplete contracts, and unsupported se
     ],
     [
       'server',
-      'plugin.json',
+      'io.n8n.nod/app.json',
       (value) => {
-        value.extensions['io.n8n.nod'].connection.server = 'missing';
+        value.connection.server = 'missing';
       },
       /selected server/,
     ],
@@ -222,12 +225,24 @@ test('app folders reject escaped paths, incomplete contracts, and unsupported se
     value.input.query = 'allowed_synthetic_query';
   });
   await checkAppContract(loadAppCatalog(patternInput).get('linear')!);
+  await change(patternInput, 'io.n8n.nod/contract.json', (value) => {
+    value.tool.inputSchema.required = 'query';
+  });
+  await assert.rejects(
+    checkAppContract(loadAppCatalog(patternInput).get('linear')!),
+    /not valid JSON Schema 2020-12/,
+  );
 });
 
 test('app scaffolding refuses replacement and requires contributors to complete the read contract', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'nod-app-scaffold-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
-  const options = { directory, url: 'https://mcp.linear.app/mcp', name: 'Synthetic app' };
+  const options = {
+    directory,
+    url: 'https://mcp.linear.app/mcp',
+    name: 'Synthetic app',
+    auth: 'oauth2',
+  };
   for (const slug of ['../escape', 'trailing-', 'double--hyphen', 'a'])
     await assert.rejects(createApp(slug, options));
   for (const url of [
@@ -250,9 +265,12 @@ test('app scaffolding refuses replacement and requires contributors to complete 
   const manifestPath = join(directory, 'synthetic-app/plugin.json');
   const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
   manifest.author.name = 'Synthetic maintainer';
-  manifest.extensions['io.n8n.nod'].requirements = ['A disposable account with read access.'];
-  manifest.extensions['io.n8n.nod'].limitations = ['Automatic monitoring is not supported.'];
   await writeFile(manifestPath, JSON.stringify(manifest));
+  const appPath = join(directory, 'synthetic-app/io.n8n.nod/app.json');
+  const app = JSON.parse(await readFile(appPath, 'utf8'));
+  app.requirements = ['A disposable account with read access.'];
+  app.limitations = ['Automatic monitoring is not supported.'];
+  await writeFile(appPath, JSON.stringify(app));
   await writeFile(
     join(directory, 'synthetic-app/io.n8n.nod/contract.json'),
     JSON.stringify(bundledApps.get('linear')!.contract),
@@ -286,6 +304,79 @@ test('app skills cannot shadow core guides or load without a trusted root', asyn
   assert.throws(() => createSkillLibrary([builtin, apps], ['artifacts']), /metadata is invalid/);
 });
 
+test('published app schemas reject unsupported definitions with the runtime validators', async () => {
+  const editorApp = Compile(appSchemaFiles['app.schema.json'] as Parameters<typeof Compile>[0]);
+  const editorContract = Compile(
+    appSchemaFiles['contract.schema.json'] as Parameters<typeof Compile>[0],
+  );
+  const app = JSON.parse(
+    await readFile(new URL('../src/apps/linear/io.n8n.nod/app.json', import.meta.url), 'utf8'),
+  );
+  const instance = JSON.parse(
+    await readFile(new URL('../src/apps/n8n/io.n8n.nod/app.json', import.meta.url), 'utf8'),
+  );
+  assert(editorApp.Check(app));
+  assert(editorApp.Check(instance));
+  for (const change of [
+    (value: any) => {
+      value.displayName = 42;
+    },
+    (value: any) => {
+      value.unknownSetting = true;
+    },
+    (value: any) => {
+      value.$schema = value.$schema.replace('/v1/', '/v2/');
+    },
+    (value: any) => {
+      value.prompts = 'Read my records.';
+    },
+    (value: any) => {
+      value.connection.authentication = ['password'];
+    },
+    (value: any) => {
+      value.connection.authentication = ['bearer'];
+    },
+    (value: any) => {
+      value.connection.authentication = ['oauth2', 'bearer'];
+    },
+    (value: any) => {
+      value.connection.endpoint = { source: 'owner', path: '/mcp' };
+    },
+    (value: any) => {
+      value.connection.headers = { Authorization: 'synthetic-private-token' };
+    },
+  ]) {
+    const invalid: unknown = structuredClone(app);
+    change(invalid);
+    assert.equal(appDefinitionSchema.safeParse(invalid).success, false);
+    assert.equal(editorApp.Check(invalid), false);
+  }
+  const contract = structuredClone(bundledApps.get('linear')!.contract);
+  assert(editorContract.Check(contract));
+  for (const change of [
+    (value: any) => {
+      value.extraSetting = true;
+    },
+    (value: any) => {
+      value.source = 'http://provider.invalid/docs';
+    },
+    (value: any) => {
+      value.tool.annotations.readOnlyHint = false;
+    },
+    (value: any) => {
+      value.tool.inputSchema.type = 'array';
+    },
+    (value: any) => {
+      value.tool.name = 'replace_with_read_tool';
+    },
+  ]) {
+    const invalid: unknown = structuredClone(contract);
+    change(invalid);
+    assert.equal(appContractSchema.safeParse(invalid).success, false);
+    assert.equal(editorContract.Check(invalid), false);
+  }
+});
+
 test('every shipped app passes the required offline MCP contract suite', async (t) => {
   t.mock.method(globalThis, 'fetch', async () =>
     assert.fail('App contract checks must not make external requests.'),
@@ -311,10 +402,13 @@ for (const authentication of ['oauth2', 'bearer', 'x-api-key'] as const)
       const manifestPath = join(directory, 'community-fixture/plugin.json');
       const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
       manifest.name = 'community-fixture';
-      manifest.extensions['io.n8n.nod'].displayName = 'Community fixture';
-      manifest.extensions['io.n8n.nod'].connection.authentication = [authentication];
-      if (authentication !== 'oauth2') delete manifest.extensions['io.n8n.nod'].connection.scopes;
       await writeFile(manifestPath, JSON.stringify(manifest));
+      const appPath = join(directory, 'community-fixture/io.n8n.nod/app.json');
+      const app = JSON.parse(await readFile(appPath, 'utf8'));
+      app.displayName = 'Community fixture';
+      app.connection.authentication = [authentication];
+      if (authentication !== 'oauth2') delete app.connection.scopes;
+      await writeFile(appPath, JSON.stringify(app));
       const apps = loadAppCatalog(directory);
       const definition = apps.get('community-fixture')!;
       const database = await hostedDatabase();

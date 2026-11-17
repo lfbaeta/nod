@@ -26,14 +26,27 @@ Set `$schema` to `https://agent-plugins.org/schemas/1.0.0/plugin.schema.json`. N
 
 Set `author.name` to the maintainer's public name or organization. Complete every generated placeholder before submission.
 
-The standard root fields are `$schema`, `name`, `version`, `description`, `author`, `homepage`, `repository`, `license`, `keywords`, and `extensions`. Shipped app checks reject unknown root fields. Keep Nod data under `extensions.io.n8n.nod`.
+The standard root fields are `$schema`, `name`, `version`, `description`, `author`, `homepage`, `repository`, `license`, `keywords`, and `extensions`. Shipped app checks reject unknown root fields. Set the Nod extension to this fixed reference:
+
+```json
+{
+  "io.n8n.nod": { "app": "./io.n8n.nod/app.json" }
+}
+```
+
+This object is the value of `extensions`. Nod settings live in `io.n8n.nod/app.json`. The standard manifest keeps its official `$schema` value.
 
 The canonical schemas are bundled in `src/server/agent-plugins/`. The loader does not download schemas. Schema sources are the [manifest schema](https://agent-plugins.org/schemas/1.0.0/plugin.schema.json) and [MCP schema](https://agent-plugins.org/schemas/1.0.0/mcp.schema.json).
 
 ## Nod extension
 
+The required `io.n8n.nod/app.json` starts with `"$schema": "https://nod.n8n.io/docs/schemas/apps/v1/app.schema.json"`.
+
+The [app schema](https://nod.n8n.io/docs/schemas/apps/v1/app.schema.json) and [fixture schema](https://nod.n8n.io/docs/schemas/apps/v1/contract.schema.json) are versioned JSON Schema documents. Editors can read them directly. Their source is `src/shared/app-definitions.ts`, which also supplies TypeScript types and runtime validation.
+
 | Field          | Requirement                                                          |
 | -------------- | -------------------------------------------------------------------- |
+| `$schema`      | Required app profile v1 schema URL                                   |
 | `displayName`  | Required display name, up to 80 characters                           |
 | `icon`         | Optional path under `./io.n8n.nod/`; SVG, PNG, or WebP, up to 128 KB |
 | `categories`   | Optional array of up to 10 category names                            |
@@ -42,7 +55,9 @@ The canonical schemas are bundled in `src/server/agent-plugins/`. The loader doe
 | `limitations`  | One to eight statements of unsupported or restricted behavior        |
 | `connection`   | Required MCP connection definition                                   |
 
-Unknown Nod extension fields fail validation. Other client extension namespaces keep their own meaning.
+Unknown fields and unsupported connection combinations fail validation. Other client extension namespaces keep their own meaning. A profile version change requires an explicit migration.
+
+The published schema files are generated. `pnpm check:apps` fails if they differ from their TypeScript source. Maintainers update them with `pnpm generate:app-schemas` when the profile changes.
 
 ## Fixed MCP address
 
@@ -78,7 +93,7 @@ Use this connection shape and omit `mcp.json`:
 }
 ```
 
-The path contains slash-separated letters, digits, underscores, and hyphens. Nod appends it to the address the user enters. Fixed scopes are not supported for this setup.
+The path contains slash-separated letters, digits, underscores, and hyphens. Nod appends it to the address the user enters. Use the authentication tuple in the order shown. Fixed scopes are not supported for this setup.
 
 Nod applies its address policy outside the manifest. Only n8n has the existing local-address exception and fixed localhost probe. Tokens go only to the saved address.
 
@@ -88,6 +103,7 @@ Every folder includes `io.n8n.nod/contract.json`:
 
 ```json
 {
+  "$schema": "https://nod.n8n.io/docs/schemas/apps/v1/contract.schema.json",
   "source": "https://provider.example/docs/mcp",
   "tool": {
     "name": "find_records",
@@ -106,7 +122,7 @@ Every folder includes `io.n8n.nod/contract.json`:
 
 Use a documented read tool. `input` must match its schema. `output` must contain synthetic JSON data. Objects, arrays, strings, numbers, booleans, and null are supported. The read-only hint describes the fixture; it does not bypass Trust.
 
-The tool name must have one to 100 characters and must not start with `replace_`. The description must have one to 2,000 characters. Set `inputSchema.type` to `object`. The framework checks the complete input schema, including its patterns.
+The tool name must have one to 100 characters and must not start with `replace_`. The description must have one to 2,000 characters. Set `inputSchema.type` to `object`. The framework validates it as JSON Schema 2020-12. It then checks the sample input against every declared constraint, including patterns.
 
 The fixture exercises Nod's MCP transport. It does not prove the external server still offers that tool. Provider acceptance remains a separate review requirement.
 

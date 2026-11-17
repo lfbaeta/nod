@@ -6,11 +6,21 @@ import { createSkillLibrary } from '../src/providers/pi/skills.ts';
 import { coreSkills } from '../src/runtime/prompt.ts';
 import { fileURLToPath } from 'node:url';
 import { posix } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { appSchemaDirectory, appSchemaFiles } from './app-schemas.ts';
+import { Meta } from 'typebox/schema';
+
+const schemaCheck = Compile(Meta['https://json-schema.org/draft/2020-12/schema']);
 
 export async function checkAppContract(app: BundledApp) {
   const { contract } = app;
-  const schema = contract.tool.inputSchema as Record<string, unknown>;
+  const schema = contract.tool.inputSchema;
   assert.equal(schema.type, 'object', `${app.slug}: the read tool needs an object input schema.`);
+  assert(
+    schemaCheck.Check(schema),
+    `${app.slug}: the tool schema is not valid JSON Schema 2020-12.`,
+  );
   assert(
     Compile(schema as Parameters<typeof Compile>[0]).Check(contract.input),
     `${app.slug}: the sample input does not match the tool schema.`,
@@ -106,6 +116,12 @@ export async function checkAppContract(app: BundledApp) {
 }
 
 if (import.meta.main) {
+  for (const [name, schema] of Object.entries(appSchemaFiles))
+    assert.deepEqual(
+      JSON.parse(readFileSync(join(appSchemaDirectory, name), 'utf8')),
+      schema,
+      `The ${name} schema changed. Run pnpm generate:app-schemas.`,
+    );
   const selected = process.argv[2];
   const apps = selected ? [bundledApps.get(selected)] : [...bundledApps.values()];
   if (apps.some((app) => !app)) throw new Error(`App ${selected} was not found.`);

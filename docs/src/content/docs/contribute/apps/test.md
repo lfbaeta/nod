@@ -25,17 +25,19 @@ The command runs from `pnpm check` and always runs in the required CI workflow. 
 
 ## What the framework checks
 
-| Check                            | Failure caught                                                                    |
-| -------------------------------- | --------------------------------------------------------------------------------- |
-| Standard schemas and Nod profile | Misspelled fields, missing fixtures, unsupported transports, and incomplete setup |
-| Package path checks              | Files or links that leave their app directory                                     |
-| Shared skill loading             | Invalid metadata, duplicate skill names, and invalid references                   |
-| MCP discovery                    | A read tool that is lost during protocol negotiation                              |
-| Authentication headers           | A token sent with the wrong scheme or to a different endpoint                     |
-| Read request and response        | Changed arguments or damaged structured data                                      |
-| Provider and tool failures       | A specific reason that is lost or converted into success                          |
-| Permission and rate failures     | A failed call that is sent more than once                                         |
-| Stop before dispatch             | A cancelled call that reaches the provider                                        |
+| Check                            | Failure caught                                                                                       |
+| -------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| Standard schemas and Nod profile | Misspelled fields, missing fixtures, unsupported transports, and incomplete setup                    |
+| Shared typed contract            | Wrong types, unknown fields, invalid authentication combinations, and stale generated editor schemas |
+| Tool schema validation           | Invalid JSON Schema 2020-12 and sample inputs that violate its constraints                           |
+| Package path checks              | Files or links that leave their app directory                                                        |
+| Shared skill loading             | Invalid metadata, duplicate skill names, and invalid references                                      |
+| MCP discovery                    | A read tool that is lost during protocol negotiation                                                 |
+| Authentication headers           | A token sent with the wrong scheme or to a different endpoint                                        |
+| Read request and response        | Changed arguments or damaged structured data                                                         |
+| Provider and tool failures       | A specific reason that is lost or converted into success                                             |
+| Permission and rate failures     | A failed call that is sent more than once                                                            |
+| Stop before dispatch             | A cancelled call that reaches the provider                                                           |
 
 The shared integration suite covers private setup, OAuth completion, account ownership, revoked access, credential removal, and Trust. Contributors must extend it when a new setup behavior requires a new branch.
 

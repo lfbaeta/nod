@@ -12,18 +12,19 @@ Create an app folder with the scaffold command, then replace its unfinished fiel
 Replace the example address with the provider's real public MCP address. Then run this command from the repository root:
 
 ```sh
-pnpm create:app my-app --name "My App" --url https://mcp.example.com/mcp
+pnpm create:app my-app --name "My App" --url https://mcp.example.com/mcp --auth oauth2
 ```
 
 The command rejects private, local, and reserved example addresses. It writes files only. It does not contact the provider or create a connection.
 
-For a fixed token or API key, add `--auth bearer` or `--auth x-api-key`. OAuth is the default.
+Set `--auth` to the provider's documented method: `oauth2`, `bearer`, or `x-api-key`. The command requires this choice.
 
 ```text
 src/apps/my-app/
   plugin.json
   mcp.json
   io.n8n.nod/
+    app.json
     contract.json
 ```
 
@@ -31,15 +32,19 @@ The command refuses to replace an existing directory. The generated read-tool pl
 
 ## Complete the manifest
 
-Edit `plugin.json`:
+Set the maintainer, description, and version in `plugin.json`. Keep its Nod reference unchanged.
 
-1. Set the maintainer, description, and version.
+Edit `io.n8n.nod/app.json`:
+
+1. Set the display name.
 2. Add concrete example requests in `prompts`.
 3. State account, plan, scope, and provider-version requirements.
 4. State unsupported behavior in `limitations`.
 5. Add OAuth scopes only when the provider requires them.
 
-For an icon, add `io.n8n.nod/icon.svg` and set `icon` to `./io.n8n.nod/icon.svg`. PNG and WebP are also supported. Keep the image under 128 KB.
+For an icon, add `io.n8n.nod/icon.svg` and set `icon` to `./io.n8n.nod/icon.svg`. PNG and WebP are also supported. Keep the image under 128 KB. Use letters, digits, underscores, or hyphens in asset names.
+
+Keep the generated `$schema` values. Editors that support JSON Schema use them for field completion and error checks. CI uses the same definitions.
 
 Do not put tokens, passwords, private server addresses, or customer data in these files.
 

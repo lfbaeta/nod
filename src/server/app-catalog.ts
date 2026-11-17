@@ -3,43 +3,17 @@ import { isIP } from 'node:net';
 import { resolve, sep, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Compile } from 'typebox/compile';
-import { z } from 'zod';
-import type { DiscoveredTool } from '../ports/discovered.ts';
+import {
+  appDefinitionSchema,
+  appContractSchema,
+  appExtensionSchema,
+  type AppContract,
+} from '../shared/app-definitions.ts';
 import pluginSchema from './agent-plugins/plugin.schema.json' with { type: 'json' };
 import mcpSchema from './agent-plugins/mcp.schema.json' with { type: 'json' };
 
 const manifestCheck = Compile(pluginSchema as Parameters<typeof Compile>[0]);
 const mcpCheck = Compile(mcpSchema as Parameters<typeof Compile>[0]);
-const connectionSchema = z
-  .object({
-    type: z.literal('mcp'),
-    server: z.string().min(1).max(80).optional(),
-    endpoint: z
-      .object({
-        source: z.literal('owner'),
-        path: z.string().regex(/^\/(?:[a-zA-Z0-9_-]+\/)*[a-zA-Z0-9_-]+$/),
-      })
-      .strict()
-      .optional(),
-    authentication: z
-      .array(z.enum(['oauth2', 'bearer', 'x-api-key']))
-      .min(1)
-      .max(2),
-    scopes: z.array(z.string().trim().min(1).max(100)).max(30).optional(),
-  })
-  .strict();
-const appSchema = z
-  .object({
-    displayName: z.string().trim().min(1).max(80),
-    icon: z.string().optional(),
-    categories: z.array(z.string().trim().min(1).max(50)).max(10).default([]),
-    prompts: z.array(z.string().trim().min(1).max(240)).min(2).max(4),
-    requirements: z.array(z.string().trim().min(1).max(300)).min(1).max(8),
-    limitations: z.array(z.string().trim().min(1).max(300)).min(1).max(8),
-    connection: connectionSchema,
-  })
-  .strict();
-
 export interface BundledApp {
   slug: string;
   name: string;
@@ -51,12 +25,7 @@ export interface BundledApp {
   scope?: string;
   icon?: { bytes: Uint8Array; mimeType: string };
   skills?: string;
-  contract: {
-    source: string;
-    tool: DiscoveredTool;
-    input: Record<string, unknown>;
-    output: unknown;
-  };
+  contract: AppContract;
 }
 
 export function loadAppCatalog(directory = fileURLToPath(new URL('../apps/', import.meta.url))) {
@@ -128,64 +97,29 @@ export function loadAppCatalog(directory = fileURLToPath(new URL('../apps/', imp
       manifest.description.length > 1000
     )
       throw new Error(`App ${entry.name}: add a description of up to 1,000 characters.`);
-    const parsed = appSchema.safeParse(manifest.extensions?.['io.n8n.nod']);
+    const extension = appExtensionSchema.safeParse(manifest.extensions?.['io.n8n.nod']);
+    if (!extension.success)
+      throw new Error(
+        `App ${entry.name}: invalid io.n8n.nod reference: ${extension.error.message}`,
+      );
+    const parsed = appDefinitionSchema.safeParse(json('io.n8n.nod/app.json'));
     if (!parsed.success)
-      throw new Error(`App ${entry.name}: invalid io.n8n.nod settings: ${parsed.error.message}`);
+      throw new Error(`App ${entry.name}: invalid app.json: ${parsed.error.message}`);
     const app = parsed.data;
-    const contract = z
-      .object({
-        source: z.url({ protocol: /^https$/ }),
-        tool: z
-          .object({
-            name: z
-              .string()
-              .min(1)
-              .max(100)
-              .refine((name) => !name.startsWith('replace_')),
-            description: z.string().min(1).max(2000),
-            inputSchema: z.record(z.string(), z.unknown()),
-            annotations: z.object({ readOnlyHint: z.literal(true) }).strict(),
-          })
-          .strict(),
-        input: z.record(z.string(), z.unknown()),
-        output: z.union([
-          z.record(z.string(), z.unknown()),
-          z.array(z.unknown()),
-          z.string(),
-          z.number(),
-          z.boolean(),
-          z.null(),
-        ]),
-      })
-      .strict()
-      .safeParse(json('io.n8n.nod/contract.json'));
+    const contract = appContractSchema.safeParse(json('io.n8n.nod/contract.json'));
     if (!contract.success)
       throw new Error(`App ${entry.name}: invalid contract.json: ${contract.error.message}`);
     if (
       !manifest.author?.name?.trim() ||
-      JSON.stringify(manifest).includes('Replace with') ||
+      JSON.stringify({ manifest, app }).includes('Replace with') ||
       contract.data.source.includes('replace-with-')
     )
       throw new Error(
         `App ${entry.name}: complete the maintainer, provider documentation, requirements, and limits.`,
       );
     const connection = app.connection;
-    if (Boolean(connection.server) === Boolean(connection.endpoint))
-      throw new Error(`App ${entry.name}: select one MCP server or one owner-supplied endpoint.`);
-    const instance = Boolean(connection.endpoint);
-    if (!instance && connection.authentication[0] !== 'oauth2' && connection.scopes?.length)
-      throw new Error(`App ${entry.name}: OAuth scopes require OAuth authentication.`);
-    if (
-      new Set(connection.authentication).size !== connection.authentication.length ||
-      (instance
-        ? !connection.authentication.includes('oauth2') ||
-          !connection.authentication.includes('bearer') ||
-          Boolean(connection.scopes?.length)
-        : connection.authentication.length !== 1)
-    )
-      throw new Error(
-        `App ${entry.name}: fixed servers need one authentication method; instance setup needs OAuth and bearer authentication without fixed scopes.`,
-      );
+    const instance = 'endpoint' in connection;
+    const scopes = 'scopes' in connection ? connection.scopes : undefined;
     let server: { url: string } | undefined;
     if (existsSync(resolve(base, 'mcp.json'))) {
       const rawMcp = json('mcp.json');
@@ -204,7 +138,7 @@ export function loadAppCatalog(directory = fileURLToPath(new URL('../apps/', imp
         throw new Error(
           `App ${entry.name}: fixed apps need one MCP server; owner-supplied endpoints must omit mcp.json.`,
         );
-      const selected = mcp.mcpServers[connection.server!];
+      const selected = mcp.mcpServers[!instance ? connection.server : ''];
       if (!selected || selected.type !== 'streamable-http')
         throw new Error(`App ${entry.name}: the selected server must use streamable-http.`);
       const url = URL.parse(selected.url);
@@ -254,8 +188,8 @@ export function loadAppCatalog(directory = fileURLToPath(new URL('../apps/', imp
       categories: app.categories,
       auth: connection.authentication[0] === 'oauth2' ? 'oauth' : connection.authentication[0],
       ...(server ? { endpoint: server.url } : {}),
-      ...(connection.endpoint ? { instancePath: connection.endpoint.path } : {}),
-      ...(connection.scopes?.length ? { scope: connection.scopes.join(' ') } : {}),
+      ...(instance ? { instancePath: connection.endpoint.path } : {}),
+      ...(scopes?.length ? { scope: scopes.join(' ') } : {}),
       ...(icon ? { icon } : {}),
       ...(skills ? { skills } : {}),
       contract: contract.data,

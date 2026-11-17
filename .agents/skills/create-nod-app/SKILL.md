@@ -9,9 +9,9 @@ Use official provider documentation for the MCP address, authentication, scopes,
 
 Use `pnpm create:app <app-id> --name <display-name> --url <public-mcp-url> --auth <oauth2|bearer|x-api-key>` for a fixed server. Select the authentication method from the provider documentation. Use n8n's existing app folder as the source example for owner-supplied instances. Keep the app ID stable when changing an existing app.
 
-Complete all generated fields. Add concrete prompts, requirements, limits, maintainer details, and a synthetic read fixture. Use the documented tool name and input schema. Keep credentials and private content out of files and prompts.
+Complete all generated fields. Put maintainer details in `plugin.json`, Nod settings in `io.n8n.nod/app.json`, and the read fixture in `io.n8n.nod/contract.json`. Keep the generated schema URLs and manifest reference. Add concrete prompts, requirements, and limits. Use the documented tool name and input schema. Keep credentials and private content out of files and prompts.
 
-Keep changes in the app folder unless the shared runtime needs a new supported behavior. Do not add a service-name branch to make a folder work. Do not weaken URL checks, Trust, credential removal, or account ownership checks.
+Keep changes in the app folder unless the shared runtime needs a new supported behavior. Do not change a schema, validator, or shared test to make an invalid app pass. Do not add a service-name branch to make a folder work. Do not weaken URL checks, Trust, credential removal, or account ownership checks.
 
 Run `pnpm check:apps` and the relevant integration tests. Use only synthetic data and disposable database schemas. Report skipped checks. Never use a live model, saved account, or real recipient in automated tests.
 
