@@ -3240,6 +3240,7 @@ describe('model connections', { skip: !process.env.TEST_DATABASE_URL }, () => {
       /HTTP 402; This request requires more credits\./,
     );
     assert.match(service.current.issue!.reason, /requires more credits/);
+    assert.deepEqual(service.view().selectionIssue, service.current.issue);
     assert.equal(await allowed(), false);
     assert.equal(await allowed(second), true);
     assert.equal(service.paused({ kind: 'schedule', schedule: first }), true);
@@ -3291,6 +3292,8 @@ describe('model connections', { skip: !process.env.TEST_DATABASE_URL }, () => {
     await service.select(second);
     assert.equal(checks, 3);
     assert.equal(service.current.issue, undefined);
+    assert.equal(service.view().selectionIssue, undefined);
+    assert.match(service.view().connections[0]!.issue!.reason, /requires more credits/);
     reply = healthy;
     assert.equal((await ask()).stopReason, 'stop');
     assert.equal(calls, 6);
@@ -4234,6 +4237,7 @@ describe('model connections', { skip: !process.env.TEST_DATABASE_URL }, () => {
     Object.assign(f.keyStore, createEnvironmentKeyStore(invalidKey));
     const calls = { signIn: 0, authorize: 0, catalog: 0 };
     let rejectSignIn = false;
+    let rejectStart = false;
     const signIn = stubSignIn(async () => {
       if (rejectSignIn) throw new Error('Synthetic sign-in failure');
       return subscriptionCredential();
@@ -4242,10 +4246,12 @@ describe('model connections', { skip: !process.env.TEST_DATABASE_URL }, () => {
       ...f.backend,
       signIn(input) {
         calls.signIn++;
+        if (rejectStart) throw new Error('Synthetic sign-in start failure');
         return signIn(input);
       },
       authorize(input) {
         calls.authorize++;
+        if (rejectStart) throw new Error('Synthetic sign-in start failure');
         return f.backend.authorize(input);
       },
       catalog(provider, method) {
@@ -4318,6 +4324,69 @@ describe('model connections', { skip: !process.env.TEST_DATABASE_URL }, () => {
     );
     assert.deepEqual(captured.slice(failures.length + 1), [failures[0]]);
     assert.deepEqual(calls, { signIn: 2, authorize: 0, catalog: 1 });
+    rejectStart = true;
+    for (const provider of ['openai', 'openrouter'] as const)
+      await assert.rejects(owner.start(provider), /Synthetic sign-in start failure/);
+    assert.deepEqual(captured.slice(failures.length + 2), [failures[0], failures[1]]);
+    assert.deepEqual(calls, { signIn: 3, authorize: 1, catalog: 1 });
+  });
+
+  test('sign-in start failures keep the consent period that started the request', async (t) => {
+    for (const boundary of ['provider', 'storage'])
+      for (const changeConsent of [false, true]) {
+        const f = await fixture(t);
+        let entered!: () => void;
+        let reject!: (error: Error) => void;
+        const starting = new Promise<void>((resolve) => {
+          entered = resolve;
+        });
+        const result = new Promise<never>((_resolve, fail) => {
+          reject = fail;
+        });
+        const ownerId = `fixture-sign-in-${boundary}-${changeConsent}`;
+        const owner = await f.create(ownerId, {
+          ...f.backend,
+          signIn: async () => {
+            entered();
+            return result;
+          },
+        });
+        if (boundary === 'storage')
+          f.keyStore.getKey = async () => {
+            entered();
+            return result;
+          };
+        const captured: Parameters<ProductAnalytics['capture']>[0][] = [];
+        const analytics = await createAnalytics({
+          provider: { capture: (event) => captured.push(event), shutdown: async () => {} },
+          environment: 'development',
+          dataRoot: '.',
+          installationId: randomUUID(),
+        });
+        t.after(() => analytics.shutdown());
+        analytics.setUsageData(ownerId, true);
+        const app = Fastify();
+        owner.register(app, analytics.forOwner(ownerId));
+        t.after(() => app.close());
+        const failed = assert.rejects(owner.start('openai'));
+        await starting;
+        if (changeConsent) {
+          analytics.setUsageData(ownerId, false);
+          analytics.setUsageData(ownerId, true);
+        }
+        reject(new Error('Synthetic sign-in start failure'));
+        await failed;
+        assert.deepEqual(
+          captured.map(({ event, properties }) => [
+            event,
+            properties.provider,
+            properties.method,
+            properties.status,
+          ]),
+          changeConsent ? [] : [['model_connection_changed', 'openai', 'subscription', 'failed']],
+          `${boundary}: consent changed=${changeConsent}`,
+        );
+      }
   });
 
   test('removing a selected model records only committed clearing within its consent period', async (t) => {
