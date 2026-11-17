@@ -10846,7 +10846,7 @@ test(
   { skip: !process.env.TEST_DATABASE_URL, timeout: 30_000 },
   async () => {
     const { pool, ownerId, store, post, memory, close } = await memoryFixture();
-    const { state, curator } = scriptedCurator();
+    const { calls, state, curator } = scriptedCurator();
     const learning = createMemoryLearning({ pool, ownerId, memory, curator });
     const add = (area: string, slug: string, text: string) => (m: number) => ({
       op: 'add',
@@ -10874,6 +10874,17 @@ test(
         archived: [],
       });
       assert.equal(await memory.context(), `${path}: ${short}`);
+      const invented = randomUUID();
+      const asked = calls.length;
+      await assert.rejects(
+        learning.remember({ messages: [invented] }, first.sourceMessageId),
+        (error: Error) => error.message.includes(invented),
+      );
+      await assert.rejects(
+        learning.remember({ messages: [short] }, first.sourceMessageId),
+        (error: Error) => error.name !== 'ZodError' && !error.message.includes(short),
+      );
+      assert.equal(calls.length, asked);
       const reopened = createMemoryService({ pool, ownerId, store });
       assert.equal(((await reopened.read({ path })) as { text: string }).text, short);
       const detailed = 'Make progress reports detailed from now on.';
