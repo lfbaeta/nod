@@ -7,12 +7,12 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { parse } from 'yaml';
 import { selectChecks, selectDesktopTests } from './ci-scope.mjs';
-import { readTimings, shardTests } from './ci-tests.mjs';
+import { readTimings, orderTests } from './ci-tests.mjs';
 
 const ciWorkflow = parse(await readFile(new URL('../workflows/ci.yml', import.meta.url), 'utf8'));
 const requireChecks = (needs) =>
   new Function('process', ciWorkflow.jobs.checks.steps[0].run)({
-    env: { CI_NEEDS: JSON.stringify(needs) },
+    env: { CI_SCOPE_RESULT: needs.scope?.result, CI_SCOPE: JSON.stringify(needs.scope?.outputs) },
   });
 
 const enabled = (paths) =>
@@ -115,81 +115,52 @@ function results(paths) {
       .filter(([, value]) => typeof value === 'boolean')
       .map(([name, value]) => [name, String(value)]),
   );
-  return {
-    scope: { result: 'success', outputs },
-    quality: { result: 'success' },
-    secrets: { result: 'success' },
-    ...Object.fromEntries(
-      ['integration', 'desktop', 'macos', 'windows', 'n8n', 'evals', 'images'].map((name) => [
-        name,
-        { result: scope[name] ? 'success' : 'skipped' },
-      ]),
-    ),
-  };
+  return { scope: { result: 'success', outputs } };
 }
 
-test('the required result accepts only valid scopes and successful selected jobs', () => {
+test('the required result rejects failed selection and missing scope flags', () => {
   for (const paths of [[], ['src/web/app.tsx'], ['src/server/thread.ts'], null])
     assert.doesNotThrow(() => requireChecks(results(paths)));
-  for (const name of [
-    'scope',
-    'quality',
-    'secrets',
-    'integration',
-    'desktop',
-    'macos',
-    'windows',
-    'n8n',
-    'evals',
-    'images',
-  ]) {
-    for (const result of ['failure', 'cancelled', 'skipped']) {
-      const needs = results(null);
-      needs[name].result = result;
-      assert.throws(() => requireChecks(needs), /did not pass|could not select/);
-    }
+  for (const result of ['failure', 'cancelled', 'skipped']) {
     const needs = results(null);
-    delete needs[name];
-    assert.throws(() => requireChecks(needs), /missing|could not select/);
+    needs.scope.result = result;
+    assert.throws(() => requireChecks(needs), /could not select/);
   }
-  const missing = results([]);
-  delete missing.scope.outputs.windows;
-  assert.throws(() => requireChecks(missing), /windows scope is missing/);
+  assert.throws(() => requireChecks({}), /could not select/);
+  for (const name of enabled(null)) {
+    const needs = results(null);
+    delete needs.scope.outputs[name];
+    assert.throws(() => requireChecks(needs), /scope is missing or invalid/);
+    needs.scope.outputs[name] = 'invalid';
+    assert.throws(() => requireChecks(needs), /scope is missing or invalid/);
+  }
 });
 
-test('every selected job is part of the required result and can run in parallel', async () => {
-  const workflow = parse(await readFile(new URL('../workflows/ci.yml', import.meta.url), 'utf8'));
-  const jobs = workflow.jobs;
-  for (const name of [
-    'quality',
-    'secrets',
-    'integration',
-    'desktop',
-    'macos',
-    'windows',
-    'n8n',
-    'evals',
-    'images',
-  ]) {
-    assert.ok(jobs.checks.needs.includes(name), `${name} must be required.`);
-    if (!['quality', 'secrets'].includes(name)) {
-      assert.equal(jobs[name].needs, 'scope');
-      assert.equal(jobs[name].if, `needs.scope.outputs.${name} == 'true'`);
-    }
+test('PRs keep release acceptance off the merge path and retain it on main', () => {
+  for (const event of ['pull_request', 'merge_group']) {
+    const scope = selectChecks(null, event);
+    assert.equal(scope.integration, true);
+    assert.equal(scope.testMode, 'all');
+    for (const name of ['macos', 'windows', 'images']) assert.equal(scope[name], false);
+  }
+  for (const event of ['push', 'schedule', 'workflow_dispatch'])
+    for (const name of ['macos', 'windows', 'images'])
+      assert.equal(selectChecks(null, event)[name], true);
+});
+
+test('the shared runner and qualification jobs use the selected scope', async () => {
+  const jobs = ciWorkflow.jobs;
+  assert.equal(jobs.checks.name, 'Checks, tests and build');
+  assert.equal(jobs.checks.needs, 'scope');
+  assert.ok(jobs.checks.if.includes('!cancelled()'));
+  for (const name of ['macos', 'windows', 'images']) {
+    assert.equal(jobs[name].needs, 'scope');
+    assert.equal(jobs[name].if, `needs.scope.outputs.${name} == 'true'`);
   }
   for (const name of enabled(null))
     assert.equal(jobs.scope.outputs[name], '${{ steps.scope.outputs.' + name + ' }}');
-  assert.equal(jobs.checks.name, 'Checks, tests and build');
-  assert.ok(jobs.checks.if.includes('!cancelled()'));
-  assert.ok(workflow.on.schedule.length);
-  assert.ok(workflow.on.merge_group);
-  assert.equal(jobs.integration.strategy['fail-fast'], false);
-  assert.equal(
-    jobs.integration.strategy.matrix,
-    '${{ fromJSON(needs.scope.outputs.test_matrix) }}',
-  );
-  assert.equal(jobs.quality.strategy['fail-fast'], false);
-  assert.ok(jobs.quality.strategy.matrix.check.includes('quality_checks'));
+  assert.ok(ciWorkflow.on.schedule.length);
+  assert.ok(ciWorkflow.on.merge_group);
   const bundle = parse(
     await readFile(new URL('../workflows/self-host-bundle.yml', import.meta.url), 'utf8'),
   );
@@ -198,6 +169,97 @@ test('every selected job is part of the required result and can run in parallel'
     await readFile(new URL('../workflows/pr-title.yml', import.meta.url), 'utf8'),
   );
   assert.ok(titles.on.merge_group);
+});
+
+test('shared checks start in parallel and preserve a failure from any command', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'nod-ci-parallel-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const log = join(root, 'commands.log');
+  const program = `#!${process.execPath}
+const fs = require('node:fs');
+const path = require('node:path');
+const label = path.basename(process.argv[1]) + ' ' + process.argv.slice(2).join(' ');
+const log = process.env.CI_COMMAND_LOG;
+const newline = String.fromCharCode(10);
+fs.appendFileSync(log, 'start ' + label + newline);
+const start = Date.now();
+const timer = setInterval(() => {
+  const count = fs.readFileSync(log, 'utf8').split(newline).filter(line => line.startsWith('start ')).length;
+  if (count < 8 && Date.now() - start < 5000) return;
+  clearInterval(timer);
+  fs.appendFileSync(log, 'end ' + label + newline);
+  if (count < 8) process.exit(3);
+  if (process.env.CI_FAIL_LINT === 'true' && process.argv.includes('lint')) {
+    process.stderr.write('Synthetic lint failure.' + newline);
+    process.exit(7);
+  }
+}, 10);
+`;
+  for (const name of ['node', 'pnpm', 'sudo'])
+    await writeFile(join(root, name), program, { mode: 0o755 });
+  const step = ciWorkflow.jobs.checks.steps.find(
+    (step) => step.name === 'Run checks in parallel with shared setup',
+  );
+  const execute = (fail) =>
+    execFileSync('bash', ['-e', '-o', 'pipefail', '-c', step.run], {
+      encoding: 'utf8',
+      timeout: 10_000,
+      stdio: 'pipe',
+      env: {
+        ...process.env,
+        PATH: `${root}:${process.env.PATH}`,
+        CI_COMMAND_LOG: log,
+        CI_FAIL_LINT: String(fail),
+        ...Object.fromEntries(
+          ['LINT', 'TYPES', 'BUILD', 'INTEGRATION', 'DESKTOP', 'EVALS', 'N8N', 'NETWORK'].map(
+            (name) => [`NOD_CHECK_${name}`, 'true'],
+          ),
+        ),
+      },
+    });
+  await writeFile(log, '');
+  execute(false);
+  const lines = (await readFile(log, 'utf8')).trim().split(String.fromCharCode(10));
+  assert.ok(lines.findIndex((line) => line.startsWith('end ')) >= 8);
+  await writeFile(log, '');
+  assert.throws(
+    () => execute(true),
+    (error) => error.status === 1 && error.stderr.includes('Synthetic lint failure.'),
+  );
+});
+
+test('release publication acceptance stays enabled outside PR checks', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'nod-ci-release-stage-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const file = join(root, 'release.test.mjs');
+  const marker = join(root, 'core-ran');
+  await writeFile(
+    file,
+    `import test from 'node:test';
+import { writeFileSync } from 'node:fs';
+test('all four checked bundles publish together as one regular Nod release', () => { throw new Error('Synthetic release acceptance failure.'); });
+test('runtime isolation contract', () => writeFileSync(${JSON.stringify(marker)}, 'checked'));
+`,
+  );
+  const helper = fileURLToPath(new URL('./ci-scope.mjs', import.meta.url));
+  const environment = { ...process.env };
+  delete environment.NODE_TEST_CONTEXT;
+  const execute = (release) =>
+    execFileSync(process.execPath, [helper, '--desktop-tests'], {
+      encoding: 'utf8',
+      stdio: 'pipe',
+      env: {
+        ...environment,
+        NOD_DESKTOP_TEST_FILES: JSON.stringify([file]),
+        NOD_DESKTOP_RELEASE_ACCEPTANCE: String(release),
+      },
+    });
+  execute(false);
+  assert.equal(await readFile(marker, 'utf8'), 'checked');
+  assert.throws(
+    () => execute(true),
+    (error) => error.status !== 0 && error.stdout.includes('Synthetic release acceptance failure.'),
+  );
 });
 
 test('workflow queues use supported values and do not cancel queued releases', async () => {
@@ -296,9 +358,10 @@ test('Git diffs handle renamed files, removed tests, release metadata and missin
   await writeFile(join(root, 'tests/new.test.ts'), 'Synthetic new test.\n');
   commit();
   assert.deepEqual(JSON.parse(run(release).test_files), ['tests/a.test.ts', 'tests/new.test.ts']);
-  assert.equal(run('').macos, true);
-  assert.equal(run('0'.repeat(40)).macos, true);
-  assert.equal(run('f'.repeat(40)).macos, true);
+  assert.equal(run('').macos, false);
+  assert.equal(run('', 'workflow_dispatch').macos, true);
+  assert.equal(run('0'.repeat(40)).integration, true);
+  assert.equal(run('f'.repeat(40)).integration, true);
   assert.throws(() => run('not-a-commit'), /base revision is invalid/);
   assert.match(await readFile(join(root, '.git', 'scope-summary'), 'utf8'), /Selected checks/);
   const beforeLock = git('rev-parse', 'HEAD');
@@ -307,7 +370,7 @@ test('Git diffs handle renamed files, removed tests, release metadata and missin
   assert.ok(JSON.parse(run(beforeLock).quality_checks).includes('lint'));
 });
 
-test('test shards use recorded times and include each file once', async () => {
+test('slow test files start first and every selected file stays in the queue', async () => {
   const files = [
     'tests/slow.test.ts',
     'tests/medium.test.ts',
@@ -315,16 +378,10 @@ test('test shards use recorded times and include each file once', async () => {
     'tests/tiny.test.ts',
   ];
   const times = Object.fromEntries(files.map((file, index) => [file, [90, 50, 30, 10][index]]));
-  const shards = await shardTests(files, times, 2);
-  assert.deepEqual(
-    shards.map(({ files }) => files),
-    [[files[0]], files.slice(1)],
-  );
-  assert.deepEqual(shards.flatMap(({ files }) => files).sort(), [...files].sort());
-  assert.equal((await shardTests(files, times, 8)).length, files.length);
-  assert.deepEqual(await shardTests([], {}), []);
-  const cold = await shardTests(['tests/accounts.test.ts', 'tests/pi.test.ts']);
-  assert.equal(cold.length, 2);
+  assert.deepEqual(await orderTests([...files].reverse(), times), files);
+  assert.deepEqual(await orderTests([], {}), []);
+  const cold = await orderTests(['tests/accounts.test.ts', 'tests/pi.test.ts']);
+  assert.deepEqual(cold.sort(), ['tests/accounts.test.ts', 'tests/pi.test.ts']);
 });
 
 test('new test times replace old values and keep files outside a partial run', async (t) => {

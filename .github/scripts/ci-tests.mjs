@@ -20,7 +20,7 @@ export function affectedTests(base, available) {
     .filter((file) => available.includes(file));
 }
 
-export async function shardTests(files, timings = {}, count = 4) {
+export async function orderTests(files, timings = {}) {
   if (!files.length) return [];
   const weighted = await Promise.all(
     files.map(async (file) => ({
@@ -32,17 +32,7 @@ export async function shardTests(files, timings = {}, count = 4) {
     })),
   );
   weighted.sort((a, b) => b.weight - a.weight || a.file.localeCompare(b.file));
-  const shards = Array.from({ length: Math.min(count, files.length) }, (_, index) => ({
-    shard: index + 1,
-    files: [],
-    weight: 0,
-  }));
-  for (const { file, weight } of weighted) {
-    const shard = shards.reduce((best, next) => (next.weight < best.weight ? next : best));
-    shard.files.push(file);
-    shard.weight += weight;
-  }
-  return shards.map(({ shard, files }) => ({ shard, files }));
+  return weighted.map(({ file }) => file);
 }
 
 export async function readTimings(...directories) {

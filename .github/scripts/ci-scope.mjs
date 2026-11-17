@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { appendFile } from 'node:fs/promises';
 import { isDeepStrictEqual } from 'node:util';
 import { pathToFileURL } from 'node:url';
-import { affectedTests, readTimings, shardTests } from './ci-tests.mjs';
+import { affectedTests, orderTests, readTimings } from './ci-tests.mjs';
 
 const checks = [
   'types',
@@ -19,7 +19,7 @@ const checks = [
 ];
 const git = (...args) => execFileSync('git', args, { encoding: 'utf8' });
 
-export function selectChecks(paths) {
+export function selectChecks(paths, event = 'workflow_dispatch') {
   const scope = Object.fromEntries(checks.map((name) => [name, false]));
   let testMode = 'changed';
   const testFiles = [];
@@ -202,6 +202,11 @@ export function selectChecks(paths) {
     if (/^(\.gitignore|\.prettierignore|\.prettierrc(?:\.json)?)$/.test(path)) continue;
     full();
   }
+  if (['pull_request', 'merge_group'].includes(event)) {
+    scope.macos = false;
+    scope.windows = false;
+    scope.images = false;
+  }
   return { ...scope, testMode, testFiles };
 }
 
@@ -229,9 +234,22 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
         { stdio: 'inherit' },
       );
   } else if (process.argv.includes('--desktop-tests')) {
-    execFileSync(process.execPath, ['--test', ...JSON.parse(process.env.NOD_DESKTOP_TEST_FILES)], {
-      stdio: 'inherit',
-    });
+    execFileSync(
+      process.execPath,
+      [
+        '--test',
+        ...(process.env.NOD_DESKTOP_RELEASE_ACCEPTANCE === 'false'
+          ? [
+              '--test-skip-pattern',
+              '^all four checked bundles publish together as one regular Nod release$',
+            ]
+          : []),
+        ...JSON.parse(process.env.NOD_DESKTOP_TEST_FILES),
+      ],
+      {
+        stdio: 'inherit',
+      },
+    );
   } else {
     let base = process.env.CI_DIFF_BASE;
     if (!base && process.env.GITHUB_REF === 'refs/heads/release/desktop')
@@ -264,17 +282,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
           paths = paths.filter((path) => path !== 'desktop/package.json');
       }
     }
-    let { testMode, testFiles, ...scope } = selectChecks(paths);
+    let { testMode, testFiles, ...scope } = selectChecks(paths, process.env.GITHUB_EVENT_NAME);
     if (['push', 'merge_group'].includes(process.env.GITHUB_EVENT_NAME)) {
       scope.integration = true;
       testMode = 'all';
-    }
-    if (process.argv.includes('--plan')) {
-      const graph = testMode === 'affected';
-      if (process.env.GITHUB_OUTPUT)
-        await appendFile(process.env.GITHUB_OUTPUT, `graph=${graph}\n`);
-      console.log(JSON.stringify({ graph, ...scope }));
-      process.exit(0);
     }
     const tracked = git('ls-files', '-z').split('\0').filter(Boolean);
     const available = tracked.filter((path) => /^tests\/[^/]+\.test\.ts$/.test(path));
@@ -284,7 +295,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       const incremental =
         !process.env.GITHUB_EVENT_NAME || process.env.GITHUB_EVENT_NAME === 'pull_request';
       let affected = available;
-      if (incremental) {
+      if (incremental && !process.argv.includes('--plan')) {
         try {
           affected = affectedTests(base, available);
         } catch (error) {
@@ -317,8 +328,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     if (scope.build) quality.push('build');
     const output = {
       ...scope,
-      test_files: JSON.stringify(selectedFiles),
-      test_matrix: JSON.stringify({ include: await shardTests(selectedFiles, timings) }),
+      test_files: JSON.stringify(await orderTests(selectedFiles, timings)),
       desktop_test_files: JSON.stringify(
         selectDesktopTests(
           paths,
