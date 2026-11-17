@@ -1101,7 +1101,7 @@ export function createModelService(options: {
         attempt.completion = finish(attempt, flow.result);
         attempt.completion.catch(() => {});
       }
-      return { url: auth.url, attempt: auth.state, manual: !!flow?.manual };
+      return { url: auth.url, attempt: auth.state };
     } catch (error) {
       const cause = error instanceof Error ? (error.cause ?? error) : error;
       logFailure('model_sign_in_failed', cause, {

@@ -156,7 +156,6 @@ export function useModelSignIn(
     url: string;
     attempt: string;
     provider: 'openai' | 'openrouter';
-    manual: boolean;
   } | null>(null);
   const activeAttempt = useRef<string | null>(null);
   const mounted = useRef(true);
@@ -242,13 +241,10 @@ export function useModelSignIn(
     setPending(true);
     models.setError('');
     try {
-      const response = await post<{ url: string; attempt: string; manual?: boolean }>(
-        '/api/models/oauth',
-        {
-          provider,
-          connectionId,
-        },
-      );
+      const response = await post<{ url: string; attempt: string }>('/api/models/oauth', {
+        provider,
+        connectionId,
+      });
       activeAttempt.current = response.attempt;
       if (!mounted.current) {
         await api(`/api/models/oauth/${response.attempt}`, { method: 'DELETE' });
@@ -257,7 +253,7 @@ export function useModelSignIn(
         return;
       }
       const url = connectionUrl(response.url, window.location.origin);
-      setSignIn({ url, attempt: response.attempt, provider, manual: !!response.manual });
+      setSignIn({ url, attempt: response.attempt, provider });
       if (desktop) await openConnection(url);
       else if (popup) popup.location.replace(url);
     } catch (cause) {

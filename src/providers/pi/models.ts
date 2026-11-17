@@ -553,7 +553,6 @@ export function createPiModelBackend(options: { fetch?: typeof fetch } = {}): Mo
           send(400);
         }
       });
-      let manual = false;
       let closing: Promise<void> | undefined;
       const close = () =>
         (closing ??= new Promise<void>((resolve) => {
@@ -574,26 +573,24 @@ export function createPiModelBackend(options: { fetch?: typeof fetch } = {}): Mo
           });
         });
         server.on('error', () => controller.abort());
+        if (signal.aborted) throw canceled();
       } catch (error) {
-        await close();
-        if (!signal.aborted && Object(error).code === 'EADDRINUSE') {
-          signal.removeEventListener('abort', abort);
-          throw new ModelAuthError(
-            'Port 1455 is already in use. Close the other Nod app or another sign-in, then try again.',
-            false,
-            { cause: { reason: 'callback_port_unavailable', code: 'EADDRINUSE' } },
-          );
-        }
-        manual = true;
-        logFailure('model_sign_in_callback_unavailable', error, {
-          provider: 'openai',
-          code: Object(error).code,
-        });
-      }
-      if (signal.aborted) {
         signal.removeEventListener('abort', abort);
         await close();
-        throw canceled();
+        if (error instanceof ModelAuthError) throw error;
+        const busy = error instanceof Error && 'code' in error && error.code === 'EADDRINUSE';
+        throw new ModelAuthError(
+          busy
+            ? 'Port 1455 is already in use. Close the other Nod app or another sign-in, then try again.'
+            : 'ChatGPT sign-in couldn’t start. Try again.',
+          false,
+          {
+            cause: {
+              reason: busy ? 'callback_port_unavailable' : 'callback_server_failed',
+              code: Object(error).code,
+            },
+          },
+        );
       }
       exchange = (async (): Promise<ModelCredential> => {
         try {
@@ -651,7 +648,7 @@ export function createPiModelBackend(options: { fetch?: typeof fetch } = {}): Mo
       });
       exchange.catch(() => {});
       result.catch(() => {});
-      return { url: url.toString(), state, result, complete, manual };
+      return { url: url.toString(), state, result, complete };
     },
     async connectKey(provider, credential) {
       try {

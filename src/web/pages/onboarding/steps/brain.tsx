@@ -243,11 +243,7 @@ function Waiting({ c }: { c: Connect }) {
   return (
     <div className="ob-brain-status">
       <Spinner />
-      <p className="ob-brain-wait">
-        {c.flow.signIn?.manual
-          ? 'Nod can’t receive this sign-in automatically. After you approve in your browser, paste the address it ends up on below.'
-          : 'Finish signing in, then come back here.'}
-      </p>
+      <p className="ob-brain-wait">Finish signing in, then come back here.</p>
       <Button
         variant="ghost"
         size="sm"
@@ -257,10 +253,8 @@ function Waiting({ c }: { c: Connect }) {
         Cancel
       </Button>
       {c.flow.signIn && (
-        <details className="ob-brain-fallback" open={c.flow.signIn.manual}>
-          <summary>
-            {c.flow.signIn.manual ? 'Paste the address' : 'Sign-in page didn’t open?'}
-          </summary>
+        <details className="ob-brain-fallback">
+          <summary>Sign-in page didn’t open?</summary>
           <p>
             <button type="button" className="ob-link" onClick={c.flow.reopen}>
               Open it again

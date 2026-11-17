@@ -69,7 +69,6 @@ export interface ModelBackend {
     state: string;
     result: Promise<ModelCredential>;
     complete(callback: URL): void;
-    manual?: boolean;
   }>;
   catalog(
     provider: ModelProvider,

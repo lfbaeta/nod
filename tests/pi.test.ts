@@ -3417,61 +3417,6 @@ test('ChatGPT sign-in listens only on a free loopback callback before requesting
   assert.equal(blocker.listening, true);
 });
 
-test('ChatGPT sign-in falls back to a pasted callback when the loopback port is denied', async (t) => {
-  const { createPiModelBackend } = await import('../src/providers/pi/models.ts');
-  const { Server } = await import('node:http');
-  const owned: import('node:http').Server[] = [];
-  t.mock.method(
-    Server.prototype,
-    'listen',
-    function (this: import('node:http').Server, ...args: unknown[]) {
-      assert.deepEqual(args.slice(0, 2), [1455, '127.0.0.1']);
-      owned.push(this);
-      process.nextTick(() =>
-        this.emit('error', Object.assign(new Error('listen EACCES'), { code: 'EACCES' })),
-      );
-      return this;
-    },
-  );
-  let requests = 0;
-  t.mock.method(globalThis, 'fetch', async () => {
-    requests++;
-    throw new Error('Unexpected network request');
-  });
-  const controller = new AbortController();
-  const flow = await createPiModelBackend().signIn({
-    signal: controller.signal,
-    hostId: chatgptHostId,
-  });
-  t.after(async () => {
-    controller.abort();
-    await flow.result.catch(() => {});
-  });
-  assert.equal(flow.manual, true);
-  assert.equal(
-    new URL(flow.url).searchParams.get('redirect_uri'),
-    'http://127.0.0.1:1455/auth/callback',
-  );
-  assert.ok(owned.every((server) => !server.listening));
-  assert.equal(requests, 0);
-  assert.throws(
-    () =>
-      flow.complete(
-        new URL(
-          'http://127.0.0.1:1455/auth/callback?state=other&code=pasted&client_id=fixture-client',
-        ),
-      ),
-    /invalid or was declined/,
-  );
-  flow.complete(
-    new URL(
-      `http://127.0.0.1:1455/auth/callback?state=${flow.state}&code=pasted&client_id=fixture-client`,
-    ),
-  );
-  await assert.rejects(flow.result, /didn’t finish/);
-  assert.equal(requests, 1);
-});
-
 test('ChatGPT sign-in validates callbacks, exchanges PKCE once, verifies the account and drains cancellation', async (t) => {
   const { createPiModelBackend } = await import('../src/providers/pi/models.ts');
   const { ModelAuthError } = await import('../src/ports/models.ts');
@@ -3576,7 +3521,6 @@ test('ChatGPT sign-in validates callbacks, exchanges PKCE once, verifies the acc
       dispose();
     }
   }
-  assert.equal(signIn.manual, false);
   const authorization = new URL(signIn.url);
   assert.equal(
     authorization.origin + authorization.pathname,
