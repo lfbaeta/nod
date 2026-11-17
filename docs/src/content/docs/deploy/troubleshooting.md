@@ -145,9 +145,21 @@ Return to **Apps** and select **Connect** again. Keep the sign-in page and any w
 
 If the connection service refuses the request, the sign-in page names its reason and HTTP status, such as `public_budget_exceeded` and `HTTP 429`. If the connection service is unavailable or reports a limit, try again later. If the problem persists, [report a bug with a diagnostic report](/deploy/troubleshooting/#report-a-bug-with-a-diagnostic-report).
 
+A sign-in link expires after 10 minutes. The diagnostic report then records the step where the sign-in stopped: opening the sign-in page, starting the sign-in, approving access in the app, or returning to Nod. A sign-in that returns after its link expired is recorded as a timeout.
+
 ### An app tool fails with HTTP 403
 
 If an app tool error shows `HTTP 403` and a UTC time, [report a bug with a diagnostic report](/deploy/troubleshooting/#report-a-bug-with-a-diagnostic-report). Include that time and any Cloudflare Ray ID in your feedback text. The displayed `0x` is a formatting prefix; support removes it before searching Cloudflare.
+
+### The connection service refused this request
+
+When the connection service refuses a file for an app, the error shows its HTTP status, and its reason when Nod recognizes it. For example: `The connection service refused this request: file_verification_failed. HTTP 502.` The app action doesn't run, so nothing reaches the recipient.
+
+- For `file_too_large` or `invalid_file_data`, send a smaller or different file.
+- For `tool_account_mismatch`, pick the account that belongs to that app.
+- For other reasons, try again later.
+
+If it keeps failing, [send feedback with a diagnostic report](/deploy/troubleshooting/#send-feedback-with-a-diagnostic-report).
 
 ### App sign-in opens an unreachable address on a remote server
 

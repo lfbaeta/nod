@@ -2844,7 +2844,8 @@ export async function createIntegrations(pool: Pool, options: IntegrationOptions
                   activeCallbackClaims.delete(claimId);
                 }
               }
-            } else if (!row.callback_claim_id) await clearReconnect(row.id, hash);
+            } else if (!row.callback_claim_id && (await clearReconnect(row.id, hash)) !== undefined)
+              track(row.slug, 'failed', 'timeout', { step: 'callback' });
           } else if (options.discovered) {
             const result = await options.discovered
               .completeOAuth(request.query)

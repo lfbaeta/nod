@@ -56,7 +56,7 @@ import {
 } from '../src/ports/integrations.ts';
 import { createComposioProvider } from '../src/providers/composio/integrations.ts';
 import { createComposioProxy } from '../src/providers/composio/proxy.ts';
-import { logFailure } from '../src/server/failure-log.ts';
+import { logFailure, withFailureLog } from '../src/server/failure-log.ts';
 import { serviceEnvironment } from '../src/providers/process.ts';
 import { createIntegrationIdentityCheckpoint } from '../src/server/integration-identity.ts';
 import { createIntegrationBrowser } from '../src/server/integration-browser.ts';
@@ -1196,7 +1196,7 @@ test('managed integration requests bind SDK calls to a private persisted install
   let failExecution = false;
   let uploadResponse = 'nod-file.synthetic-owned-capability';
   let uploadName = 'synthetic.bin';
-  let failUpload = false;
+  let uploadRefusal: { error: string; status: number } | undefined;
   let pairingStatus: unknown = { pairingConfirmed: false };
   let expectedToolkit = 'gmail';
   let expectedReconnectAccountId: string | undefined;
@@ -1331,7 +1331,8 @@ test('managed integration requests bind SDK calls to a private persisted install
         mimeType: 'application/octet-stream',
         data: 'AP/+CkGA',
       });
-      if (failUpload) return Response.json({ error: 'upload_failed' }, { status: 503 });
+      if (uploadRefusal)
+        return Response.json({ error: uploadRefusal.error }, { status: uploadRefusal.status });
       return Response.json({
         name: uploadName,
         mimetype: 'application/octet-stream',
@@ -1607,10 +1608,19 @@ test('managed integration requests bind SDK calls to a private persisted install
   uploadName = file.name;
   uploadResponse = 'raw-project-file-key';
   await assert.rejects(session.upload!('GMAIL_SEND_EMAIL', file, undefined, 'ca_fixture_proxy'));
-  failUpload = true;
+  uploadRefusal = { error: 'file_verification_failed', status: 502 };
   const beforeUploadFailure = calls.length;
-  await assert.rejects(session.upload!('GMAIL_SEND_EMAIL', file, undefined, 'ca_fixture_proxy'));
+  await assert.rejects(
+    session.upload!('GMAIL_SEND_EMAIL', file, undefined, 'ca_fixture_proxy'),
+    /file_verification_failed\. HTTP 502\./,
+  );
   assert.equal(calls.length, beforeUploadFailure + 1);
+  uploadRefusal = { error: 'synthetic-private-detail', status: 503 };
+  await assert.rejects(
+    session.upload!('GMAIL_SEND_EMAIL', file, undefined, 'ca_fixture_proxy'),
+    (error: Error) => /HTTP 503\./.test(error.message) && !error.message.includes('synthetic'),
+  );
+  uploadRefusal = undefined;
   const beforeInvalidUpload = calls.length;
   await assert.rejects(
     session.upload!(
@@ -2241,6 +2251,143 @@ test('hosted connection attempts fail closed after expiry or invalid startup', a
     });
   }
 });
+
+test('connection bridges record the step where an expired attempt stopped', async (t) => {
+  const brokerOrigin = 'https://proxy.example.test';
+  const pair = `${brokerOrigin}/v2/connect/pair?ticket=synthetic-expiry`;
+  const key = generateKeyPairSync('ec', { namedCurve: 'prime256v1' }).publicKey.export({
+    format: 'jwk',
+  });
+  const expire = async (open: () => Promise<string>, advance: (url: string) => Promise<void>) => {
+    let expiry = () => {};
+    const timer = t.mock.method(globalThis, 'setTimeout', ((callback: () => void) => {
+      expiry = callback;
+      return { unref() {} };
+    }) as unknown as typeof setTimeout);
+    let url: string;
+    try {
+      url = await open();
+    } finally {
+      timer.mock.restore();
+    }
+    await advance(url);
+    const logged: Array<Record<string, unknown>> = [];
+    withFailureLog((event, _error, context) => logged.push({ event, ...context }), expiry);
+    return logged;
+  };
+  await t.test('loopback', async (t) => {
+    const browser = createIntegrationBrowser();
+    t.after(() => browser.close());
+    for (const [step, reached] of [
+      ['open', 0],
+      ['start', 1],
+      ['consent', 2],
+      ['callback', 3],
+      [undefined, 4],
+    ] as const) {
+      const id = randomBytes(32).toString('base64url');
+      let returnPath = '';
+      const logged = await expire(
+        () =>
+          browser.open(id, brokerOrigin, async (_key, _origin, native) => {
+            returnPath = native!.returnPath;
+            return pair;
+          }),
+        async (url) => {
+          const origin = new URL(url).origin;
+          if (reached < 1) return;
+          const bridgeKey = JSON.parse(
+            (await (await fetch(url)).text()).match(/const bridgeKey=("[^"]+");/)![1],
+          );
+          if (reached < 2) return;
+          const started = await fetch(`${origin}/start`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', origin, 'x-nod-bridge': bridgeKey },
+            body: JSON.stringify({ browserKey: key }),
+          });
+          assert.equal(started.status, 200, await started.text());
+          if (reached < 3) return;
+          const returned = await fetch(origin + returnPath, { headers: { origin: brokerOrigin } });
+          assert.equal(returned.status, 200, await returned.text());
+          if (reached < 4) return;
+          browser.finish(id);
+        },
+      );
+      assert.deepEqual(logged, step ? [{ event: 'app_connection_expired', step }] : []);
+    }
+  });
+  await t.test('hosted', async (t) => {
+    const origin = 'https://nod.customer.example';
+    const browser = createIntegrationBrowser({ origin });
+    t.after(() => browser.close());
+    const app = Fastify();
+    t.after(() => app.close());
+    registerLocalAccess(app, 4310, { key: 'synthetic-owner-key', origin });
+    browser.registerRoutes(app);
+    const headers = { host: new URL(origin).host };
+    for (const [step, reached] of [
+      ['open', 0],
+      ['start', 1],
+      ['consent', 2],
+      [undefined, 3],
+    ] as const) {
+      const id = randomBytes(32).toString('base64url');
+      const logged = await expire(
+        () => browser.open(id, brokerOrigin, async () => pair),
+        async (url) => {
+          const path = new URL(url).pathname;
+          if (reached < 1) return;
+          const bootstrap = await app.inject({ url: path, headers });
+          const { bridgeKey } = JSON.parse(
+            bootstrap.body.match(/const \{brokerOrigin,id,expiresAt,bridgeKey\}=(.+);/)![1],
+          );
+          if (reached < 2) return;
+          const started = await app.inject({
+            method: 'POST',
+            url: path,
+            headers: { ...headers, origin, 'x-nod-bridge': bridgeKey },
+            payload: { browserKey: key },
+          });
+          assert.equal(started.statusCode, 200, started.body);
+          if (reached < 3) return;
+          browser.finish(id);
+        },
+      );
+      assert.deepEqual(logged, step ? [{ event: 'app_connection_expired', step }] : []);
+    }
+  });
+});
+
+test(
+  'a sign-in that returns after its link expired records a timeout',
+  { skip: !process.env.TEST_DATABASE_URL },
+  async (t) => {
+    const captured: import('../src/server/analytics.ts').AnalyticsEvent[] = [];
+    const f = await appsFixture(t, {}, { analytics: (event) => captured.push(event) });
+    const started = await f.app.inject({
+      method: 'POST',
+      url: '/api/apps/gmail/connect',
+      payload: { returnTo: 'window' },
+    });
+    assert.equal(started.statusCode, 200, started.body);
+    const callback = new URL(f.callbacks.at(-1)!);
+    callback.searchParams.set('account', [...f.accounts.keys()].at(-1)!);
+    await f.pool.query("UPDATE app_connections SET callback_expires=now()-interval '1 minute'");
+    const late = await f.app.inject({ url: callback.pathname + callback.search });
+    assert.equal(new URL(late.headers.location!).searchParams.get('connection'), 'expired');
+    assert.deepEqual(
+      captured.flatMap((entry) =>
+        entry.event === 'connection_changed'
+          ? [[entry.properties.status, entry.properties.failure_reason]]
+          : [],
+      ),
+      [
+        ['started', undefined],
+        ['failed', 'timeout'],
+      ],
+    );
+  },
+);
 
 test('hosted connection proof signs only the opened broker popup challenge for its exact attempt', async (t) => {
   for (const variant of ['valid', 'expires-before-sign', 'expires-during-sign']) {
