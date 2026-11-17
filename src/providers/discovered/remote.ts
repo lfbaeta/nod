@@ -337,6 +337,7 @@ export function createDiscoveredTransport(
   return {
     validateEndpoint,
     async http(endpoint, headers, method, body, signal) {
+      signal?.throwIfAborted();
       const response = await request(endpoint, {
         method,
         signal,

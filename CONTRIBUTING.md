@@ -6,7 +6,7 @@ Everyone taking part follows the [code of conduct](CODE_OF_CONDUCT.md).
 
 ## Ways to help
 
-- **Create an app connector.** Follow [Creating your own connectors](docs/src/content/docs/contribute/apps/index.md) for the format, AI builder skill, required tests, and approval process. Browse [custom connections](https://nod.n8n.io/docs/connect/community-apps/) for examples.
+- **Create an app connector.** Follow [Creating your own connectors](docs/src/content/docs/contribute/apps/index.md) for MCP, HTTP API, and CLI formats, the AI builder skill, required tests, and approval process. Browse [custom connections](https://nod.n8n.io/docs/connect/community-apps/) for examples.
 
 - **Report a bug** with the [bug report form](https://github.com/n8n-io/nod/issues/new/choose).
 - **Ask a question or share an idea** in [Discussions](https://github.com/n8n-io/nod/discussions).

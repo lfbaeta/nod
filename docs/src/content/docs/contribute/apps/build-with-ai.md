@@ -2,7 +2,7 @@
 title: Build an app with AI
 description: Use the repository's Agent Skill and scaffold command to create and check a Nod app.
 sidebar:
-  order: 8
+  order: 9
 ---
 
 Use the `create-nod-app` Agent Skill with the same scaffold and checks used by human contributors.
@@ -15,7 +15,7 @@ In an agent that discovers repository Agent Skills, ask:
 
 ```text
 Use $create-nod-app to add an app for <service>.
-Use the provider's official MCP documentation.
+Use the provider's official documentation. Choose its MCP server, HTTP API, or CLI.
 Scaffold the app, add synthetic contract data, and run the required checks.
 Report provider checks separately from offline test results.
 ```
@@ -30,7 +30,7 @@ It also checks the generated public page and social preview. It reports missing 
 
 ## Review the result
 
-Check the server address, scopes, required account plan, fixture tool name, and example requests. Confirm the public page does not promise unsupported work.
+Check the interface, authentication, required account plan, read operation, and example requests. For CLI apps, check the exact package or download source and credential labels. Confirm the public page does not promise unsupported work.
 
 AI output still needs the [approval review](/contribute/apps/approval/). The skill cannot grant permissions, create a provider OAuth application, or approve the contribution.
 

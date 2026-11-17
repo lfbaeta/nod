@@ -1218,6 +1218,18 @@ async function initializeApplication(
     ownerId,
     keyStore: adapters.keyStore,
   });
+  const runConnectedCli: Parameters<typeof createDiscoveredConnections>[1]['runCli'] =
+    workspace.connectedCliAvailable
+      ? async (threadId, cli, args, environment, timeoutSeconds, signal) => {
+          const session = workspace.open({
+            threadId,
+            workspacePath: join(dataRoot, 'workspaces', threadId),
+            signal: signal ?? new AbortController().signal,
+          });
+          if (!session.runConnectedCli) throw new Error('Connected CLI commands are unavailable.');
+          return session.runConnectedCli(cli, args, environment, timeoutSeconds);
+        }
+      : undefined;
   const discovered = await createDiscoveredConnections(pool, {
     analytics: captureAnalytics,
     analyticsConsent,
@@ -1241,16 +1253,17 @@ async function initializeApplication(
         ),
       };
     },
-    runCli: workspace.connectedCliAvailable
-      ? async (threadId, cli, args, environment, timeoutSeconds, signal) => {
-          const session = workspace.open({
-            threadId,
-            workspacePath: join(dataRoot, 'workspaces', threadId),
-            signal: signal ?? new AbortController().signal,
-          });
-          if (!session.runConnectedCli) throw new Error('Connected CLI commands are unavailable.');
-          return session.runConnectedCli(cli, args, environment, timeoutSeconds);
-        }
+    runCli: runConnectedCli,
+    verifyCli: runConnectedCli
+      ? async (cli, args, environment, timeoutSeconds, signal) =>
+          runConnectedCli(
+            (await activeThread(pool, ownerId)).id,
+            cli,
+            args,
+            environment,
+            timeoutSeconds,
+            signal,
+          )
       : undefined,
     resumeConnection: resumeAfterConnection,
     refresh,

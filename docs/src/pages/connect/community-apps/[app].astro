@@ -42,7 +42,7 @@ const head = [
     <li>Complete the private connection setup and review the access you grant.</li>
     <li>Return to Nod and ask it to read a record you can access.</li>
   </ol>
-  <p>Authentication: {app.authentication.map((method) => method === 'oauth2' ? 'OAuth browser sign-in' : method === 'bearer' ? 'access token' : 'API key').join(' or ')}.</p>
+  <p>Authentication: {app.authentication.map((method) => method === 'oauth2' ? 'OAuth browser sign-in' : method === 'bearer' ? 'access token' : method === 'env' ? 'private credentials' : 'API key').join(' or ')}.</p>
   <h2 id="requirements">Requirements</h2>
   <ul>{app.requirements.map((item) => <li>{item}</li>)}</ul>
   <h2 id="limits">Limits</h2>

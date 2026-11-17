@@ -1,6 +1,6 @@
 ---
 title: Build your first app
-description: Scaffold a remote MCP app and complete the files needed for a contribution.
+description: Scaffold an MCP, API, or CLI app and complete its required files.
 sidebar:
   order: 4
 ---
@@ -9,15 +9,35 @@ Create an app folder with the scaffold command, then replace its unfinished fiel
 
 ## Generate the files
 
-Replace the example address with the provider's real public MCP address. Then run this command from the repository root:
+Select a method and run the matching command from the repository root. Replace example addresses, package names, and credential names with provider values.
+
+### MCP server
 
 ```sh
-pnpm create:app my-app --name "My App" --url https://mcp.example.com/mcp --auth oauth2
+pnpm create:app my-app --type mcp --name "My App" --url https://mcp.example.com/mcp --auth oauth2
 ```
 
-The command rejects private, local, and reserved example addresses. It writes files only. It does not contact the provider or create a connection.
+MCP is the default when `--type` is omitted. Select `oauth2`, `bearer`, or `x-api-key` authentication.
 
-Set `--auth` to the provider's documented method: `oauth2`, `bearer`, or `x-api-key`. The command requires this choice.
+### HTTP API
+
+```sh
+pnpm create:app my-app --type http --name "My App" --url https://api.example.com/v1 --auth bearer
+```
+
+Select `oauth2`, `bearer`, or `x-api-key`. Use the [API examples](/contribute/apps/api-and-cli/) for custom key headers, OAuth metadata, and GraphQL read checks.
+
+### Command-line tool
+
+```sh
+pnpm create:app my-app --type cli --name "My App" --command mycli --npm @provider/cli@1.2.3 --env PROVIDER_TOKEN --auth env
+```
+
+Select one pinned source: `--npm <package@version>`, `--pypi <package==version>`, or `--download <binary-url> --sha256 <digest>`. Repeat `--env` for each required credential. Give each field a clear label in the generated app file.
+
+The command rejects invalid options, unsafe addresses, and unpinned CLI sources. It writes files only. It does not contact providers or install commands. The example addresses are reserved and must be replaced before running the command.
+
+All methods use this layout. Only fixed MCP apps include `mcp.json`:
 
 ```text
 src/apps/my-app/
@@ -28,7 +48,7 @@ src/apps/my-app/
     contract.json
 ```
 
-The command refuses to replace an existing directory. The generated read-tool placeholder deliberately fails validation until you complete it.
+The command refuses to replace an existing directory. The generated placeholders deliberately fail validation until you complete them.
 
 ## Complete the manifest
 
@@ -40,7 +60,7 @@ Edit `io.n8n.nod/app.json`:
 2. Add concrete example requests in `prompts`.
 3. State account, plan, scope, and provider-version requirements.
 4. State unsupported behavior in `limitations`.
-5. Add OAuth scopes only when the provider requires them.
+5. Complete the typed connection fields for the selected method. Add OAuth scopes only when the provider requires them.
 
 For an icon, add `io.n8n.nod/icon.svg` and set `icon` to `./io.n8n.nod/icon.svg`. PNG and WebP are also supported. Keep the image under 128 KB. Use letters, digits, underscores, or hyphens in asset names.
 
@@ -50,13 +70,13 @@ Do not put tokens, passwords, private server addresses, or customer data in thes
 
 ## Complete the required fixture
 
-Edit `io.n8n.nod/contract.json`. Set `source` to the provider documentation. Replace the read-tool name and input schema with the documented contract. Use invented IDs and content for `input` and `output`.
+Edit `io.n8n.nod/contract.json`. Set `source` to the provider documentation. Complete the read tool, HTTP request, or CLI argument array. Use synthetic response data.
 
-The fixture feeds a synthetic MCP server in the shared test framework. It does not connect to the real provider. See [Test the app](/contribute/apps/test/).
+API and CLI apps use this same read operation to verify access during setup. The offline framework uses synthetic responses or a controlled child process. It never calls the real provider. See [Test the app](/contribute/apps/test/).
 
 ## Add a guide when needed
 
-Use `skills/<app-id>/SKILL.md` for procedures the model cannot infer from the tool definitions. Keep required `name` and `description` frontmatter. Put detailed procedures in Markdown reference files.
+Use `skills/<app-id>/SKILL.md` for procedures the model cannot infer from the interface. API and CLI apps should describe supported operations and link to provider references. Keep required `name` and `description` frontmatter. Put detailed procedures in Markdown reference files.
 
 App skills load with Nod's other guides. Skill names must be unique across the complete library. Credentials and permissions stay in the runtime.
 
@@ -88,5 +108,6 @@ Only n8n currently uses private or local instance addresses. A new app cannot en
 ## Related resources
 
 - [Build an app for Nod](/contribute/apps/)
+- [API and CLI examples](/contribute/apps/api-and-cli/)
 - [Format reference](/contribute/apps/format/)
 - [Test the app](/contribute/apps/test/)
