@@ -546,7 +546,11 @@ export function AppDiscoveryDialog({
                   onChange={(event) => setInstanceUrl(event.target.value)}
                   required
                   maxLength={2048}
-                  placeholder="https://you.app.n8n.cloud"
+                  placeholder={
+                    discovery.service === 'n8n'
+                      ? 'https://you.app.n8n.cloud'
+                      : 'https://app.example.com'
+                  }
                   autoComplete="off"
                   spellCheck={false}
                   disabled={saving}
