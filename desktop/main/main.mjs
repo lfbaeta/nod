@@ -135,6 +135,7 @@ let freshAppOpening;
 let freshAppOpenCapture;
 let appOpeningDeferred = false;
 let appOpeningConsentVersion = 0;
+let localSetupObservation;
 const claimedAppOpens = new Set();
 const appUIOpenings = new Map();
 function deferAppOpening() {
@@ -376,6 +377,7 @@ function update(value) {
   if (tray) tray.setToolTip(`Nod — ${status.phase === 'ready' ? 'Running' : status.message}`);
   showDownloadProgress();
   updateReadinessNotice();
+  captureLocalSetup();
 }
 
 function showDownloadProgress() {
@@ -1458,6 +1460,8 @@ function captureFreshAppOpen() {
 
 function captureStartupPath(path) {
   if (appOpeningDeferred || onboardingCompleted || welcomePassed || remoteConnection) return;
+  localSetupObservation = path === 'local' ? {} : undefined;
+  captureLocalSetup();
   const openedAt = Date.now();
   return Promise.resolve(freshAppOpenCapture)
     .then(async () => {
@@ -1482,10 +1486,57 @@ function captureStartupPath(path) {
         distinctId: analytics.distinctId,
         openedAt,
         uuid: randomUUID(),
-        properties: { path },
+        properties: { path, local_setup_telemetry_available: true },
       });
     })
     .catch(() => {});
+}
+
+function captureLocalSetup() {
+  const observation = localSetupObservation;
+  if (
+    !observation ||
+    appOpeningDeferred ||
+    quitting ||
+    onboardingCompleted ||
+    welcomePassed ||
+    remoteConnection
+  )
+    return;
+  const phase = (value) =>
+    value === 'error'
+      ? 'failed'
+      : ['idle', 'preparing', 'starting', 'ready'].includes(value)
+        ? value
+        : 'unknown';
+  const properties = {
+    runtime_status: phase(status.runtime?.phase),
+    startup_status: phase(status.phase),
+    setup_available: status.engineReady === true,
+    platform: ['darwin', 'win32', 'linux'].includes(process.platform) ? process.platform : 'other',
+  };
+  const key = JSON.stringify(properties);
+  if (observation.previous === key) return;
+  observation.previous = key;
+  const openedAt = Date.now();
+  const consentVersion = appOpeningConsentVersion;
+  void (async () => {
+    const saved = await settings.get();
+    if (saved.welcome?.usageData !== true) return;
+    const analytics = await analyticsConfiguration();
+    if (!analytics.enabled || !analytics.distinctId || testInstall) return;
+    await captureNativeAnalytics({
+      event: 'local_setup_observed',
+      distinctId: analytics.distinctId,
+      openedAt,
+      uuid: randomUUID(),
+      properties,
+      verifyConsent: () =>
+        !quitting &&
+        localSetupObservation === observation &&
+        appOpeningConsentVersion === consentVersion,
+    });
+  })().catch(() => {});
 }
 
 async function engineRequest(path, options = {}) {
@@ -3117,6 +3168,7 @@ else {
         if (removeData) removeData.enabled = !saved.serverUrl;
         onboardingCompleted = Boolean(saved.serverUrl);
         welcomePassed = saved.onboardingPreferenceStep === 'complete';
+        if (!saved.serverUrl && !welcomePassed && saved.welcome) localSetupObservation = {};
         update({ remote: Boolean(saved.serverUrl) });
         applyPreferences(saved);
         guidedStartup = !saved.serverUrl && saved.onboardingPreferenceStep !== 'complete';

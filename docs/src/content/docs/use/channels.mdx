@@ -37,6 +37,8 @@ Replies keep their bold text, lists, links, quotes, and code. A table arrives as
 
 Open **Channels** in the sidebar, then select **Connect** on Telegram or WhatsApp. Nod checks your details before it saves them, and keeps them encrypted, outside the chat.
 
+If Telegram or the WhatsApp Cloud API rejects setup, Nod shows the service's HTTP status and reason. Submitted tokens and secrets are replaced with `[redacted]`. If webhook registration fails after setup was saved, the error also states that message delivery is unconfirmed.
+
 On a self-hosted server, leave that channel's environment variables blank or unset to use this setup. A channel configured through the environment is server-managed: edit its settings in `.env` and [apply the configuration](/deploy/configuration/#apply-configuration-changes).
 
 <Tabs syncKey="channel">

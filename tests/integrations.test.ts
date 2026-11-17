@@ -11735,7 +11735,7 @@ test('connected provider cancellation reaches session creation, search, schemas,
   assert.equal(requests.length, 4);
 });
 
-test('discovered requests follow redirects only to checked public addresses and drop credentials across origins', async () => {
+test('discovered requests identify Nod, follow redirects only to checked public addresses and drop credentials across origins', async () => {
   const { PassThrough } = await import('node:stream');
   const { EventEmitter } = await import('node:events');
   const sent: Array<{ url: string; authorization?: string }> = [];
@@ -11757,12 +11757,14 @@ test('discovered requests follow redirects only to checked public addresses and 
     'https://api.fixture.example/broken': { status: 302, location: 'https://[' },
   };
   const methods: string[] = [];
+  const agents: Array<string | undefined> = [];
   const request = ((
     url: URL,
     options: { method: string; headers: Record<string, string> },
     callback: (incoming: unknown) => void,
   ) => {
     methods.push(options.method);
+    agents.push(options.headers['user-agent']);
     sent.push({ url: url.href, authorization: options.headers.authorization });
     const route = routes[url.href]!;
     const incoming = Object.assign(new PassThrough(), {
@@ -11791,6 +11793,15 @@ test('discovered requests follow redirects only to checked public addresses and 
     { url: 'https://api.fixture.example/start', authorization: 'Bearer synthetic-token' },
     { url: 'https://files.fixture.example/data', authorization: undefined },
   ]);
+  assert.equal(agents.length, 2);
+  for (const agent of agents) assert.match(agent ?? '', /^nod\/\S+$/);
+  agents.length = 0;
+  await safeRemoteFetch(
+    'https://files.fixture.example/data',
+    { headers: { 'User-Agent': 'synthetic-client/2.0' } },
+    { validate, request },
+  );
+  assert.deepEqual(agents, ['synthetic-client/2.0']);
   await assert.rejects(
     safeRemoteFetch(
       'https://api.fixture.example/private',

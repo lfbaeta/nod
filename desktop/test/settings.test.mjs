@@ -842,6 +842,9 @@ async function runningDesktop(
       isMinimized() {
         return this.minimized === true;
       }
+      setProgressBar(value) {
+        this.progress = value;
+      }
       isMaximized() {
         return this.maximized === true;
       }
@@ -1239,6 +1242,149 @@ test('opting out on Welcome stops later startup path events', async (t) => {
   }
 });
 
+test('native local setup observes early runtime failure and recovery without private details', async (t) => {
+  let attempts = 0;
+  const privateText = 'private-setup-detail /Users/synthetic/private-folder';
+  const f = await runningDesktop(t, async () => Response.json({ ok: true }), {
+    initialState: 'fresh',
+    allowStart: true,
+    packaged: true,
+    buildMetadata: { release: true },
+    version: '0.1.17',
+    prepareRuntime: async ({ onStatus, onStorageReady }) => {
+      onStatus({ stage: privateText, message: privateText, progress: 0.1 });
+      if (++attempts === 1) throw new Error(privateText);
+      onStatus({ stage: privateText, message: privateText, progress: 0.2 });
+      const runtime = { env: {} };
+      await onStorageReady(runtime);
+      return runtime;
+    },
+  });
+  try {
+    await f.launch();
+    await f.nativeOpening();
+    const setup = f.windows[0];
+    const event = { sender: setup.webContents, senderFrame: setup.webContents.mainFrame };
+    await f.handlers.get('nod:warmup')(event);
+    await waitFor(() => assert.equal(f.status().runtime.phase, 'error'), {
+      attempts: 40,
+      interval: 10,
+    });
+    const observations = () =>
+      f.nativeAnalytics.filter((item) => item.event === 'local_setup_observed');
+    assert.equal(observations().length, 0);
+    await f.handlers.get('nod:settings:save')(event, {
+      welcome: { usageData: true, continued: false },
+    });
+    await waitFor(() => assert.equal(observations().length, 1), {
+      attempts: 40,
+      interval: 10,
+    });
+    assert.equal(observations()[0].properties.runtime_status, 'failed');
+    assert.equal(observations()[0].properties.startup_status, 'idle');
+    assert.equal(observations()[0].properties.setup_available, false);
+    await f.handlers.get('nod:prepare')(event, { retry: true });
+    assert.equal(f.status().engineReady, true, JSON.stringify(f.status()));
+    await waitFor(() => assert.ok(observations().some((item) => item.properties.setup_available)), {
+      attempts: 40,
+      interval: 10,
+    });
+    assert.ok(observations().some((item) => item.properties.runtime_status === 'ready'));
+    f.children[0].emit('exit', 1);
+    await waitFor(
+      () =>
+        assert.ok(
+          observations().some(
+            (item) =>
+              item.properties.startup_status === 'failed' && !item.properties.setup_available,
+          ),
+        ),
+      { attempts: 40, interval: 10 },
+    );
+    const states = observations().map((item) =>
+      JSON.stringify([
+        item.properties.runtime_status,
+        item.properties.startup_status,
+        item.properties.setup_available,
+      ]),
+    );
+    assert.ok(states.every((value, index) => value !== states[index - 1]));
+    assert.ok(
+      f.nativeAnalytics.every((item) => item.distinct_id === observations()[0].distinct_id),
+    );
+    assert.equal(JSON.stringify(f.nativeAnalytics).includes(privateText), false);
+    assert.equal(
+      f.nativeAnalytics.find((item) => item.event === 'startup_path_selected')?.properties
+        .local_setup_telemetry_available,
+      true,
+    );
+    for (const item of observations())
+      assert.deepEqual(
+        Object.keys(item.properties)
+          .filter(
+            (key) =>
+              !key.startsWith('$') &&
+              !['analytics_schema', 'environment', 'surface', 'app_version', 'route'].includes(key),
+          )
+          .sort(),
+        ['platform', 'runtime_status', 'setup_available', 'startup_status'],
+      );
+  } finally {
+    await f.close();
+  }
+});
+
+test('queued native local setup observations stop after consent or path changes and close', async (t) => {
+  for (const action of ['opt_out', 'remote', 'close', 'disabled']) {
+    await t.test(action, async (t) => {
+      const loading = deferred();
+      const metadata = deferred();
+      let hold = false;
+      const f = await runningDesktop(t, async () => Response.json({ ok: true }), {
+        initialState: 'fresh',
+        packaged: true,
+        buildMetadata: { release: true },
+        version: '0.1.17',
+        environment: action === 'disabled' ? { NOD_ANALYTICS_ENABLED: 'false' } : {},
+        nativeMetadataRead: () => {
+          if (!hold) return;
+          loading.resolve();
+          return metadata.promise;
+        },
+      });
+      try {
+        await f.launch();
+        await f.nativeOpening();
+        hold = true;
+        const setup = f.windows[0];
+        const event = { sender: setup.webContents, senderFrame: setup.webContents.mainFrame };
+        await f.handlers.get('nod:settings:save')(event, {
+          welcome: { usageData: true, continued: false },
+        });
+        if (action !== 'disabled') await loading.promise;
+        if (action === 'opt_out') {
+          await f.handlers.get('nod:settings:save')(event, {
+            welcome: { usageData: false, continued: false },
+          });
+          await f.handlers.get('nod:settings:save')(event, {
+            welcome: { usageData: true, continued: false },
+          });
+        } else if (action === 'remote') void f.captureStartupPath('remote');
+        else if (action === 'close') await f.close();
+        metadata.resolve();
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        assert.deepEqual(
+          f.nativeAnalytics.filter((item) => item.event === 'local_setup_observed'),
+          [],
+        );
+      } finally {
+        metadata.resolve();
+        await f.close();
+      }
+    });
+  }
+});
+
 test(
   'native opening and path captures stop when Welcome opts out during metadata loading',
   { timeout: 15_000 },
@@ -1371,10 +1517,30 @@ test('a later local choice replaces an earlier remote startup path under the sam
       },
       { attempts: 40, interval: 10 },
     );
-    assert.equal(second.nativeAnalytics.length, 1);
-    assert.equal(second.nativeAnalytics[0].distinct_id, distinctId);
+    assert.equal(
+      second.nativeAnalytics.filter((item) => item.event === 'startup_path_selected').length,
+      1,
+    );
+    assert.equal(second.nativeAnalytics.filter((item) => item.event === 'app_opened').length, 0);
+    assert.ok(second.nativeAnalytics.every((item) => item.distinct_id === distinctId));
   } finally {
     await second.close();
+  }
+  const restarted = await runningDesktop(t, async () => Response.json({ ok: true }), {
+    ...options,
+    storedProfile: second.storage,
+  });
+  try {
+    await restarted.launch();
+    await waitFor(
+      () =>
+        assert.ok(restarted.nativeAnalytics.some((item) => item.event === 'local_setup_observed')),
+      { attempts: 40, interval: 10 },
+    );
+    assert.ok(restarted.nativeAnalytics.every((item) => item.distinct_id === distinctId));
+    assert.equal(restarted.nativeAnalytics.filter((item) => item.event === 'app_opened').length, 0);
+  } finally {
+    await restarted.close();
   }
 });
 
@@ -1456,6 +1622,11 @@ test('Windows onboarding waits for storage before unlocking credentials and expo
   f.storage.store.environment = async () =>
     assert.fail('No credentials are needed before storage.');
   try {
+    await mkdir(join(f.profileRoot, 'logs'), { recursive: true });
+    await appendFile(
+      join(f.profileRoot, 'logs', 'startup.log'),
+      'Synthetic earlier line\n'.repeat(4000),
+    );
     await f.launch();
     await f.prepare();
     assert.equal(f.children.length, 0);
@@ -1466,10 +1637,6 @@ test('Windows onboarding waits for storage before unlocking credentials and expo
     const showLog = f.handlers.get('nod:startup-log:show');
     await assert.rejects(showLog({ ...event, senderFrame: { url: event.senderFrame.url } }));
     assert.equal(revealed.length, 0);
-    await appendFile(
-      join(f.profileRoot, 'logs', 'startup.log'),
-      'Synthetic earlier line\n'.repeat(4000),
-    );
     await showLog(event);
     assert.deepEqual(revealed, [join(f.profileRoot, 'logs', 'startup.log')]);
     const log = await readFile(revealed[0], 'utf8');
