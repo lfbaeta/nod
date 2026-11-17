@@ -3643,7 +3643,7 @@ window.nodDesktop={
 const calls=[];
 window.fetch=globalThis.fetch=async(url,options={})=>{
  const path=new URL(url,window.location.href).pathname;calls.push(path);
- if(path==='/api/account/prepare')return new Promise(resolve=>{completePreparation=(response=Response.json({ok:true}))=>resolve(response)});
+ if(path==='/api/account/prepare')return new Promise((resolve,reject)=>{completePreparation=(response=Response.json({ok:true}))=>response instanceof Error?reject(response):resolve(response)});
  if(path==='/api/models'){modelReads++;return Response.json({connections:modelConnected?[{id:'synthetic',provider:'anthropic',method:'api_key',label:'Synthetic model',managed:false,status:'connected',models:[{id:'synthetic-model',name:'Synthetic model',efforts:['medium'],images:false,contextWindow:1000}]}]:[],selection:modelConnected?{connectionId:'synthetic',modelId:'synthetic-model',effort:'medium'}:null,...(modelFailure?{selectionIssue:{reason:modelFailure}}:{})})}
  if(path==='/api/preferences')return Response.json({timeZone:'Europe/Lisbon',locale:'en-GB',hourCycle:'h23',quietHoursEnabled:false,quietStart:'22:00',quietEnd:'08:00',speechReply:'auto',speechVoice:null});
  if(path==='/api/speech')return Response.json({transcription:false,synthesis:false,voices:[],speechVoice:null,speechReply:'auto'});
@@ -3659,11 +3659,25 @@ const {createRoot}=await import('react-dom/client');
 const {Onboarding}=await import('./src/web/pages/onboarding/index.tsx');
 globalThis.IS_REACT_ACT_ENVIRONMENT=true;
 const session={user:{id:'synthetic-native-owner',name:'',email:null,avatarUrl:null},settings:{usageData:false,onboardingCompleted:false}};
+const {sessionStore}=await import('./src/web/lib/session.ts');
+const {writeStep}=await import('./src/web/pages/onboarding/storage.ts');
+const {onboardingVersion}=await import('./src/shared/onboarding.ts');
+sessionStore.getSnapshot=()=>({session,epoch:0});
+let stream;
+globalThis.EventSource=class{
+ static CLOSED=2;
+ readyState=1;
+ closed=false;
+ constructor(){stream=this}
+ close(){this.closed=true;this.readyState=2}
+};
 let root=createRoot(document.getElementById('root'));
 const render=()=>act(async()=>root.render(createElement(Onboarding,{user:session.user,onComplete:async()=>{completions++;assert.equal(preparationCompleted,true,'No completion before server preparation finishes')}})));
 const settle=()=>act(async()=>{await new Promise(resolve=>setTimeout(resolve,20))});
 const waitFor=async condition=>{for(let at=0;at<100&&!(await condition());at++)await settle();assert.ok(await condition())};
 const button=text=>[...document.querySelectorAll('button')].find(value=>value.textContent.trim()===text);
+const changed=()=>act(async()=>stream.onmessage(new dom.window.MessageEvent('message',{data:JSON.stringify({type:'refresh'})})));
+const waitForModel=async condition=>{for(let at=0;at<200&&!condition();at++)await settle();assert.ok(condition())};
 await render();
 assert.equal(window.location.search,'');
 await waitFor(()=>button('Try again'));
@@ -3751,7 +3765,19 @@ const emailSkip=()=>document.querySelector('[data-step="email"] .ob-footer-end b
 assert.equal(emailSkip().disabled,false);
 await act(async()=>emailSkip().click());
 await waitFor(()=>document.querySelector('[data-step="about"]'));
-for(let at=0;at<10&&!document.querySelector('[data-step="privacy"]');at++){await act(async()=>{await new Promise(resolve=>setTimeout(resolve,1000))});if(button('Not now'))await act(async()=>button('Not now').click())}
+modelFailure='Synthetic provider failed while About you was open.';
+const beforeAboutRefresh=modelReads;
+await changed();
+await waitForModel(()=>modelReads>beforeAboutRefresh);
+assert.ok(document.querySelector('[data-step="about"]'));
+for(let at=0;at<10&&!document.querySelector('[data-step="brain"]');at++){await act(async()=>{await new Promise(resolve=>setTimeout(resolve,1000))});if(button('Not now'))await act(async()=>button('Not now').click())}
+await waitFor(()=>document.querySelector('[data-step="brain"]'));
+await waitForModel(()=>document.querySelector('.ob-brain-connected details')?.textContent.includes(modelFailure));
+modelFailure=undefined;
+await changed();
+await waitForModel(()=>!document.querySelector('.ob-brain-connected details'));
+assert.ok(document.querySelector('[data-step="brain"]'));
+await act(async()=>button('Continue').click());
 await waitFor(()=>document.querySelector('[data-step="privacy"]'));
 assert.ok(calls.includes('/api/onboarding/profile'));
 await act(async()=>button('Continue').click());
@@ -3778,31 +3804,26 @@ await act(async()=>button('Try again').click());
 await waitFor(()=>calls.filter(path=>path==='/api/account/prepare').length===preparationCalls+1);
 assert.equal(document.querySelector('.setup-progress [role="alert"]'),null);
 assert.equal(completions,0);
+const transportFailure='Synthetic fetch TypeError during workspace setup.';
+await act(async()=>completePreparation(new TypeError(transportFailure)));
+await waitFor(()=>document.querySelector('.setup-progress [role="alert"]'));
+assert.equal(document.querySelector('.setup-progress [role="alert"]').textContent.includes(transportFailure),false);
+assert.ok(document.querySelector('.setup-progress details').textContent.includes(transportFailure));
+assert.equal(completions,0);
+await act(async()=>button('Try again').click());
+await waitFor(()=>calls.filter(path=>path==='/api/account/prepare').length===preparationCalls+2);
+assert.equal(document.querySelector('.setup-progress [role="alert"]'),null);
 await act(async()=>{preparationCompleted=true;completePreparation()});
 await waitFor(()=>completions===1);
 await settle();
 assert.equal(completions,1);
 await act(async()=>root.unmount());
-const {sessionStore}=await import('./src/web/lib/session.ts');
-const {writeStep}=await import('./src/web/pages/onboarding/storage.ts');
-const {onboardingVersion}=await import('./src/shared/onboarding.ts');
-sessionStore.getSnapshot=()=>({session,epoch:0});
-let stream;
-globalThis.EventSource=class{
- static CLOSED=2;
- readyState=1;
- closed=false;
- constructor(){stream=this}
- close(){this.closed=true;this.readyState=2}
-};
 modelConnected=false;
 writeStep({owner:session.user.id,step:'brain',version:onboardingVersion});
 root=createRoot(document.getElementById('root'));
 await render();
 await waitFor(()=>button('Continue')?.disabled===true);
 assert.ok(stream);
-const changed=()=>act(async()=>stream.onmessage(new dom.window.MessageEvent('message',{data:JSON.stringify({type:'refresh'})})));
-const waitForModel=async condition=>{for(let at=0;at<200&&!condition();at++)await settle();assert.ok(condition())};
 modelConnected=true;
 await changed();
 await waitForModel(()=>button('Continue')?.disabled===false);

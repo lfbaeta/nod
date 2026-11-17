@@ -4332,42 +4332,61 @@ describe('model connections', { skip: !process.env.TEST_DATABASE_URL }, () => {
   });
 
   test('sign-in start failures keep the consent period that started the request', async (t) => {
-    const f = await fixture(t);
-    let entered!: () => void;
-    let reject!: (error: Error) => void;
-    const starting = new Promise<void>((resolve) => {
-      entered = resolve;
-    });
-    const result = new Promise<never>((_resolve, fail) => {
-      reject = fail;
-    });
-    const ownerId = 'fixture-sign-in-consent';
-    const owner = await f.create(ownerId, {
-      ...f.backend,
-      signIn: async () => {
-        entered();
-        return result;
-      },
-    });
-    const captured: Parameters<ProductAnalytics['capture']>[0][] = [];
-    const analytics = await createAnalytics({
-      provider: { capture: (event) => captured.push(event), shutdown: async () => {} },
-      environment: 'development',
-      dataRoot: '.',
-      installationId: randomUUID(),
-    });
-    t.after(() => analytics.shutdown());
-    analytics.setUsageData(ownerId, true);
-    const app = Fastify();
-    owner.register(app, analytics.forOwner(ownerId));
-    t.after(() => app.close());
-    const failed = assert.rejects(owner.start('openai'), /Synthetic sign-in start failure/);
-    await starting;
-    analytics.setUsageData(ownerId, false);
-    analytics.setUsageData(ownerId, true);
-    reject(new Error('Synthetic sign-in start failure'));
-    await failed;
-    assert.equal(captured.length, 0);
+    for (const boundary of ['provider', 'storage'])
+      for (const changeConsent of [false, true]) {
+        const f = await fixture(t);
+        let entered!: () => void;
+        let reject!: (error: Error) => void;
+        const starting = new Promise<void>((resolve) => {
+          entered = resolve;
+        });
+        const result = new Promise<never>((_resolve, fail) => {
+          reject = fail;
+        });
+        const ownerId = `fixture-sign-in-${boundary}-${changeConsent}`;
+        const owner = await f.create(ownerId, {
+          ...f.backend,
+          signIn: async () => {
+            entered();
+            return result;
+          },
+        });
+        if (boundary === 'storage')
+          f.keyStore.getKey = async () => {
+            entered();
+            return result;
+          };
+        const captured: Parameters<ProductAnalytics['capture']>[0][] = [];
+        const analytics = await createAnalytics({
+          provider: { capture: (event) => captured.push(event), shutdown: async () => {} },
+          environment: 'development',
+          dataRoot: '.',
+          installationId: randomUUID(),
+        });
+        t.after(() => analytics.shutdown());
+        analytics.setUsageData(ownerId, true);
+        const app = Fastify();
+        owner.register(app, analytics.forOwner(ownerId));
+        t.after(() => app.close());
+        const failed = assert.rejects(owner.start('openai'));
+        await starting;
+        if (changeConsent) {
+          analytics.setUsageData(ownerId, false);
+          analytics.setUsageData(ownerId, true);
+        }
+        reject(new Error('Synthetic sign-in start failure'));
+        await failed;
+        assert.deepEqual(
+          captured.map(({ event, properties }) => [
+            event,
+            properties.provider,
+            properties.method,
+            properties.status,
+          ]),
+          changeConsent ? [] : [['model_connection_changed', 'openai', 'subscription', 'failed']],
+          `${boundary}: consent changed=${changeConsent}`,
+        );
+      }
   });
 
   test('removing a selected model records only committed clearing within its consent period', async (t) => {

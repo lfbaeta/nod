@@ -20,6 +20,7 @@ import {
 import { DesktopPreferencesSetup } from './steps/desktop-preferences';
 import { useBrowserTimeZone } from '../../hooks/use-browser-time-zone';
 import { modelReady } from '../../hooks/use-models';
+import { usePageData } from '../../hooks/use-page-data';
 import { api, ApiError, errorMessage } from '../../lib/api';
 import { subscribeAppEvents } from '../../lib/app-events';
 import { pageDataCache } from '../../lib/page-data-cache';
@@ -79,6 +80,7 @@ export function Onboarding({
 }) {
   useBrowserTimeZone();
   const desktop = desktopRuntimeAvailable();
+  const models = usePageData<ModelsResponse>('/api/models');
   const [position, setPosition] = useState<{
     step: SetupStep;
     arrived: StepProps['arrived'];
@@ -132,13 +134,14 @@ export function Onboarding({
   const [runtimeStatus, setRuntimeStatus] = useState<DesktopStatus | null>(null);
   const [error, setError] = useState('');
   const [missing, setMissing] = useState<'brain' | 'email' | null>(null);
-  const [modelOk, setModelOk] = useState<boolean | null>(null);
+  const [skipModelStep, setSkipModelStep] = useState<boolean | null>(null);
   const [mining, setMining] = useState(false);
   const emailSkipped = useRef(false);
   const started = useRef(false);
   const preparationRequest = useRef<AbortController | null>(null);
   const active = useRef(false);
   const retrying = useRef(false);
+  const initialModelsChecked = useRef(false);
   const main = useRef<HTMLElement>(null);
   const viewed = useRef<{
     owner: string;
@@ -193,11 +196,14 @@ export function Onboarding({
 
   useEffect(() => {
     let current = true;
-    void api<ModelsResponse>('/api/models')
-      .then((models) => {
+    void pageDataCache
+      .refresh('/api/models')
+      .then(() => {
         if (!current) return;
-        const ready = modelReady(models) && !models.selectionIssue;
-        setModelOk(ready);
+        const latest = pageDataCache.getSnapshot<ModelsResponse>('/api/models');
+        const ready = !latest.error && modelReady(latest.data) && !latest.data?.selectionIssue;
+        initialModelsChecked.current = true;
+        setSkipModelStep(ready);
         if (!ready && index > onboardingSteps.indexOf('brain'))
           setPosition({ step: 'brain', arrived: 'forward' });
         if (ready)
@@ -206,12 +212,18 @@ export function Onboarding({
           );
       })
       .catch(() => {
-        if (current) setModelOk(false);
+        if (current) setSkipModelStep(false);
       });
     return () => {
       current = false;
     };
   }, [user.id]);
+
+  useEffect(() => {
+    if (!initialModelsChecked.current || !models.data) return;
+    const ready = modelReady(models.data) && !models.data.selectionIssue;
+    setSkipModelStep((previous) => previous !== false && ready);
+  }, [models.data]);
 
   useEffect(() => {
     active.current = true;
@@ -297,8 +309,8 @@ export function Onboarding({
       if (!request.signal.aborted) {
         setPreparation('failed');
         setPreparationError({
-          message: errorMessage(cause),
-          details: cause instanceof ApiError ? `HTTP ${cause.status}` : undefined,
+          message: cause instanceof ApiError ? cause.message : 'Nod could not finish setup.',
+          details: cause instanceof ApiError ? `HTTP ${cause.status}` : errorMessage(cause),
         });
         capture('ui_error', { area: 'onboarding', action: 'prepare' });
       }
@@ -336,7 +348,7 @@ export function Onboarding({
 
   function go(offset: 1 | -1) {
     let next = onboardingSteps[index + offset];
-    if (next === 'brain' && modelOk === true) next = onboardingSteps[index + offset * 2];
+    if (next === 'brain' && skipModelStep === true) next = onboardingSteps[index + offset * 2];
     if (next) {
       setError('');
       setCompletionFailed(false);
@@ -437,7 +449,7 @@ export function Onboarding({
     </div>
   );
 
-  const steps = onboardingSteps.filter((item) => item !== 'brain' || modelOk !== true);
+  const steps = onboardingSteps.filter((item) => item !== 'brain' || skipModelStep !== true);
   if (step === 'preferences')
     return <DesktopPreferencesSetup notice={recovery} onReady={next} steps={steps} />;
 

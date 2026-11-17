@@ -742,7 +742,7 @@ export async function createChannelSettings(
           webhook_failed:
             'Telegram did not confirm the webhook registration. Check the public URL and try again.',
           activation_pending:
-            'The setup was saved and the bot token is valid, but Nod could not start receiving messages. Retry the connection to continue.',
+            'The setup was saved, but message delivery could not be confirmed. Retry the connection to continue.',
           server_managed:
             'This channel is managed by the server environment. Update it there and restart Nod.',
           pairing_unavailable:
@@ -763,7 +763,7 @@ export async function createChannelSettings(
               error instanceof ChannelSetupFailure
                 ? error.details
                   ? error.reason === 'activation_pending'
-                    ? `The setup was saved, but message delivery could not be confirmed. ${error.details}`
+                    ? `${messages.activation_pending} ${error.details}`
                     : error.details
                   : messages[error.reason]
                 : 'Channel settings could not be saved securely. Check the setup before retrying.',
