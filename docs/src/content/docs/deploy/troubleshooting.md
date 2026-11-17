@@ -135,10 +135,6 @@ If setup still fails, select **Show startup log** and [report a bug](#report-a-b
 
 ## Models and apps
 
-### Port 1455 is already in use
-
-ChatGPT sign-in receives its callback on port 1455. Another Nod app or another sign-in is using it. Close it, then try again.
-
 ### An app connection fails
 
 Return to **Apps** and select **Connect** again. Keep the sign-in page and any window it opens until authorization finishes. A copied, expired or already used link cannot finish a connection. If the system's encrypted storage is locked, unlock it and restart Nod.
@@ -169,7 +165,7 @@ For HTTPS, use your public origin, such as `https://nod.example.com`. For an SSH
 
 Start a fresh connection from **Apps**. Keep its first page open and select **Continue to sign in**. Allow popups for Nod if no sign-in window opens. A page opened before a server restart or URL change cannot complete the connection.
 
-ChatGPT model sign-in uses a separate flow. Follow its [remote callback instructions](/connect/models/#connect-a-service); you don't need to expose port `1455` publicly.
+ChatGPT model sign-in uses a separate flow. Follow its [remote callback instructions](/connect/models/#connect-a-service); you don't need to expose its callback port publicly.
 
 ## Channels
 
