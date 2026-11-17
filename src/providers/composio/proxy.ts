@@ -272,7 +272,7 @@ export function createComposioProxy(options: {
   async function rpc(
     path: string,
     body: unknown,
-    options: { signal?: AbortSignal; timeout?: number; failure?: string } = {},
+    options: { signal?: AbortSignal; timeout?: number } = {},
   ) {
     const timeout = AbortSignal.timeout(options.timeout ?? 30_000);
     const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
@@ -284,10 +284,6 @@ export function createComposioProxy(options: {
       signal,
     });
     if (!response.ok) {
-      if (options.failure) {
-        await response.body?.cancel();
-        throw new Error(options.failure);
-      }
       const refusal = await read(response, signal)
         .then((text) => JSON.parse(text) as unknown)
         .catch(() => {
@@ -404,11 +400,7 @@ export function createComposioProxy(options: {
               mimeType: file.mimeType,
               data: Buffer.from(file.bytes).toString('base64'),
             },
-            {
-              signal,
-              timeout: 210_000,
-              failure: 'The file could not be uploaded for this app.',
-            },
+            { signal, timeout: 210_000 },
           ),
         );
       signal?.throwIfAborted();

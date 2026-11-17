@@ -757,17 +757,17 @@ export function App({ sessionState }: { sessionState: ReturnType<typeof useSessi
       .catch(() => {});
     return stop;
   }, []);
-  useEffect(() => {
+  useLayoutEffect(() => {
     return subscribeNavigation(() => setPath(window.location.pathname));
   }, []);
-  useEffect(
-    () =>
-      onFeedbackRequested(() => {
-        if (/^\/privacy\/?$/.test(window.location.pathname)) navigate('/');
-        setFeedbackRequest((value) => value + 1);
-      }),
-    [],
-  );
+  const sessionReady = !sessionState.loading && Boolean(sessionState.session?.user);
+  useEffect(() => {
+    if (!sessionReady) return;
+    return onFeedbackRequested(() => {
+      if (/^\/privacy\/?$/.test(window.location.pathname)) navigate('/');
+      setFeedbackRequest((value) => value + 1);
+    });
+  }, [sessionReady]);
   return (
     <>
       {desktopSettingsAvailable() && <div className="desktop-titlebar" aria-hidden="true" />}

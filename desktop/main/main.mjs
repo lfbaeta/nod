@@ -1074,6 +1074,15 @@ function showEngine({ focus = true } = {}) {
   engineWindows.add(engineWindow);
   protectWindow(engineWindow, engineOrigin);
   const window = engineWindow;
+  window.webContents.on('render-process-gone', (_event, details) => {
+    if (quitting || window.isDestroyed() || details.reason === 'clean-exit') return;
+    void writeDiagnostic(
+      `Window renderer stopped (${details.reason}, code ${details.exitCode}).`,
+    ).catch(() => {});
+    window.destroy();
+    update({ windowError: 'Nod’s window stopped unexpectedly. Try again or report the bug.' });
+    void showSettings('general', true);
+  });
   const failed = () => {
     if (quitting || window.isDestroyed() || !pendingRenderers.has(window)) return;
     welcomeNavigation ||= initialWelcome;
@@ -1998,7 +2007,7 @@ function refreshUpdateMenu() {
       Menu.buildFromTemplate([
         { label: 'Open Nod', click: showEngine },
         { label: 'Settings…', click: () => showSettings() },
-        { label: 'Send feedback…', click: showFeedback },
+        { label: 'Report bug…', click: showFeedback },
         {
           label,
           enabled: Boolean(updates) && !checkingUpdates,
@@ -2843,7 +2852,7 @@ else {
             submenu: [
               { role: 'about' },
               { label: 'Settings…', accelerator: 'CmdOrCtrl+,', click: () => showSettings() },
-              { label: 'Send feedback…', click: showFeedback },
+              { label: 'Report bug…', click: showFeedback },
               {
                 id: 'desktop-update',
                 label: 'Check for Updates…',
@@ -3076,6 +3085,7 @@ else {
         if (!isSetup(event) && !isEngine(event)) throw new Error('This action is unavailable.');
         if (isEngine(event) && remoteConnection) throw new Error('Local setup is unavailable.');
         if (options?.retry === true && !enginePreferencesReady) welcomeTransferError = undefined;
+        if (options?.retry === true) pendingFeedback = options.report === true;
         await transferWelcome();
         if (options?.retry === true && status.windowError) {
           showEngine();

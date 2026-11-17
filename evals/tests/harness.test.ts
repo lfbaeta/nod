@@ -1835,7 +1835,6 @@ test('scenario API calls use authenticated local transport and refuse outside ta
   t.after(() => app.close());
   registerLocalAccess(app, port, { key });
   createAccountSession({
-    origin,
     localUser: { id: 'synthetic-owner', name: 'Fixture', email: null, avatarUrl: null },
     accounts: {
       async read() {

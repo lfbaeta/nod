@@ -422,7 +422,6 @@ test(
     vault.registerRoutes(app);
     createAccountSession({
       accounts,
-      origin: `http://localhost:${port}`,
       localUser: { id: ownerId, name: 'You', email: null, avatarUrl: null },
       start: () => onboarding.complete(),
     }).register(app);
@@ -607,6 +606,8 @@ test(
           return { status: 'succeeded' };
         }
         if (context.prompt === 'limit race fixture') throw new Error(spendingLimitReached);
+        if (context.prompt === 'unexpected failure fixture')
+          throw new Error('Synthetic runtime failure.');
         if (context.prompt.startsWith('session-fixture')) {
           await sessionGates.get(context.prompt);
           return { status: 'succeeded' };
@@ -3202,6 +3203,29 @@ test(
           }
         },
       );
+
+      await t.test('an unexpected turn failure offers a bug report', async () => {
+        const failed = await thread.submitUserMessage('unexpected failure fixture');
+        await waitFor(settled(failed.turnId));
+        const shown = async () =>
+          (
+            await db.pool.query(
+              "SELECT presentation FROM messages WHERE turn_id=$1 AND role='assistant' AND stream_id=$2",
+              [failed.turnId, `failure:${failed.turnId}`],
+            )
+          ).rows.map((row) => row.presentation);
+        await waitFor(async () => (await shown()).length === 1);
+        const card = (await shown())[0];
+        assert.equal(card.type, 'bug-report');
+        const draft = (
+          await db.pool.query('SELECT owner_id,summary FROM feedback_drafts WHERE id=$1', [
+            card.draftId,
+          ])
+        ).rows[0];
+        assert.equal(draft.owner_id, ownerId);
+        assert.equal(draft.summary, card.summary);
+        assert.doesNotMatch(draft.summary, /Synthetic runtime failure/);
+      });
 
       await t.test('a reached spending limit pauses all but owner messages', async (t) => {
         const raced = await thread.submitUserMessage('limit race fixture');
@@ -10464,6 +10488,15 @@ test(
               assert.equal(turn.status, 'failed');
               assert.equal(presentedFailures.length, 0);
               assert.ok(shown.includes(turn.error));
+              assert.equal(
+                (
+                  await db.pool.query(
+                    "SELECT presentation FROM messages WHERE turn_id=$1 AND role='assistant' AND stream_id=$2",
+                    [submitted.turnId, `model-failure:${submitted.turnId}`],
+                  )
+                ).rows[0].presentation,
+                null,
+              );
               assert.match(shown, /Synthetic alternative connection\./);
               assert.equal((await request('GET', '/api/state')).json().chatRecovery, undefined);
               assert.match(shown, /\]\(\/settings\/models\)/);
@@ -11340,6 +11373,46 @@ test(
       'submitted',
     );
     assert.deepEqual(captured, ['feedback_sent']);
+  },
+);
+
+test(
+  'bug report drafts send their stored summary once and only for their owner',
+  { skip: !process.env.TEST_DATABASE_URL, timeout: 30_000 },
+  async (t) => {
+    const f = await feedbackFixture(t);
+    await f.pool.query(`CREATE TABLE IF NOT EXISTS feedback_drafts (
+      id uuid PRIMARY KEY, owner_id text NOT NULL, thread_id uuid NOT NULL,
+      summary text NOT NULL, created_at timestamptz NOT NULL DEFAULT now()
+    )`);
+    const owner = await f.open();
+    const other = await f.open();
+    const id = randomUUID();
+    await f.pool.query(
+      'INSERT INTO feedback_drafts(id,owner_id,thread_id,summary) VALUES($1,$2,$3,$4)',
+      [id, owner.ownerId, randomUUID(), 'Synthetic draft summary.'],
+    );
+    const send = {
+      method: 'POST' as const,
+      url: `/api/feedback/drafts/${id}/send`,
+      payload: { reportId: null },
+    };
+    assert.equal(
+      (await other.app.inject({ method: 'GET', url: `/api/feedback/drafts/${id}` })).statusCode,
+      404,
+    );
+    assert.equal((await other.app.inject(send)).statusCode, 404);
+    assert.equal(f.state.envelopes.length, 0);
+    assert.equal((await owner.app.inject(send)).json().status, 'submitted');
+    assert.equal((await owner.app.inject(send)).json().status, 'submitted');
+    assert.equal(f.state.envelopes.length, 1);
+    assert.equal(f.state.envelopes[0]!.submissionId, id);
+    assert.equal(f.state.envelopes[0]!.feedback, 'Synthetic draft summary.');
+    assert.equal(
+      (await owner.app.inject({ method: 'GET', url: `/api/feedback/drafts/${id}` })).json().receipt
+        .status,
+      'submitted',
+    );
   },
 );
 

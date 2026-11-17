@@ -195,6 +195,14 @@ const integrationConnectionCodes = [
   'invalid_request',
   'request_too_large',
   'request_timeout',
+  'upload_busy',
+  'file_too_large',
+  'invalid_file_data',
+  'tool_account_mismatch',
+  'invalid_upload_session',
+  'invalid_storage_destination',
+  'file_upload_failed',
+  'file_verification_failed',
 ] as const;
 export type IntegrationConnectionCode = (typeof integrationConnectionCodes)[number];
 export type IntegrationConnectionReason =
