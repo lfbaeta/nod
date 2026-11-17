@@ -120,7 +120,10 @@ export function Onboarding({
   const { step, arrived } = position;
   const index = step === 'preferences' ? onboardingSteps.length : onboardingSteps.indexOf(step);
   const [preparation, setPreparation] = useState<'pending' | 'ready' | 'failed'>('pending');
-  const [preparationError, setPreparationError] = useState('');
+  const [preparationError, setPreparationError] = useState<{
+    message: string;
+    details?: string;
+  }>();
   const [finishing, setFinishing] = useState(0);
   const [waitingForServices, setWaitingForServices] = useState(false);
   const [completionFailed, setCompletionFailed] = useState(false);
@@ -281,7 +284,7 @@ export function Onboarding({
     const request = new AbortController();
     preparationRequest.current = request;
     setPreparation('pending');
-    setPreparationError('');
+    setPreparationError(undefined);
     try {
       const response = await api<AccountPreparationResponse>('/api/account/prepare', {
         method: 'POST',
@@ -293,9 +296,10 @@ export function Onboarding({
     } catch (cause) {
       if (!request.signal.aborted) {
         setPreparation('failed');
-        setPreparationError(
-          `Setup preparation failed${cause instanceof ApiError ? ` (HTTP ${cause.status})` : ''}: ${errorMessage(cause)}`,
-        );
+        setPreparationError({
+          message: errorMessage(cause),
+          details: cause instanceof ApiError ? `HTTP ${cause.status}` : undefined,
+        });
         capture('ui_error', { area: 'onboarding', action: 'prepare' });
       }
     } finally {
@@ -368,11 +372,7 @@ export function Onboarding({
     finishing &&
     (waitingForServices || preparation !== 'ready' || completionFailed || runtimeError)
   ) {
-    const failure =
-      runtimeError ||
-      error ||
-      preparationError ||
-      (preparation === 'failed' ? 'Nod couldn’t finish setup.' : '');
+    const failure = runtimeError || error || preparationError?.message || '';
     const runtime = runtimeStatus?.runtime;
     const activeRuntime = runtime && runtime.phase !== 'ready' ? runtime : runtimeStatus;
     const title =
@@ -392,6 +392,7 @@ export function Onboarding({
               : 'Your workspace and browser are getting ready. This only happens once.'
         }
         error={failure || undefined}
+        details={!runtimeError && !error ? preparationError?.details : undefined}
       >
         {failure && missing && (
           <Button
@@ -421,11 +422,17 @@ export function Onboarding({
       <Notice>
         {runtimeError ||
           error ||
-          preparationError ||
+          preparationError?.message ||
           (saving ? 'Trying setup again…' : 'Setup needs another try.')}{' '}
         <Button variant="ghost" disabled={saving} onClick={() => void retry()}>
           Try again
         </Button>
+        {!runtimeError && !error && preparationError?.details && (
+          <details className="setup-progress-details" data-analytics-private>
+            <summary>Details</summary>
+            <pre>{preparationError.details}</pre>
+          </details>
+        )}
       </Notice>
     </div>
   );
