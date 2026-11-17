@@ -49,7 +49,14 @@ import { createCommandRedactor, createErrorRedactor } from '../src/server/redact
 import type { WorkspaceCommandRecord } from '../src/shared/execution.ts';
 
 test('only a terminal context failure requests a chat context restart', async (t) => {
-  for (const ending of ['context', 'context-length', 'recovered', 'quota', 'output'] as const)
+  for (const ending of [
+    'context',
+    'context-length',
+    'recovered',
+    'summary-access',
+    'quota',
+    'output',
+  ] as const)
     await t.test(ending, async () => {
       const run = () =>
         fixture(async (_tools, emit) => {
@@ -71,6 +78,8 @@ test('only a terminal context failure requests a chat context restart', async (t
             contextExhausted: ending !== 'quota',
           });
           emit({ type: 'message_end', status: 'failed' });
+          if (ending === 'summary-access')
+            emit({ type: 'error', message: 'Compaction failed: HTTP 401 access denied.' });
           if (ending === 'recovered') {
             emit({ type: 'retry', model: 'Synthetic model', attempt: 1, attempts: 3 });
             emit({ type: 'message_start' });
@@ -83,7 +92,7 @@ test('only a terminal context failure requests a chat context restart', async (t
         await assert.rejects(run, (error: unknown) => {
           if (ending === 'context' || ending === 'context-length')
             return error instanceof ContextLimitError;
-          if (ending === 'quota')
+          if (ending === 'quota' || ending === 'summary-access')
             return error instanceof ModelRequestError && !(error instanceof ContextLimitError);
           return error instanceof Error && !(error instanceof ContextLimitError);
         });

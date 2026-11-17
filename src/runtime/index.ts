@@ -1279,7 +1279,7 @@ export function createAgentRuntime(dependencies: {
         );
       if (modelIncomplete === 'context' && status === 'succeeded')
         throw new ContextLimitError(
-          `The model response was cut off because its context is full. Restart the chat context or choose a model with a larger context in ${appPages['/settings/models']}.`,
+          `The model response was cut off because its context is full. Choose a model with a larger context in ${appPages['/settings/models']}.`,
         );
       if (modelIncomplete && status === 'succeeded')
         throw new Error('The model response was incomplete. Say continue to try again.');
