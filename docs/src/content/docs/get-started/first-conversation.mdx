@@ -11,7 +11,7 @@ This page walks you through Nod's onboarding, your first tasks and what to do wh
 
 ## Onboarding at a glance
 
-Nod opens onboarding the first time you set up an assistant. After the welcome screen, Nod starts preparing its private computer in the background while you optionally connect email, tell it a bit about yourself, choose an AI provider if none is set up yet, decide whether to share conversation traces, and optionally leave an email address for updates. If you connected email, Nod reads a small sample of it in the meantime to suggest first ideas in chat.
+Nod opens onboarding the first time you set up an assistant. After the welcome screen, Nod starts preparing its private computer in the background while you optionally connect email, tell it a bit about yourself, choose an AI provider if none is set up yet, decide whether to share conversation traces where they're available, and optionally leave an email address for updates. If you connected email, Nod reads a small sample of it in the meantime to suggest first ideas in chat.
 
 For a local desktop assistant, you connect accounts while Nod prepares its computer. When you connect to a server, setup and saved connections belong to that server. A server that already completed onboarding opens your existing chat.
 
@@ -20,7 +20,7 @@ flowchart TD
   start[Welcome] --> email[Email or skip]:::muted
   email --> about[About you<br/>or skip]:::muted
   about --> model[Connect a model<br/>if needed]:::accent
-  model --> privacy[Conversation<br/>traces]:::muted
+  model --> privacy[Conversation traces<br/>if available]:::muted
   privacy --> join[Email updates<br/>or skip]:::muted
   join --> chat([Why Nod and<br/>first ideas in chat]):::go
 ```

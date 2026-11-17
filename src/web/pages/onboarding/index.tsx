@@ -109,9 +109,7 @@ export function Onboarding({
           (onboardingSteps.includes(savedStep as OnboardingStep) ||
             (desktop && savedStep === 'preferences')) &&
           savedStep !== 'welcome'
-        ? savedStep === 'privacy' && !privacy
-          ? 'join'
-          : (savedStep as SetupStep)
+        ? (savedStep as SetupStep)
         : welcomed
           ? 'email'
           : 'welcome';
@@ -122,7 +120,8 @@ export function Onboarding({
       quiet: welcomed && step === 'email',
     };
   });
-  const { step, arrived } = position;
+  const { arrived } = position;
+  const step = position.step === 'privacy' && !privacy ? 'join' : position.step;
   const index = step === 'preferences' ? onboardingSteps.length : onboardingSteps.indexOf(step);
   const [preparation, setPreparation] = useState<'pending' | 'ready' | 'failed'>('pending');
   const [preparationError, setPreparationError] = useState<{
@@ -214,9 +213,7 @@ export function Onboarding({
           setPosition({ step: 'brain', arrived: 'forward' });
         if (ready)
           setPosition((position) =>
-            position.step === 'brain'
-              ? { step: privacy ? 'privacy' : 'join', arrived: 'forward' }
-              : position,
+            position.step === 'brain' ? { step: 'privacy', arrived: 'forward' } : position,
           );
       })
       .catch(() => {
