@@ -7117,6 +7117,95 @@ test('OpenAI cache boundaries cover shared instructions and keep task paths outs
   assert.equal(bodies.length, 4);
 });
 
+test('OpenAI requests keep each recorded tool call namespace after a model or provider change', async () => {
+  const backend = createPiModelBackend({
+    fetch: async () => {
+      throw new Error('No live catalog request is allowed.');
+    },
+  });
+  const catalog = await backend.catalog('openai', 'api_key');
+  const tool = (name: string) => ({
+    name,
+    description: `Synthetic ${name} tool.`,
+    parameters: { type: 'object', properties: {} },
+  });
+  const usage = {
+    input: 1,
+    output: 1,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 2,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  };
+  const call = (provider: string, api: string, name: string, id: string) => [
+    {
+      role: 'assistant',
+      provider,
+      api,
+      model: 'gpt-6-luna',
+      content: [{ type: 'toolCall', id: `${id}|fc_${id}`, name, arguments: {}, namespace: name }],
+      stopReason: 'toolUse',
+      usage,
+      timestamp: 3,
+    },
+    {
+      role: 'toolResult',
+      toolCallId: `${id}|fc_${id}`,
+      toolName: name,
+      content: [{ type: 'text', text: 'Synthetic result' }],
+      isError: false,
+      timestamp: 4,
+    },
+  ];
+  const history = {
+    messages: [
+      {
+        role: 'system',
+        content: 'Synthetic instructions',
+        toolsAdded: [tool('read')],
+        timestamp: 1,
+      },
+      { role: 'user', content: 'Use the synthetic skills.', timestamp: 2 },
+      { role: 'system', content: '', toolsAdded: [tool('skills')], timestamp: 2 },
+      ...call('openai', 'openai-responses', 'skills', 'call_switched'),
+      ...call('openai-codex', 'openai-codex-responses', 'skills', 'call_moved'),
+      { role: 'user', content: 'Continue.', timestamp: 5 },
+    ],
+  } as Context;
+  const replayed = async (id: string) => {
+    const { runtime, model } = await createPiModelRuntime({
+      provider: 'openai',
+      method: 'api_key',
+      definition: catalog.find(({ choice }) => choice.id === id)!,
+      effort: 'low',
+      read: async () => ({ type: 'api_key', key: 'fixture-key' }),
+    });
+    let body: Record<string, any> = {};
+    await runtime.completeSimple(model, history, {
+      fetch: async (_input, init) => {
+        body = JSON.parse(String(init?.body));
+        return Response.json({ error: { message: 'Synthetic failure' } }, { status: 503 });
+      },
+    });
+    return {
+      tools: (body.tools ?? []).map((item: { name: string }) => item.name),
+      calls: Object.fromEntries(
+        body.input
+          .filter((item: { type?: string }) => item.type === 'function_call')
+          .map((item: { call_id: string; namespace?: string }) => [item.call_id, item.namespace]),
+      ),
+    };
+  };
+  assert.deepEqual(await replayed('gpt-6.1-sol'), {
+    tools: [],
+    calls: { call_switched: 'skills', call_moved: 'skills' },
+  });
+  assert.deepEqual(await replayed('gpt-5.4-mini'), {
+    tools: ['read', 'skills'],
+    calls: { call_switched: undefined, call_moved: undefined },
+  });
+});
+
 test('a model request with no response after it is sent times out for a retry, while a stop stays a cancellation', async (t) => {
   const { createPiModelBackend, createPiModelRuntime, modelFirstEventMs } =
     await import('../src/providers/pi/models.ts');

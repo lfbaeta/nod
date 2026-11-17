@@ -256,7 +256,7 @@ For a context window below 65,536 tokens, Nod uses short instructions and loads 
 
 Nod limits reply size and asks Pi to start history compaction earlier. Pi handles context limits from the provider and can summarize older work before continuing. Large images, tool schemas or a request that cannot be summarized can still need a larger window. A failure keeps the provider's or compaction's specific reason.
 
-Pi also manages saved context when you switch models. The full chat stays saved, and Nod can search earlier details. If the request or its summary cannot fit the new model, choose a model with more context or shorten the request.
+Pi also manages saved context when you switch models. The full chat stays saved, and Nod can search earlier details. Earlier OpenAI tool calls keep the namespace OpenAI gave them when you switch to another OpenAI model or connection, so the new model accepts that history. If the request or its summary cannot fit the new model, choose a model with more context or shorten the request.
 
 The same server checks still decide app actions, sign-ins and payments. A smaller context window does not change those checks. Model ability still affects whether Nod can complete a task.
 
