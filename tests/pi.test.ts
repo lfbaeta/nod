@@ -5267,7 +5267,7 @@ test('large tool results stay in workspace after a completed turn', async (t) =>
 });
 
 test('a long turn extends the previous request unchanged until Pi compacts, so provider prompt caches keep hitting', async (t) => {
-  const steps = 9;
+  const steps = 16;
   const { bodies, summary, url, close } = await contextRecoveryServer(
     steps,
     1,
@@ -5326,6 +5326,7 @@ test('a long turn extends the previous request unchanged until Pi compacts, so p
     const kept = JSON.stringify(body.messages.slice(0, previous.messages.length));
     return kept === JSON.stringify(previous.messages) ? [] : [index];
   });
+  assert.ok(bodies.some(summary));
   assert.deepEqual(rewritten, []);
 });
 
