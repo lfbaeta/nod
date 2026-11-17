@@ -9,15 +9,15 @@ Releases from before the rename to Nod are the `desktop-v*` [GitHub releases](ht
 - **proactivity:** Don't start automatic preparation on a model without a price. [#990](https://github.com/n8n-io/nod/pull/990) (357f34d)
 - **pi:** Remove duplicate context budgeting. [commit](https://github.com/n8n-io/nod/commit/3017a9448fc96cc1bf95f60eb370c143e79f53f6) (3017a94)
 - **browser:** Pace handoff frames to display. [commit](https://github.com/n8n-io/nod/commit/6cebf4f0941cdae2f2f40f7cdbf61a4720944ec7) (6cebf4f)
-- **apps:** Start the email check time limit when the check runs (LAB-1013). [#976](https://github.com/n8n-io/nod/pull/976) (990285a)
+- **apps:** Start the email check time limit when the check runs. [#976](https://github.com/n8n-io/nod/pull/976) (990285a)
 - **agent:** Balance feedback during long tasks. [#975](https://github.com/n8n-io/nod/pull/975) (47cfee3)
-- **workspace:** Recover after an uncertain command and keep long self-hosted commands open (LAB-1201). [#972](https://github.com/n8n-io/nod/pull/972) (64dd140)
-- **channels:** Accept the owner's WhatsApp messages sent from a private ID (LAB-1181). [#974](https://github.com/n8n-io/nod/pull/974) (48970da)
-- **browser:** Open a profile locked by a replaced browser container (LAB-1188). [#973](https://github.com/n8n-io/nod/pull/973) (78d9fb6)
-- **desktop:** Skip expired system certificates (LAB-1222). [#971](https://github.com/n8n-io/nod/pull/971) (f43c22e)
-- **desktop:** Restart from the update notice without asking again (LAB-1304, LAB-1220). [#970](https://github.com/n8n-io/nod/pull/970) (f89047f)
-- **pi:** Send tool schemas that match JSON Schema draft 2020-12 (LAB-1295). [#968](https://github.com/n8n-io/nod/pull/968) (c892150)
-- **apps:** Sign connection service requests again when the computer clock is off (LAB-1308). [#967](https://github.com/n8n-io/nod/pull/967) (c4816b1)
+- **workspace:** Recover after an uncertain command and keep long self-hosted commands open. [#972](https://github.com/n8n-io/nod/pull/972) (64dd140)
+- **channels:** Accept the owner's WhatsApp messages sent from a private ID. [#974](https://github.com/n8n-io/nod/pull/974) (48970da)
+- **browser:** Open a profile locked by a replaced browser container. [#973](https://github.com/n8n-io/nod/pull/973) (78d9fb6)
+- **desktop:** Skip expired system certificates. [#971](https://github.com/n8n-io/nod/pull/971) (f43c22e)
+- **desktop:** Restart from the update notice without asking again. [#970](https://github.com/n8n-io/nod/pull/970) (f89047f)
+- **pi:** Send tool schemas that match JSON Schema draft 2020-12. [#968](https://github.com/n8n-io/nod/pull/968) (c892150)
+- **apps:** Sign connection service requests again when the computer clock is off. [#967](https://github.com/n8n-io/nod/pull/967) (c4816b1)
 
 ### Performance
 
