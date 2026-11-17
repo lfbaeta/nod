@@ -492,6 +492,7 @@ function Setup({ c, provider }: { c: Connect; provider: ModelProvider }) {
 
 function Connected({ c, onReconnect }: { c: Connect; onReconnect: () => void }) {
   const source = c.shown!;
+  const issue = c.data?.selection?.connectionId === source.id ? c.data.selectionIssue : undefined;
   const saved = modelProviderInfo[source.provider]?.catalog === 'bundled';
   const choosing =
     source.status === 'connected' &&
@@ -551,7 +552,11 @@ function Connected({ c, onReconnect }: { c: Connect; onReconnect: () => void }) 
               : 'Use another account'}
         </Button>
       )}
-      <Problem>{c.models.error}</Problem>
+      <Problem>
+        {c.models.error ||
+          (issue &&
+            `The selected model's last request failed: ${issue.reason} You can choose another model or provider.`)}
+      </Problem>
       <button type="button" className="ob-link ob-brain-another" onClick={c.addAnother}>
         Use a different provider
       </button>

@@ -177,7 +177,7 @@ export function Onboarding({
     void api<ModelsResponse>('/api/models')
       .then((models) => {
         if (!current) return;
-        const ready = modelReady(models);
+        const ready = modelReady(models) && !models.selectionIssue;
         setModelOk(ready);
         if (!ready && index > onboardingSteps.indexOf('brain'))
           setPosition({ step: 'brain', arrived: 'forward' });

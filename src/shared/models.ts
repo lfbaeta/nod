@@ -179,6 +179,7 @@ export interface ModelIssue {
 export interface ModelsResponse {
   connections: ModelConnection[];
   selection: ModelSelection | null;
+  selectionIssue?: ModelIssue;
   routes: ModelRoutes;
   light: ModelSelection | null;
   unpricedPreparationModel?: string;

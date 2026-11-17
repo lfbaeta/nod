@@ -3240,6 +3240,7 @@ describe('model connections', { skip: !process.env.TEST_DATABASE_URL }, () => {
       /HTTP 402; This request requires more credits\./,
     );
     assert.match(service.current.issue!.reason, /requires more credits/);
+    assert.deepEqual(service.view().selectionIssue, service.current.issue);
     assert.equal(await allowed(), false);
     assert.equal(await allowed(second), true);
     assert.equal(service.paused({ kind: 'schedule', schedule: first }), true);
@@ -3291,6 +3292,8 @@ describe('model connections', { skip: !process.env.TEST_DATABASE_URL }, () => {
     await service.select(second);
     assert.equal(checks, 3);
     assert.equal(service.current.issue, undefined);
+    assert.equal(service.view().selectionIssue, undefined);
+    assert.match(service.view().connections[0]!.issue!.reason, /requires more credits/);
     reply = healthy;
     assert.equal((await ask()).stopReason, 'stop');
     assert.equal(calls, 6);

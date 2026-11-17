@@ -1249,6 +1249,7 @@ export function createModelService(options: {
     },
     view(): ModelsResponse {
       const unpriced = unpricedPreparationModel();
+      const selectionIssue = selection ? service.issue(selection) : undefined;
       return {
         connections: rows.map(
           ({ id, provider, method, label, status, managed, models, keyEnding, issue }) => ({
@@ -1270,6 +1271,7 @@ export function createModelService(options: {
           }),
         ),
         selection,
+        ...(selectionIssue ? { selectionIssue } : {}),
         routes,
         light: lightModel(),
         ...(unpriced ? { unpricedPreparationModel: unpriced } : {}),
