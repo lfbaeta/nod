@@ -598,8 +598,26 @@ export function createAgentBrowserComputer(options: {
         'The workspace browser could not respond. Restart its container and try again.',
       );
     }
+    const reason = typeof response.error === 'string' ? response.error : undefined;
+    const failure =
+      action === 'navigate' &&
+      response.success === false &&
+      reason !== undefined &&
+      /^Navigation failed: net::ERR_[A-Z_]+/.test(reason)
+        ? new BrowserActionError('browser_navigation_failed')
+        : action === 'navigate' &&
+            response.success === false &&
+            reason?.startsWith('Operation timed out.')
+          ? new DaemonCommandError()
+          : result.exitCode || response.success === false
+            ? new DaemonCommandError(reason)
+            : undefined;
     if (action === 'navigate') {
-      await drainInterruptedCommand(state, 'connect', () => daemonSocket(state, options.signal));
+      await drainInterruptedCommand(state, 'connect', () =>
+        daemonSocket(state, options.signal),
+      ).catch((error: unknown) => {
+        throw failure ?? error;
+      });
       state.recovered = false;
       state.pageSize = undefined;
       if (viewport)
@@ -609,22 +627,7 @@ export function createAgentBrowserComputer(options: {
           { signal: options.signal },
         );
     }
-    if (
-      action === 'navigate' &&
-      response.success === false &&
-      typeof response.error === 'string' &&
-      /^Navigation failed: net::ERR_[A-Z_]+/.test(response.error)
-    )
-      throw new BrowserActionError('browser_navigation_failed');
-    if (
-      action === 'navigate' &&
-      response.success === false &&
-      typeof response.error === 'string' &&
-      response.error.startsWith('Operation timed out.')
-    )
-      throw new DaemonCommandError();
-    if (result.exitCode || response.success === false)
-      throw new DaemonCommandError(typeof response.error === 'string' ? response.error : undefined);
+    if (failure) throw failure;
     return response.data ?? {};
   }
 
