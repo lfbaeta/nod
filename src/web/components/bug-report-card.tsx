@@ -244,7 +244,7 @@ export function BugReportCard({
             {draft && (!draft.enabled || draft.recipient) && (
               <p className="bug-report-card-note">
                 {draft.enabled
-                  ? `Sends this summary to ${draft.recipient}.`
+                  ? `Sends this summary as written${included ? ' and the diagnostic report' : ''} to ${draft.recipient}.`
                   : 'Sending isn’t enabled in this build.'}
               </p>
             )}
