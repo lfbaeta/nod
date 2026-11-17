@@ -13,13 +13,13 @@ import {
 export const areas = memoryAreas;
 export const maxBytes = 256 * 1024;
 
-const digitRun = /\d+(?:[ \t\n-]\d+)*/g;
+const digitRun = /\d+(?:[\s-]+\d+)*/g;
 const keyOrLoginLink = new RegExp(
   String.raw`https?:\/\/[^\s/@]+:[^\s/@]+@|` + secretToken.source,
   'i',
 );
 function holdsCard(run: string) {
-  const groups = run.split(/[ \t\n-]/);
+  const groups = run.split(/[\s-]+/);
   for (let start = 0; start < groups.length; start++) {
     let digits = '';
     for (let end = start; end < groups.length; end++) {
