@@ -21,6 +21,8 @@ import { DesktopPreferencesSetup } from './steps/desktop-preferences';
 import { useBrowserTimeZone } from '../../hooks/use-browser-time-zone';
 import { modelReady } from '../../hooks/use-models';
 import { api, ApiError, errorMessage } from '../../lib/api';
+import { subscribeAppEvents } from '../../lib/app-events';
+import { pageDataCache } from '../../lib/page-data-cache';
 import { analyticsForCurrentSession, captureAnalytics } from '../../lib/analytics';
 import { clearStored, readStep, writeStep } from './storage';
 import { Welcome } from './steps/welcome';
@@ -143,6 +145,19 @@ export function Onboarding({
   useEffect(() => {
     desktopRendererReady();
   }, []);
+
+  useEffect(
+    () =>
+      subscribeAppEvents(user.id, {
+        open: () => pageDataCache.revalidateActive('/api/models'),
+        error() {},
+        message: (event) => {
+          if (JSON.parse(event.data).type === 'refresh')
+            pageDataCache.revalidateActive('/api/models');
+        },
+      }),
+    [user.id],
+  );
 
   useEffect(() => {
     writeStep({ owner: user.id, step, version: onboardingVersion });

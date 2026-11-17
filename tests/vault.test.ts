@@ -3596,7 +3596,7 @@ test('analytics routes collapse private paths to known pages', async () => {
   );
 });
 
-test('desktop onboarding turns on open at login once and resumes without repeating it', async () => {
+test('desktop onboarding saves native preferences once and follows model updates without stale reads', async () => {
   const result = await runProcess(process.execPath, ['--import', 'tsx', '--input-type=module'], {
     timeoutMs: 30_000,
     input: String.raw`
@@ -3629,6 +3629,9 @@ let completePreparation;
 let preparationCompleted=false;
 let completions=0;
 let statusListener;
+let modelConnected=true;
+let modelFailure;
+let modelReads=0;
 window.nodDesktop={
   ready:async()=>{rendererReady++},
   status:async()=>({phase:'ready',runtime:{phase:'preparing'}}),
@@ -3641,7 +3644,7 @@ const calls=[];
 window.fetch=globalThis.fetch=async(url,options={})=>{
  const path=new URL(url,window.location.href).pathname;calls.push(path);
  if(path==='/api/account/prepare')return new Promise(resolve=>{completePreparation=()=>resolve(Response.json({ok:true}))});
- if(path==='/api/models')return Response.json({connections:[{id:'synthetic',provider:'anthropic',method:'api_key',label:'Synthetic model',managed:false,status:'connected',models:[{id:'synthetic-model',name:'Synthetic model',efforts:['medium'],images:false,contextWindow:1000}]}],selection:{connectionId:'synthetic',modelId:'synthetic-model',effort:'medium'}});
+ if(path==='/api/models'){modelReads++;return Response.json({connections:modelConnected?[{id:'synthetic',provider:'anthropic',method:'api_key',label:'Synthetic model',managed:false,status:'connected',models:[{id:'synthetic-model',name:'Synthetic model',efforts:['medium'],images:false,contextWindow:1000}]}]:[],selection:modelConnected?{connectionId:'synthetic',modelId:'synthetic-model',effort:'medium'}:null,...(modelFailure?{selectionIssue:{reason:modelFailure}}:{})})}
  if(path==='/api/preferences')return Response.json({timeZone:'Europe/Lisbon',locale:'en-GB',hourCycle:'h23',quietHoursEnabled:false,quietStart:'22:00',quietEnd:'08:00',speechReply:'auto',speechVoice:null});
  if(path==='/api/speech')return Response.json({transcription:false,synthesis:false,voices:[],speechVoice:null,speechReply:'auto'});
  if(path==='/api/memory')return Response.json({saving:true,sensitive:false,notes:[],skills:[],archive:[]});
@@ -3766,6 +3769,39 @@ await waitFor(()=>completions===1);
 await settle();
 assert.equal(completions,1);
 await act(async()=>root.unmount());
+const {sessionStore}=await import('./src/web/lib/session.ts');
+const {writeStep}=await import('./src/web/pages/onboarding/storage.ts');
+const {onboardingVersion}=await import('./src/shared/onboarding.ts');
+sessionStore.getSnapshot=()=>({session,epoch:0});
+let stream;
+globalThis.EventSource=class{
+ static CLOSED=2;
+ readyState=1;
+ closed=false;
+ constructor(){stream=this}
+ close(){this.closed=true;this.readyState=2}
+};
+modelConnected=false;
+writeStep({owner:session.user.id,step:'brain',version:onboardingVersion});
+root=createRoot(document.getElementById('root'));
+await render();
+await waitFor(()=>button('Continue')?.disabled===true);
+assert.ok(stream);
+const changed=()=>act(async()=>stream.onmessage(new dom.window.MessageEvent('message',{data:JSON.stringify({type:'refresh'})})));
+const waitForModel=async condition=>{for(let at=0;at<200&&!condition();at++)await settle();assert.ok(condition())};
+modelConnected=true;
+await changed();
+await waitForModel(()=>button('Continue')?.disabled===false);
+modelFailure='Synthetic provider rejected the selected model request.';
+await changed();
+await waitForModel(()=>document.querySelector('[role="alert"]')?.textContent.includes(modelFailure));
+assert.equal(button('Continue').disabled,false);
+await act(async()=>root.unmount());
+assert.equal(stream.closed,true);
+const beforeClosed=modelReads;
+await changed();
+await settle();
+assert.equal(modelReads,beforeClosed);
 await rm(directory,{recursive:true,force:true});
 dom.window.close();
 process.exit(0);
