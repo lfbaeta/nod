@@ -1022,18 +1022,12 @@ function portableToolCallIds(messages: Context['messages'], model: string): Cont
   });
 }
 
-function recordedNamespaces(
-  input: Array<Record<string, unknown>>,
-  tools: unknown,
-  messages: Context['messages'],
-) {
-  const names = (list: unknown) =>
-    Array.isArray(list) ? list.map((tool: { name?: unknown }) => tool.name) : [];
-  const direct = new Set(names(tools));
+function recordedNamespaces(input: Array<Record<string, unknown>>, messages: Context['messages']) {
   const loaded = new Set(
     input.flatMap((item) =>
-      item.type === 'additional_tools' || item.type === 'tool_search_output'
-        ? names(item.tools)
+      (item.type === 'additional_tools' || item.type === 'tool_search_output') &&
+      Array.isArray(item.tools)
+        ? item.tools.map((tool: { name?: unknown }) => tool.name)
         : [],
     ),
   );
@@ -1053,8 +1047,7 @@ function recordedNamespaces(
     return (item.type === 'function_call' || item.type === 'custom_tool_call') &&
       item.namespace === undefined &&
       namespace &&
-      loaded.has(item.name) &&
-      !direct.has(item.name)
+      loaded.has(item.name)
       ? { ...item, namespace }
       : item;
   });
@@ -1315,8 +1308,7 @@ export async function createPiModelRuntime(
         }
         if (access.provider === 'openrouter')
           body.provider = { require_parameters: true, allow_fallbacks: false };
-        if (Array.isArray(body.input))
-          body.input = recordedNamespaces(body.input, body.tools, replay.messages);
+        if (Array.isArray(body.input)) body.input = recordedNamespaces(body.input, replay.messages);
         if (
           access.provider === 'openai' &&
           !subscription &&

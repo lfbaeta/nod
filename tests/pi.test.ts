@@ -7127,7 +7127,14 @@ test('OpenAI requests keep each recorded tool call namespace after a model or pr
   const tool = (name: string) => ({
     name,
     description: `Synthetic ${name} tool.`,
-    parameters: { type: 'object', properties: {} },
+    parameters: {
+      type: 'object',
+      properties: { command: { type: 'string' } },
+      required: ['command'],
+    },
+    ...(name === 'shell'
+      ? { constrainedSampling: { type: 'grammar', variants: { openai_regex: '[a-z ]+' } } }
+      : {}),
   });
   const usage = {
     input: 1,
@@ -7143,7 +7150,15 @@ test('OpenAI requests keep each recorded tool call namespace after a model or pr
       provider,
       api,
       model: 'gpt-6-luna',
-      content: [{ type: 'toolCall', id: `${id}|fc_${id}`, name, arguments: {}, namespace: name }],
+      content: [
+        {
+          type: 'toolCall',
+          id: `${id}|fc_${id}`,
+          name,
+          arguments: { command: 'ls' },
+          namespace: name,
+        },
+      ],
       stopReason: 'toolUse',
       usage,
       timestamp: 3,
@@ -7166,9 +7181,15 @@ test('OpenAI requests keep each recorded tool call namespace after a model or pr
         timestamp: 1,
       },
       { role: 'user', content: 'Use the synthetic skills.', timestamp: 2 },
-      { role: 'system', content: '', toolsAdded: [tool('skills'), tool('retired')], timestamp: 2 },
+      {
+        role: 'system',
+        content: '',
+        toolsAdded: [tool('skills'), tool('shell'), tool('retired')],
+        timestamp: 2,
+      },
       ...call('openai', 'openai-responses', 'skills', 'call_switched'),
       ...call('openai-codex', 'openai-codex-responses', 'skills', 'call_moved'),
+      ...call('openai', 'openai-responses', 'shell', 'call_custom'),
       ...call('openai', 'openai-responses', 'retired', 'call_retired'),
       { role: 'system', content: '', toolsRemoved: [{ name: 'retired' }], timestamp: 5 },
       { role: 'user', content: 'Continue.', timestamp: 5 },
@@ -7193,18 +7214,31 @@ test('OpenAI requests keep each recorded tool call namespace after a model or pr
       tools: (body.tools ?? []).map((item: { name: string }) => item.name),
       calls: Object.fromEntries(
         body.input
-          .filter((item: { type?: string }) => item.type === 'function_call')
-          .map((item: { call_id: string; namespace?: string }) => [item.call_id, item.namespace]),
+          .filter((item: { type?: string }) => item.type?.endsWith('_call'))
+          .map((item: { call_id: string; type: string; namespace?: string }) => [
+            item.call_id,
+            `${item.type} ${item.namespace}`,
+          ]),
       ),
     };
   };
   assert.deepEqual(await replayed('gpt-6.1-sol'), {
     tools: [],
-    calls: { call_switched: 'skills', call_moved: 'skills', call_retired: 'retired' },
+    calls: {
+      call_switched: 'function_call skills',
+      call_moved: 'function_call skills',
+      call_custom: 'custom_tool_call shell',
+      call_retired: 'function_call retired',
+    },
   });
   assert.deepEqual(await replayed('gpt-5.4-mini'), {
-    tools: ['read', 'skills'],
-    calls: { call_switched: undefined, call_moved: undefined, call_retired: undefined },
+    tools: ['read', 'skills', 'shell'],
+    calls: {
+      call_switched: 'function_call undefined',
+      call_moved: 'function_call undefined',
+      call_custom: 'custom_tool_call undefined',
+      call_retired: 'function_call undefined',
+    },
   });
 });
 
