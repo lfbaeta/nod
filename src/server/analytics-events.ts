@@ -485,7 +485,14 @@ export const analyticsEvent = z.discriminatedUnion('event', [
           pricing: z.enum(['api', 'plan_estimate', 'unavailable']),
           duration_ms: duration.optional(),
         })
-        .strict(),
+        .strict()
+        .refine(
+          ({ purpose, memory_operation }) => memory_operation === undefined || purpose === 'memory',
+          {
+            message: 'Memory operations require a memory request.',
+            path: ['memory_operation'],
+          },
+        ),
     })
     .strict(),
   z

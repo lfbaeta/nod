@@ -784,6 +784,20 @@ test('memory request analytics keep fixed operations and honor usage sharing', a
   assert.equal(captured[2].properties.duration_ms, 950);
   assert.equal(JSON.stringify(captured).includes('private-operation-canary'), false);
   assert.equal(JSON.stringify(captured).includes('private-input-canary'), false);
+  for (const purpose of ['agent', 'review', 'tasks', 'task_classification'] as const)
+    analytics.forOwner(owner)({
+      event: 'model_used',
+      properties: {
+        provider: 'openai',
+        purpose,
+        memory_operation: 'recall',
+        outcome: 'succeeded',
+        input_tokens: 0,
+        output_tokens: 0,
+        pricing: 'unavailable',
+      },
+    });
+  assert.equal(captured.length, 8);
   assert.equal(
     analyticsEvent.safeParse({
       event: 'model_used',
