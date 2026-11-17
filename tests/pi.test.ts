@@ -7166,9 +7166,11 @@ test('OpenAI requests keep each recorded tool call namespace after a model or pr
         timestamp: 1,
       },
       { role: 'user', content: 'Use the synthetic skills.', timestamp: 2 },
-      { role: 'system', content: '', toolsAdded: [tool('skills')], timestamp: 2 },
+      { role: 'system', content: '', toolsAdded: [tool('skills'), tool('retired')], timestamp: 2 },
       ...call('openai', 'openai-responses', 'skills', 'call_switched'),
       ...call('openai-codex', 'openai-codex-responses', 'skills', 'call_moved'),
+      ...call('openai', 'openai-responses', 'retired', 'call_retired'),
+      { role: 'system', content: '', toolsRemoved: [{ name: 'retired' }], timestamp: 5 },
       { role: 'user', content: 'Continue.', timestamp: 5 },
     ],
   } as Context;
@@ -7198,11 +7200,11 @@ test('OpenAI requests keep each recorded tool call namespace after a model or pr
   };
   assert.deepEqual(await replayed('gpt-6.1-sol'), {
     tools: [],
-    calls: { call_switched: 'skills', call_moved: 'skills' },
+    calls: { call_switched: 'skills', call_moved: 'skills', call_retired: 'retired' },
   });
   assert.deepEqual(await replayed('gpt-5.4-mini'), {
     tools: ['read', 'skills'],
-    calls: { call_switched: undefined, call_moved: undefined },
+    calls: { call_switched: undefined, call_moved: undefined, call_retired: undefined },
   });
 });
 

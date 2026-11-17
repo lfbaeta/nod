@@ -1027,28 +1027,37 @@ function recordedNamespaces(
   tools: unknown,
   messages: Context['messages'],
 ) {
-  const declared = new Set(
-    Array.isArray(tools) ? tools.map((tool: { name?: unknown }) => tool.name) : [],
+  const names = (list: unknown) =>
+    Array.isArray(list) ? list.map((tool: { name?: unknown }) => tool.name) : [];
+  const direct = new Set(names(tools));
+  const loaded = new Set(
+    input.flatMap((item) =>
+      item.type === 'additional_tools' || item.type === 'tool_search_output'
+        ? names(item.tools)
+        : [],
+    ),
   );
-  const namespaces = new Map(
+  const recorded = new Map(
     messages.flatMap((message) =>
-      message.role === 'assistant'
+      message.role === 'assistant' && Array.isArray(message.content)
         ? message.content.flatMap((part) =>
-            part.type === 'toolCall' && part.namespace && !declared.has(part.name)
-              ? [[part.id.split('|')[0], part.namespace] as const]
+            part.type === 'toolCall' && part.namespace
+              ? [[`${part.id.split('|')[0]}\n${part.name}`, part.namespace] as const]
               : [],
           )
         : [],
     ),
   );
-  return input.map((item) =>
-    (item.type === 'function_call' || item.type === 'custom_tool_call') &&
-    item.namespace === undefined &&
-    typeof item.call_id === 'string' &&
-    namespaces.has(item.call_id)
-      ? { ...item, namespace: namespaces.get(item.call_id) }
-      : item,
-  );
+  return input.map((item) => {
+    const namespace = recorded.get(`${item.call_id}\n${item.name}`);
+    return (item.type === 'function_call' || item.type === 'custom_tool_call') &&
+      item.namespace === undefined &&
+      namespace &&
+      loaded.has(item.name) &&
+      !direct.has(item.name)
+      ? { ...item, namespace }
+      : item;
+  });
 }
 
 function textContentParts(event: unknown) {
