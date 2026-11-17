@@ -11,6 +11,7 @@ export async function modelServiceError(
   response: Response,
   service: string,
   secrets: string[] = [],
+  detailFields = ['message', 'type', 'code', 'status', 'param'],
 ) {
   const redact = (value: string) =>
     secrets.reduce(
@@ -41,7 +42,9 @@ export async function modelServiceError(
       if (typeof error === 'string') reason = serviceReason = error;
       else if (error && typeof error === 'object') {
         if (typeof error.message === 'string') serviceReason = error.message;
-        const fields = ['message', 'type', 'code', 'status', 'param'].flatMap((name) =>
+        else if (detailFields.includes('description') && typeof error.description === 'string')
+          serviceReason = error.description;
+        const fields = detailFields.flatMap((name) =>
           typeof error[name] === 'string' || typeof error[name] === 'number'
             ? [`${name}: ${error[name]}`]
             : [],

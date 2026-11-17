@@ -504,8 +504,11 @@ export async function createChannelSettings(
         await store.save({ provider, enabled: true, ciphertext, summary });
         try {
           summary = await activate(provider, { environment: configured, summary });
-        } catch {
-          throw new ChannelSetupFailure('activation_pending');
+        } catch (error) {
+          throw new ChannelSetupFailure(
+            'activation_pending',
+            error instanceof ChannelSetupFailure ? error.details : undefined,
+          );
         }
         return { ok: true, channel: summary, ...(pairingUrl ? { pairingUrl } : {}) };
       }
@@ -758,7 +761,11 @@ export async function createChannelSettings(
           .send({
             error:
               error instanceof ChannelSetupFailure
-                ? messages[error.reason]
+                ? error.details
+                  ? error.reason === 'activation_pending'
+                    ? `The setup was saved, but message delivery could not be confirmed. ${error.details}`
+                    : error.details
+                  : messages[error.reason]
                 : 'Channel settings could not be saved securely. Check the setup before retrying.',
           });
       });

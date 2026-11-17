@@ -144,6 +144,8 @@ After a restart or network loss, Nod uses the saved link to connect again. Repli
 
 If messages stop, open **Channels** and select **Reconnect** for Telegram or WhatsApp. Nod restarts message delivery with the saved settings. It keeps your paired Telegram account and saved WhatsApp device keys. A saved Telegram webhook is registered again. Telegram polling errors show the service's status and reason on this page.
 
+If Telegram or the WhatsApp Cloud API rejects setup, Nod shows the service's HTTP status and reason. Submitted tokens and secrets are removed. If webhook registration fails after setup was saved, the error also states that message delivery is unconfirmed.
+
 **Reconnect** also works for server-managed channels. Their settings still come from the server environment. For WhatsApp, the connection panel opens after reconnecting. If WhatsApp has signed out the device, select **Start again** and scan a new code.
 
 Telegram can change its update numbers after seven days without messages. Nod stops using the saved update number after 24 hours without a received update. Telegram keeps pending updates for 24 hours.
