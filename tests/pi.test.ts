@@ -4433,6 +4433,7 @@ async function contextRecoveryServer(
   summaryOverflow: boolean | 'output-limit' = false,
   maximumContext?: number,
   actions?: Array<{ name: string; args: Record<string, unknown> }>,
+  measuredUsage = false,
 ) {
   const { createServer } = await import('node:http');
   const chunk = (value: object) => `data: ${JSON.stringify(value)}\n\n`;
@@ -4496,8 +4497,13 @@ async function contextRecoveryServer(
                 : 'Synthetic summary'
               : 'Synthetic answer',
           };
-      const promptTokens =
-        body.model === 'fixture-large'
+      const promptTokens = measuredUsage
+        ? Math.ceil(
+            (Buffer.byteLength(JSON.stringify(body.messages)) +
+              Buffer.byteLength(JSON.stringify(body.tools ?? []))) /
+              4,
+          )
+        : body.model === 'fixture-large'
           ? 100_000
           : toolCalls
             ? Math.max(1000, (step - 1) * 13_000 + 1000)
@@ -5258,6 +5264,69 @@ test('large tool results stay in workspace after a completed turn', async (t) =>
   assert.ok(sent.includes(earlier));
   assert.ok(sent.includes('workspaceFile'));
   assert.ok(!sent.includes('新'.repeat(30_000)));
+});
+
+test('a long turn extends the previous request unchanged until Pi compacts, so provider prompt caches keep hitting', async (t) => {
+  const steps = 9;
+  const { bodies, summary, url, close } = await contextRecoveryServer(
+    steps,
+    1,
+    0,
+    false,
+    undefined,
+    undefined,
+    true,
+  );
+  t.after(close);
+  const access = smallContextAccess('compatible', 'fixture-context', 131_072);
+  access.read = async () => ({ type: 'endpoint', url, key: 'fixture-key' });
+  access.definition.spec = { ...access.definition.spec, baseUrl: url, maxTokens: 65_536 };
+  const directory = await mkdtemp(join(tmpdir(), 'nod-pi-stable-prefix-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const events: AgentEvent[] = [];
+  let toolCalls = 0;
+  const agent = createPiAgent({
+    provider: 'compatible',
+    sessionRoot: directory,
+    resolve: async () => access,
+  });
+  t.after(() => agent.dispose());
+  const session = await agent.open({
+    ...fakeExecution(randomUUID()),
+    restricted: true,
+    systemPrompt: 'Synthetic fixture instructions.',
+    workspace: recordingWorkspace().workspace,
+    runTool: async (_name, _params, run) => run(),
+    tools: [
+      {
+        name: 'inspect_fixture',
+        description: 'Inspect the synthetic fixture.',
+        parameters: Type.Object({}),
+        execute: async () => ({
+          content: [
+            { type: 'text' as const, text: String.fromCharCode(97 + toolCalls++).repeat(40_000) },
+          ],
+        }),
+      },
+    ],
+    shouldStop: () => false,
+    onEvent: (event) => events.push(event),
+  });
+  await session.prompt('Inspect the synthetic fixture until it is done.', []);
+  await session.dispose();
+  assert.equal(toolCalls, steps);
+  assert.deepEqual(
+    events.flatMap((event) => (event.type === 'final' ? [event.text] : [])),
+    ['Synthetic answer'],
+    JSON.stringify(events.flatMap((event) => (event.type === 'error' ? [event.message] : []))),
+  );
+  const rewritten = bodies.flatMap((body, index) => {
+    const previous = bodies[index - 1];
+    if (!previous || summary(body) || summary(previous)) return [];
+    const kept = JSON.stringify(body.messages.slice(0, previous.messages.length));
+    return kept === JSON.stringify(previous.messages) ? [] : [index];
+  });
+  assert.deepEqual(rewritten, []);
 });
 
 test('parallel tool results share the remaining model context', async (t) => {
