@@ -70,6 +70,26 @@ export default scenario({
           otherwise: 'The email is signed with the informal sign-off "Cheers" and the name Alex.',
         },
       ),
+      check(
+        'memory-learn-kept-notes',
+        (run: Run) => {
+          const calls = run.tools.filter(
+            (call) =>
+              call.name === 'manage_personal_context' && call.input?.action === 'memory_learn',
+          );
+          const empty = calls.filter(
+            (call) => call.isError || /"saved":\s*\[\s*\]/.test(call.output ?? ''),
+          );
+          return {
+            pass: calls.length > 0 && !empty.length,
+            evidence: calls.length
+              ? empty.map((call) => (call.output ?? '').slice(0, 200)).join('\n') ||
+                `${calls.length} memory_learn calls each kept a note`
+              : 'no memory_learn call',
+          };
+        },
+        { aspect: 'process', failure: 'incomplete' },
+      ),
       check('no-external-writes', (run: Run) => run.writes.length === 0, {
         aspect: 'process',
         failure: 'scope',

@@ -35,7 +35,10 @@ export function personalSecret(text: string) {
 }
 const slugPattern = '[a-z0-9]+(?:-[a-z0-9]+)*';
 export function unsafe(...texts: Array<string | undefined>) {
-  return texts.some((text) => !!text && personalSecret(text));
+  return texts.some(
+    (text) =>
+      !!text && (personalSecret(text) || personalSecret(text.replace(/[^\S\n]*\n\s*/g, ''))),
+  );
 }
 
 export const id = z.uuid();

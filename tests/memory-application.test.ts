@@ -730,12 +730,15 @@ test('memory refuses card numbers and login links but keeps links with long nume
     'Card 4111 1111 1111 1111 12/27',
     'Ref 7 4111 1111 1111 1111',
     'Dashboard at https://owner:example-pass@example.com/admin',
+    'Key sk-fixturefix\ntureABCD1234',
+    'Token eyJfixture.fixture\n  .fixturesig',
   ])
     assert.equal(unsafe(text), true, text);
   for (const text of [
     'Favourite thread: https://x.com/example/status/1987654321098765432',
     'Talk recap: https://www.linkedin.com/feed/update/urn:li:activity:7254321098765432109/',
     'Order 12345678901234 arrives Friday.',
+    'Cheers,\nSam',
   ])
     assert.equal(unsafe(text), false, text);
 });
