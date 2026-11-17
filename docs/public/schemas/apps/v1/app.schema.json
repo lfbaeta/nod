@@ -9,7 +9,8 @@
     "displayName": {
       "type": "string",
       "minLength": 1,
-      "maxLength": 80
+      "maxLength": 80,
+      "pattern": "^\\S(?:[\\s\\S]*\\S)?$"
     },
     "icon": {
       "type": "string",
@@ -22,7 +23,8 @@
       "items": {
         "type": "string",
         "minLength": 1,
-        "maxLength": 50
+        "maxLength": 50,
+        "pattern": "^\\S(?:[\\s\\S]*\\S)?$"
       }
     },
     "prompts": {
@@ -32,7 +34,8 @@
       "items": {
         "type": "string",
         "minLength": 1,
-        "maxLength": 240
+        "maxLength": 240,
+        "pattern": "^\\S(?:[\\s\\S]*\\S)?$"
       }
     },
     "requirements": {
@@ -42,7 +45,8 @@
       "items": {
         "type": "string",
         "minLength": 1,
-        "maxLength": 300
+        "maxLength": 300,
+        "pattern": "^\\S(?:[\\s\\S]*\\S)?$"
       }
     },
     "limitations": {
@@ -52,7 +56,8 @@
       "items": {
         "type": "string",
         "minLength": 1,
-        "maxLength": 300
+        "maxLength": 300,
+        "pattern": "^\\S(?:[\\s\\S]*\\S)?$"
       }
     },
     "connection": {
@@ -67,7 +72,8 @@
             "server": {
               "type": "string",
               "minLength": 1,
-              "maxLength": 80
+              "maxLength": 80,
+              "pattern": "^\\S(?:[\\s\\S]*\\S)?$"
             },
             "authentication": {
               "type": "array",
@@ -87,7 +93,8 @@
               "items": {
                 "type": "string",
                 "minLength": 1,
-                "maxLength": 100
+                "maxLength": 100,
+                "pattern": "^\\S(?:[\\s\\S]*\\S)?$"
               }
             }
           },
@@ -104,7 +111,8 @@
             "server": {
               "type": "string",
               "minLength": 1,
-              "maxLength": 80
+              "maxLength": 80,
+              "pattern": "^\\S(?:[\\s\\S]*\\S)?$"
             },
             "authentication": {
               "type": "array",

@@ -31,9 +31,9 @@ export interface BundledApp {
 export function loadAppCatalog(directory = fileURLToPath(new URL('../apps/', import.meta.url))) {
   const root = realpathSync(directory);
   const result = new Map<string, BundledApp>();
-  for (const entry of readdirSync(root, { withFileTypes: true }).sort((a, b) =>
-    a.name.localeCompare(b.name),
-  )) {
+  for (const entry of readdirSync(root, { withFileTypes: true })
+    .filter((item) => !item.name.startsWith('.'))
+    .sort((a, b) => a.name.localeCompare(b.name))) {
     if (!entry.isDirectory())
       throw new Error(`App ${entry.name}: use one directory per app without symbolic links.`);
     const base = realpathSync(resolve(root, entry.name));
@@ -82,7 +82,7 @@ export function loadAppCatalog(directory = fileURLToPath(new URL('../apps/', imp
       /--/.test(manifest.name)
     )
       throw new Error(
-        `App ${entry.name}: name must match its folder and use two to 40 lowercase letters, digits, or hyphens.`,
+        `App ${entry.name}: name must match its folder and use two to 40 lowercase letters, digits, or single hyphens. Start with a letter and end with a letter or digit.`,
       );
     if (
       typeof manifest.version !== 'string' ||

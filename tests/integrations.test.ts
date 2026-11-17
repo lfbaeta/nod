@@ -105,6 +105,7 @@ test('app folders reject escaped paths, incomplete contracts, and unsupported se
     await writeFile(path, JSON.stringify(value));
   }
   const valid = await fixture('valid');
+  await writeFile(join(valid, '.DS_Store'), 'synthetic system metadata');
   await checkAppContract(loadAppCatalog(valid).get('linear')!);
   const arrayApp = loadAppCatalog(valid).get('linear')!;
   await checkAppContract({
@@ -320,6 +321,15 @@ test('published app schemas reject unsupported definitions with the runtime vali
   for (const change of [
     (value: any) => {
       value.displayName = 42;
+    },
+    (value: any) => {
+      value.displayName = '   ';
+    },
+    (value: any) => {
+      value.displayName = ' Leading space';
+    },
+    (value: any) => {
+      value.requirements = ['   '];
     },
     (value: any) => {
       value.unknownSetting = true;

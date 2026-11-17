@@ -7,8 +7,16 @@
       "const": "https://nod.n8n.io/docs/schemas/apps/v1/contract.schema.json"
     },
     "source": {
-      "type": "string",
-      "pattern": "^[hH][tT][tT][pP][sS]:\\/\\/"
+      "allOf": [
+        {
+          "type": "string",
+          "format": "uri"
+        },
+        {
+          "type": "string",
+          "pattern": "^[hH][tT][tT][pP][sS]:\\/\\/"
+        }
+      ]
     },
     "tool": {
       "type": "object",
