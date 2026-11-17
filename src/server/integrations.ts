@@ -2773,10 +2773,7 @@ export async function createIntegrations(pool: Pool, options: IntegrationOptions
                   if (result.success && result.accountId !== pending)
                     await discardReconnect(row, result.accountId);
                 } catch {}
-            } else if (
-              row.callback_expires &&
-              new Date(row.callback_expires).getTime() > Date.now()
-            ) {
+            } else {
               const claimId = randomBytes(32).toString('base64url');
               const claimed = (
                 await pool.query<ConnectionRow>(
@@ -2818,9 +2815,9 @@ export async function createIntegrations(pool: Pool, options: IntegrationOptions
                 } finally {
                   activeCallbackClaims.delete(claimId);
                 }
-              }
-            } else if (!row.callback_claim_id && (await clearReconnect(row.id, hash)) !== undefined)
-              track(row.slug, 'failed', 'timeout', { step: 'callback' });
+              } else if ((await clearReconnect(row.id, hash, undefined, true)) !== undefined)
+                track(row.slug, 'failed', 'timeout', { step: 'callback' });
+            }
           } else if (options.discovered) {
             const result = await options.discovered
               .completeOAuth(request.query)

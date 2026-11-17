@@ -523,6 +523,7 @@ export function createComposioProxy(options: {
         .parse(query);
       if (!pending?.verificationSecret || pending.accountId !== `${pendingPrefix}${input.state}`)
         throw new Error('This integration connection attempt is unavailable.');
+      options.browser?.finish(input.state);
       const result = z
         .object({
           connectedAccountId: z.string().regex(/^[A-Za-z0-9_-]{1,200}$/),
@@ -538,7 +539,6 @@ export function createComposioProxy(options: {
         );
       if (result.toolkit !== pending.service)
         throw new Error('The connected integration does not match this attempt.');
-      options.browser?.finish(input.state);
       return {
         state: input.state,
         accountId: result.connectedAccountId,

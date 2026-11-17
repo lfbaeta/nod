@@ -1516,6 +1516,8 @@ test('hosted app connection bridge keeps browser proof on the configured origin'
       browser.registerRoutes(app);
       const brokerOrigin = 'https://proxy.example.test';
       const calls: Array<{ path: string; body: Record<string, unknown> }> = [];
+      let bridgeUrl = '';
+      let bridgeOpenDuringCompletion: boolean | undefined;
       const proxy = createComposioProxy({
         dataRoot: root,
         ownerId: 'hosted-fixture-owner',
@@ -1530,6 +1532,14 @@ test('hosted app connection bridge keeps browser proof on the configured origin'
           calls.push({ path, body });
           if (path === '/v2/access/enroll')
             return Response.json({ state: 'enabled', userId: proxy.userId });
+          if (path === '/v2/connect/complete') {
+            bridgeOpenDuringCompletion = browser.owns(bridgeUrl);
+            return Response.json({
+              connectedAccountId: 'ca_synthetic_hosted',
+              toolkit: service,
+              status: 'ACTIVE',
+            });
+          }
           assert.equal(path, '/v2/connect/start');
           assert.equal(body.toolkit, service);
           assert.equal('native' in body, false);
@@ -1542,6 +1552,7 @@ test('hosted app connection bridge keeps browser proof on the configured origin'
       const state = randomBytes(32).toString('base64url');
       const callback = `${origin}/api/apps/callback?state=${state}`;
       const attempt = await proxy.authorize(service, callback);
+      bridgeUrl = attempt.url;
       const url = new URL(attempt.url);
       assert.equal(url.origin, origin);
       assert.match(url.pathname, /^\/api\/apps\/connect\/[A-Za-z0-9_-]{43}$/);
@@ -1640,7 +1651,16 @@ test('hosted app connection bridge keeps browser proof on the configured origin'
       assert.equal((await app.inject({ url: url.pathname, headers })).statusCode, 403);
       assert.equal((await post({ origin, 'x-nod-bridge': bridgeKey })).statusCode, 403);
       assert.equal(calls.length, 2);
-      browser.finish(state);
+      const completed = await proxy.parseCallback(
+        { state, completion_token: 'synthetic-completion' },
+        {
+          accountId: attempt.accountId,
+          verificationSecret: attempt.verificationSecret,
+          service,
+        },
+      );
+      assert.equal(completed.accountId, 'ca_synthetic_hosted');
+      assert.equal(bridgeOpenDuringCompletion, false);
       assert.equal(browser.owns(attempt.url), false);
       assert.equal(browser.remote(attempt.url), undefined);
       assert.equal((await app.inject({ url: url.pathname, headers })).statusCode, 403);
@@ -1854,30 +1874,41 @@ test(
   'a sign-in that returns after its link expired records a timeout',
   { skip: !process.env.TEST_DATABASE_URL },
   async (t) => {
-    const captured: import('../src/server/analytics.ts').AnalyticsEvent[] = [];
-    const f = await appsFixture(t, {}, { analytics: (event) => captured.push(event) });
-    const started = await f.app.inject({
-      method: 'POST',
-      url: '/api/apps/gmail/connect',
-      payload: { returnTo: 'window' },
-    });
-    assert.equal(started.statusCode, 200, started.body);
-    const callback = new URL(f.callbacks.at(-1)!);
-    callback.searchParams.set('account', [...f.accounts.keys()].at(-1)!);
-    await f.pool.query("UPDATE app_connections SET callback_expires=now()-interval '1 minute'");
-    const late = await f.app.inject({ url: callback.pathname + callback.search });
-    assert.equal(new URL(late.headers.location!).searchParams.get('connection'), 'expired');
-    assert.deepEqual(
-      captured.flatMap((entry) =>
-        entry.event === 'connection_changed'
-          ? [[entry.properties.status, entry.properties.failure_reason]]
-          : [],
-      ),
-      [
-        ['started', undefined],
-        ['failed', 'timeout'],
-      ],
-    );
+    for (const clock of ['in-sync', 'server-behind-database'] as const)
+      await t.test(clock, async (t) => {
+        const captured: import('../src/server/analytics.ts').AnalyticsEvent[] = [];
+        const f = await appsFixture(t, {}, { analytics: (event) => captured.push(event) });
+        const started = await f.app.inject({
+          method: 'POST',
+          url: '/api/apps/gmail/connect',
+          payload: { returnTo: 'window' },
+        });
+        assert.equal(started.statusCode, 200, started.body);
+        const callback = new URL(f.callbacks.at(-1)!);
+        callback.searchParams.set('account', [...f.accounts.keys()].at(-1)!);
+        await f.pool.query("UPDATE app_connections SET callback_expires=now()-interval '1 minute'");
+        if (clock === 'server-behind-database') {
+          const now = Date.now() - 5 * 60_000;
+          t.mock.method(Date, 'now', () => now);
+        }
+        const late = await f.app.inject({ url: callback.pathname + callback.search });
+        assert.equal(new URL(late.headers.location!).searchParams.get('connection'), 'expired');
+        assert.deepEqual(
+          captured.flatMap((entry) =>
+            entry.event === 'connection_changed'
+              ? [[entry.properties.status, entry.properties.failure_reason]]
+              : [],
+          ),
+          [
+            ['started', undefined],
+            ['failed', 'timeout'],
+          ],
+        );
+        assert.equal(
+          (await f.pool.query('SELECT count(*)::int AS n FROM app_connections')).rows[0].n,
+          0,
+        );
+      });
   },
 );
 
