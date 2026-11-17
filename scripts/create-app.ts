@@ -59,6 +59,7 @@ export async function createApp(slug: string, input: CreateAppOptions) {
       url.protocol !== 'https:' ||
       url.username ||
       url.password ||
+      (url.port && !['80', '443'].includes(url.port)) ||
       /[?#]/.test(address) ||
       isIP(url.hostname.replace(/^\[|\]$/g, '')) ||
       /(?:^|\.)(?:localhost|local|internal|invalid|test|example|example\.(?:com|org|net))$/.test(
@@ -66,7 +67,7 @@ export async function createApp(slug: string, input: CreateAppOptions) {
       )
     )
       throw new Error(
-        'Enter the public HTTPS address without credentials, a query, or a fragment.',
+        'Enter a public HTTPS address on port 80 or 443 without credentials, a query, or a fragment.',
       );
   }
   const name = (options.name ?? slug).trim();

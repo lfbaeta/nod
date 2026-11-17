@@ -115,7 +115,9 @@ Use `type: "http"` with a public HTTPS `url`. Select one authentication method: 
 
 Use `type: "cli"` with `command`, a pinned `source`, `authentication: ["env"]`, and an `environment` label map. The map contains one to 16 fields. Names have at most 64 characters. The CLI fixture supplies the read check and its timeout.
 
-API and CLI folders omit `mcp.json`. Unknown fields, extra transports, install scripts, static secrets, control headers, and mismatched read fixtures fail the required checks.
+API and CLI folders omit `mcp.json`. Unknown fields, extra transports, app-folder install scripts or hooks, static secrets, control headers, and mismatched read fixtures fail the required checks. The sealed installer can run package install scripts from the declared CLI source before it adds credentials.
+
+Fixed server addresses and CLI download addresses must use public HTTPS on port 80 or 443. OAuth endpoints use port 443. Owner-supplied n8n instance addresses follow the separate instance policy.
 
 See the complete [API and CLI examples](/contribute/apps/api-and-cli/).
 

@@ -157,7 +157,13 @@ Nod installs the declared source through its existing sealed CLI runner. Credent
 pnpm check:apps my-app
 ```
 
-The shared integration suite checks private setup, failed verification, reconnect, account ownership, credential removal, errors, and Stop. API OAuth cases also check PKCE, registration, owner client IDs, refresh, and issuer mismatch.
+This command checks the schema and runs the synthetic contract for your app. Run the shared integration suite separately:
+
+```sh
+pnpm test:integration
+```
+
+The integration suite checks private setup, failed verification, reconnect, account ownership, credential removal, errors, and Stop. API OAuth cases also check PKCE, registration, owner client IDs, refresh, and issuer mismatch.
 
 A passing synthetic fixture does not prove the real install source or service works. Complete [provider acceptance](/contribute/apps/test/#provider-acceptance-is-separate) before approval.
 

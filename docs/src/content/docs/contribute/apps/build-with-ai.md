@@ -32,6 +32,8 @@ It also checks the generated public page and social preview. It reports missing 
 
 Check the interface, authentication, required account plan, read operation, and example requests. For CLI apps, check the exact package or download source and credential labels. Confirm the public page does not promise unsupported work.
 
+For MCP apps, check the server address, OAuth scopes, and exact tool names against the provider's official documentation.
+
 AI output still needs the [approval review](/contribute/apps/approval/). The skill cannot grant permissions, create a provider OAuth application, or approve the contribution.
 
 ## Related resources

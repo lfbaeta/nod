@@ -45,18 +45,26 @@ const cliSourceSchema = z.union([
 ]);
 const envName = appEnvironmentNameSchema;
 export const appAccessSchema = z.discriminatedUnion('kind', [
-  z.object({
-    kind: z.literal('http'),
-    endpoint: z.url().max(2048),
-    auth: z.enum(['bearer', 'x-api-key', 'oauth']).default('bearer'),
-    testPath: z.string().min(1).max(2048),
-    testMethod: z.enum(['GET', 'POST']).optional(),
-    testBody: z.json().optional(),
-    apiKeyHeader: appApiKeyHeaderSchema.optional(),
-    scope: z.string().min(1).max(500).optional(),
-    clientIdRequired: z.boolean().optional(),
-    oauth: appOAuthMetadataSchema.optional(),
-  }),
+  z
+    .object({
+      kind: z.literal('http'),
+      endpoint: z.url().max(2048),
+      auth: z.enum(['bearer', 'x-api-key', 'oauth']).default('bearer'),
+      testPath: z.string().min(1).max(2048),
+      testMethod: z.enum(['GET', 'POST']).optional(),
+      testBody: z.json().optional(),
+      apiKeyHeader: appApiKeyHeaderSchema.optional(),
+      scope: z.string().min(1).max(500).optional(),
+      clientIdRequired: z.boolean().optional(),
+      oauth: appOAuthMetadataSchema.optional(),
+    })
+    .refine(
+      (path) =>
+        (path.testBody === undefined || path.testMethod === 'POST') &&
+        (path.testMethod !== 'POST' || path.testBody !== undefined) &&
+        (path.auth === 'oauth' || (!path.oauth && !path.scope && !path.clientIdRequired)) &&
+        (!path.apiKeyHeader || path.auth === 'x-api-key'),
+    ),
   z.object({
     kind: z.literal('mcp'),
     endpoint: z.url().max(2048),
@@ -72,6 +80,7 @@ export const appAccessSchema = z.discriminatedUnion('kind', [
     env: z
       .array(envName)
       .min(1)
+      .max(16)
       .refine((names) => new Set(names).size === names.length),
     source: cliSourceSchema,
     testArgv: appCliArgvSchema.optional(),

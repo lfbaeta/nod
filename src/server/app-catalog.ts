@@ -62,6 +62,7 @@ function publicAddress(value: string, name: string, query = false) {
     url.protocol !== 'https:' ||
     url.username ||
     url.password ||
+    (url.port !== '' && url.port !== '80' && url.port !== '443') ||
     (query ? /#/.test(value) : /[?#]/.test(value)) ||
     isIP(url.hostname.replace(/^\[|\]$/g, '')) ||
     /(?:^|\.)(?:localhost|local|internal|invalid|test|example|example\.(?:com|org|net))$/.test(

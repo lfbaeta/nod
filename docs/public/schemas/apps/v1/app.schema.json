@@ -408,7 +408,7 @@
             },
             "command": {
               "type": "string",
-              "pattern": "^(?!(?:bash|dash|env|fish|node|npx|npm|python(?:3(?:\\.\\d+)?)?|sh|su|sudo|zsh)$)[A-Za-z][A-Za-z0-9_-]{0,63}$"
+              "pattern": "^(?!(?:[bB][aA][sS][hH]|[dD][aA][sS][hH]|[eE][nN][vV]|[fF][iI][sS][hH]|[nN][oO][dD][eE]|[nN][pP][xX]|[nN][pP][mM]|[pP][yY][tT][hH][oO][nN][0-9]*|[sS][hH]|[sS][uU]|[sS][uU][dD][oO]|[zZ][sS][hH])$)[A-Za-z][A-Za-z0-9_-]{0,63}$"
             },
             "source": {
               "anyOf": [

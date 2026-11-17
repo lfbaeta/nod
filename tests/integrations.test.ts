@@ -85,7 +85,8 @@ import { connectedGmail } from '../src/shared/onboarding.ts';
 import { fileBytes } from '../src/shared/files.ts';
 import { connectionGroups } from '../src/web/lib/secondary-pages.ts';
 import { fakeComputer, fakeExecution, fakeWorkspace } from './runtime-fixtures.ts';
-import { bundledApps, loadAppCatalog } from '../src/server/app-catalog.ts';
+import { appAccessPath, bundledApps, loadAppCatalog } from '../src/server/app-catalog.ts';
+import { appAccessSchema } from '../src/server/app-access.ts';
 import { checkAppContract } from '../scripts/check-apps.ts';
 import { createApp, type CreateAppOptions } from '../scripts/create-app.ts';
 import { appRequestUrl } from '../src/server/app-requests.ts';
@@ -170,6 +171,14 @@ test('app folders reject escaped paths, incomplete contracts, and unsupported se
       'mcp.json',
       (value) => {
         value.mcpServers.linear.url = 'https://127.0.0.1/mcp';
+      },
+      /public HTTPS/,
+    ],
+    [
+      'port',
+      'mcp.json',
+      (value) => {
+        value.mcpServers.linear.url = 'https://mcp.linear.app:8443/mcp';
       },
       /public HTTPS/,
     ],
@@ -265,6 +274,7 @@ test('app scaffolding refuses replacement and requires contributors to complete 
     'https://mcp.example.com/mcp',
     'https://mcp.internal/mcp',
     'https://mcp.test/mcp',
+    'https://mcp.linear.app:8443/mcp',
     `${options.url}?`,
     `${options.url}#`,
   ])
@@ -420,6 +430,8 @@ test('API and CLI app scaffolds pass real transport and process contracts and re
           { ...definition.connection, source: { npm: '@synthetic/cli@1.2.3 --force' } },
           { ...definition.connection, source: { url: 'https://downloads.synthetic-nod.dev/cli' } },
           { ...definition.connection, command: 'bash' },
+          { ...definition.connection, command: 'BaSh' },
+          { ...definition.connection, command: 'PyThOn3' },
           { ...definition.connection, environment: {} },
           { ...definition.connection, environment: { LD_PRELOAD: 'Library' } },
           { ...definition.connection, authentication: ['bearer'] },
@@ -445,6 +457,7 @@ test('API and CLI app scaffolds pass real transport and process contracts and re
       : [
           { ...definition.connection, url: 'https://127.0.0.1/api' },
           { ...definition.connection, url: 'https://api.synthetic-nod.dev/v1?token=synthetic' },
+          { ...definition.connection, url: 'https://api.synthetic-nod.dev:8443/v1' },
         ]) {
       await writeFile(path, JSON.stringify({ ...definition, connection }));
       assert.throws(() => loadAppCatalog(directory), /public HTTPS/);
@@ -457,255 +470,308 @@ test('API and CLI app scaffolds pass real transport and process contracts and re
   }
 });
 
+test('app access paths reject inconsistent API reads and more than 16 CLI fields', () => {
+  const path = { kind: 'http', endpoint: 'https://api.synthetic-nod.dev/v1', testPath: 'account' };
+  assert(appAccessSchema.safeParse(path).success);
+  for (const extra of [
+    { testMethod: 'GET', testBody: { query: 'synthetic' } },
+    { testMethod: 'POST' },
+    { apiKeyHeader: 'X-Access-Key' },
+    { clientIdRequired: true },
+  ])
+    assert.equal(appAccessSchema.safeParse({ ...path, ...extra }).success, false);
+  assert.equal(
+    appAccessSchema.safeParse({
+      kind: 'cli',
+      command: 'synthetic',
+      source: { npm: 'synthetic' },
+      env: Array.from({ length: 17 }, (_, i) => `FIXTURE_${i}_TOKEN`),
+    }).success,
+    false,
+  );
+  assert.throws(() => appRequestUrl(path.endpoint, 'account#private'), /path/);
+});
+
 test(
   'API and CLI app folders use common setup, verify access, preserve account bindings and remove credentials',
   { skip: !process.env.TEST_DATABASE_URL },
   async (t) => {
     for (const fixture of communityAccessCases)
       await t.test(fixture.slug, async (t) => {
-        const directory = await mkdtemp(join(tmpdir(), 'nod-community-lifecycle-'));
-        t.after(() => rm(directory, { recursive: true, force: true }));
-        const definition = await completedCommunityApp(directory, fixture);
-        const apps = loadAppCatalog(directory);
-        const database = await hostedDatabase();
-        const server = Fastify();
-        t.after(async () => {
-          await server.close();
-          await database.close();
-        });
-        const ownerId = 'synthetic-owner';
-        const values =
-          definition.kind === 'cli'
-            ? Object.fromEntries(
-                Object.keys(definition.environment).map((name) => [
-                  name,
-                  name.endsWith('_ID')
-                    ? '42'
-                    : name.endsWith('_EMAIL')
-                      ? 'synthetic@example.test'
-                      : 'synthetic-private-cli-token',
-                ]),
-              )
-            : { token: 'synthetic-private-api-token' };
-        const secrets = Object.values(values);
-        let failure: 'permission' | 'rate' | 'invalid-json' | undefined;
-        let calls = 0;
-        const transport = createDiscoveredTransport(
-          async (input, init) => {
-            assert(definition.kind === 'http');
-            const request = new Request(input, init);
-            const read = definition.contract.request;
-            assert.equal(request.url, appRequestUrl(definition.endpoint, read.path));
-            assert.equal(request.method, read.method);
-            assert.equal(
-              request.headers.get(
-                definition.auth === 'x-api-key' ? 'X-Access-Key' : 'Authorization',
-              ),
-              definition.auth === 'x-api-key' ? values.token : `Bearer ${values.token}`,
+        const diagnostics: unknown[] = [];
+        await withFailureLog(
+          (event, error, context) => diagnostics.push({ event, error, context }),
+          async () => {
+            const directory = await mkdtemp(join(tmpdir(), 'nod-community-lifecycle-'));
+            t.after(() => rm(directory, { recursive: true, force: true }));
+            const definition = await completedCommunityApp(directory, fixture);
+            const apps = loadAppCatalog(directory);
+            const database = await hostedDatabase();
+            const server = Fastify();
+            t.after(async () => {
+              await server.close();
+              await database.close();
+            });
+            const ownerId = 'synthetic-owner';
+            const values =
+              definition.kind === 'cli'
+                ? Object.fromEntries(
+                    Object.keys(definition.environment).map((name) => [
+                      name,
+                      name.endsWith('_ID')
+                        ? '42'
+                        : name.endsWith('_EMAIL')
+                          ? 'synthetic@example.test'
+                          : 'synthetic-private-cli-token',
+                    ]),
+                  )
+                : { token: 'synthetic-private-api-token' };
+            const secrets = Object.values(values);
+            let failure: 'permission' | 'rate' | 'invalid-json' | undefined;
+            let calls = 0;
+            const transport = createDiscoveredTransport(
+              async (input, init) => {
+                assert(definition.kind === 'http');
+                const request = new Request(input, init);
+                const read = definition.contract.request;
+                assert.equal(request.url, appRequestUrl(definition.endpoint, read.path));
+                assert.equal(request.method, read.method);
+                assert.equal(
+                  request.headers.get(
+                    definition.auth === 'x-api-key' ? 'X-Access-Key' : 'Authorization',
+                  ),
+                  definition.auth === 'x-api-key' ? values.token : `Bearer ${values.token}`,
+                );
+                assert.equal(
+                  await request.text(),
+                  read.method === 'POST' ? JSON.stringify(read.body) : '',
+                );
+                calls++;
+                if (failure)
+                  return Response.json(
+                    { error: `synthetic_${failure} ${secrets.join(' ')}` },
+                    { status: failure === 'rate' ? 429 : 403 },
+                  );
+                return Response.json({ data: definition.contract.output, secrets });
+              },
+              async (endpoint) => {
+                assert.equal(endpoint, definition.endpoint);
+                return endpoint;
+              },
             );
-            assert.equal(
-              await request.text(),
-              read.method === 'POST' ? JSON.stringify(read.body) : '',
+            const cli = async (
+              command: import('../src/ports/computer.ts').ConnectedCli,
+              argv: string[],
+              environment: Record<string, string>,
+              timeout?: number,
+            ) => {
+              assert(definition.kind === 'cli');
+              assert.equal(command.command, definition.command);
+              assert.deepEqual(command.source, definition.source);
+              assert.deepEqual(argv, definition.contract.argv);
+              assert.deepEqual(environment, values);
+              assert.equal(timeout, definition.contract.timeoutSeconds);
+              calls++;
+              const output =
+                definition.contract.format === 'json'
+                  ? JSON.stringify({ data: definition.contract.output, secrets })
+                  : `Synthetic account ${secrets.join(' ')}`;
+              return {
+                exitCode: failure === 'permission' || failure === 'rate' ? 7 : 0,
+                output: failure ? `synthetic_${failure} ${secrets.join(' ')}` : output,
+                stdout: failure ? `synthetic_${failure} ${secrets.join(' ')}` : output,
+                stderr: 'Synthetic warning on stderr.',
+              };
+            };
+            const grantVault = await createAppGrantVault(database.pool, {
+              ownerId,
+              keyStore: installationKeyStore,
+            });
+            const options = {
+              apps,
+              ownerId,
+              baseUrl: 'http://localhost:4310',
+              grantVault,
+              transport,
+              oauth: {
+                begin: async () => assert.fail('Token apps do not start OAuth.'),
+                finish: async () => assert.fail('Token apps do not finish OAuth.'),
+                refresh: async () => assert.fail('Token apps do not refresh OAuth.'),
+              },
+              runCli: async (
+                _thread: string,
+                command: import('../src/ports/computer.ts').ConnectedCli,
+                argv: string[],
+                environment: Record<string, string>,
+                timeout?: number,
+              ) => cli(command, argv, environment, timeout),
+              verifyCli: cli,
+            };
+            const discovered = await createDiscoveredConnections(database.pool, options);
+            const reviewed = appAccessSchema.parse(appAccessPath(definition));
+            await assert.rejects(
+              discovered.propose({
+                service: definition.slug,
+                name: definition.name,
+                paths: [
+                  reviewed.kind === 'cli'
+                    ? { ...reviewed, source: { npm: '@synthetic/cli' } }
+                    : { ...reviewed, endpoint: 'https://other.synthetic-nod.dev/api' },
+                ],
+              }),
+              /reviewed connection/,
             );
-            calls++;
-            if (failure)
-              return Response.json(
-                { error: `synthetic_${failure} ${secrets.join(' ')}` },
-                { status: failure === 'rate' ? 429 : 403 },
+            assert.equal(calls, 0);
+            const provider = fakeProvider({
+              id: 'unused',
+              authorize: async () => assert.fail('Use app setup.'),
+              search: async () => ({ tools: {}, suggestions: [] }),
+              execute: async () => assert.fail('Use the app access path.'),
+            });
+            provider.configured = false;
+            const integrations = await createIntegrations(database.pool, {
+              ownerId,
+              provider,
+              discovered,
+              baseUrl: 'http://localhost:4310',
+              wake: async () => {},
+            });
+            integrations.registerRoutes(server);
+            const catalog = (await server.inject('/api/apps/catalog')).json<AppConnection[]>();
+            assert(
+              catalog.some((app) => app.slug === definition.slug && app.name === definition.name),
+            );
+            const start = await server.inject({
+              method: 'POST',
+              url: `/api/apps/${definition.slug}/connect`,
+            });
+            assert.equal(start.statusCode, 200, start.body);
+            const id = new URL(start.json().url, 'http://localhost:4310').searchParams.get(
+              'connect',
+            )!;
+            const setup = await server.inject(`/api/apps/discovery/${id}`);
+            assert.equal(setup.statusCode, 200, setup.body);
+            assert.equal(setup.json().catalogApp, true);
+            if (definition.kind === 'cli')
+              assert.deepEqual(setup.json().credentialLabels, definition.environment);
+            const complete = (proposalId = id) =>
+              server.inject({
+                method: 'POST',
+                url: `/api/apps/discovery/${proposalId}/complete`,
+                payload: {
+                  token: definition.kind === 'cli' ? values : values.token,
+                  accountName: 'Synthetic account',
+                },
+              });
+            failure = 'permission';
+            const denied = await complete();
+            assert.equal(denied.statusCode, 409, denied.body);
+            assert.match(denied.body, /synthetic_permission/);
+            assert(diagnostics.length);
+            for (const secret of secrets) {
+              assert(!denied.body.includes(secret));
+              assert(!JSON.stringify(diagnostics).includes(secret));
+            }
+            assert.equal(
+              (await database.pool.query('SELECT id FROM discovered_connections')).rowCount,
+              0,
+            );
+            if (definition.kind === 'cli' && definition.contract.format === 'json') {
+              failure = 'invalid-json';
+              const invalid = await complete();
+              assert.equal(invalid.statusCode, 409, invalid.body);
+              assert.match(invalid.body, /valid JSON/);
+            }
+            failure = undefined;
+            const connected = await complete();
+            assert.equal(connected.statusCode, 200, connected.body);
+            const saved = (await discovered.list()).find((app) => app.slug === definition.slug)!;
+            assert(saved?.connectionId);
+            const account = (await discovered.search(definition.name, saved.connectionId))
+              .accounts[0];
+            const pathId = account.paths[0].id;
+            const args =
+              definition.kind === 'http'
+                ? {
+                    connectionId: saved.connectionId,
+                    pathId,
+                    method: definition.contract.request.method,
+                    path: definition.contract.request.path,
+                    ...(definition.contract.request.method === 'POST'
+                      ? { body: definition.contract.request.body }
+                      : {}),
+                  }
+                : definition.kind === 'cli'
+                  ? {
+                      connectionId: saved.connectionId,
+                      pathId,
+                      argv: definition.contract.argv,
+                      timeoutSeconds: definition.contract.timeoutSeconds,
+                    }
+                  : assert.fail('Use an API or CLI fixture.');
+            const action = definition.kind === 'http' ? 'CONNECTED_HTTP' : 'CONNECTED_CLI';
+            const ref = { threadId: randomUUID(), turnId: randomUUID() };
+            const output = await discovered.execute(action, args, ref);
+            for (const secret of secrets) assert(!JSON.stringify(output).includes(secret));
+            const before = calls;
+            await assert.rejects(
+              discovered.execute(action, args, ref, undefined, 'stale-binding'),
+              /changed/,
+            );
+            await assert.rejects(
+              discovered.execute(action, { ...args, pathId: randomUUID() }, ref),
+              /unavailable/,
+            );
+            const stopped = new AbortController();
+            stopped.abort(new Error('synthetic_stop'));
+            await assert.rejects(
+              discovered.execute(action, args, ref, stopped.signal),
+              /synthetic_stop/,
+            );
+            const foreign = await createDiscoveredConnections(database.pool, {
+              ...options,
+              ownerId: 'synthetic-other-owner',
+            });
+            await assert.rejects(foreign.execute(action, args, ref), /unavailable/);
+            assert.equal(calls, before);
+            failure = 'rate';
+            if (definition.kind === 'http')
+              await assert.rejects(discovered.execute(action, args, ref), (error: Error) => {
+                assert.match(error.message, /429.*synthetic_rate/);
+                for (const secret of secrets) assert(!error.message.includes(secret));
+                return true;
+              });
+            else
+              assert.equal(
+                ((await discovered.execute(action, args, ref)) as { exitCode: number }).exitCode,
+                7,
               );
-            return Response.json({ data: definition.contract.output, secrets });
+            assert.equal(calls, before + 1);
+            failure = undefined;
+            const reconnect = await discovered.reconnect(definition.slug, saved.connectionId);
+            const nextId = new URL(reconnect.url, 'http://localhost:4310').searchParams.get(
+              'connect',
+            )!;
+            const next = await server.inject(`/api/apps/discovery/${nextId}`);
+            assert.deepEqual(next.json().paths, setup.json().paths);
+            assert.equal((await complete(nextId)).statusCode, 200);
+            const current = (await discovered.list()).find((app) => app.slug === definition.slug)!;
+            assert(current?.connectionId);
+            const currentPath = (await discovered.search(definition.name, current.connectionId))
+              .accounts[0].paths[0].id;
+            await discovered.disconnect(current.connectionId, definition.slug);
+            const afterDisconnect = calls;
+            await assert.rejects(
+              discovered.execute(
+                action,
+                { ...args, connectionId: current.connectionId, pathId: currentPath },
+                ref,
+              ),
+              /unavailable/,
+            );
+            assert.equal(calls, afterDisconnect);
           },
-          async (endpoint) => {
-            assert.equal(endpoint, definition.endpoint);
-            return endpoint;
-          },
         );
-        const cli = async (
-          command: import('../src/ports/computer.ts').ConnectedCli,
-          argv: string[],
-          environment: Record<string, string>,
-          timeout?: number,
-        ) => {
-          assert(definition.kind === 'cli');
-          assert.equal(command.command, definition.command);
-          assert.deepEqual(command.source, definition.source);
-          assert.deepEqual(argv, definition.contract.argv);
-          assert.deepEqual(environment, values);
-          assert.equal(timeout, definition.contract.timeoutSeconds);
-          calls++;
-          const output =
-            definition.contract.format === 'json'
-              ? JSON.stringify({ data: definition.contract.output, secrets })
-              : `Synthetic account ${secrets.join(' ')}`;
-          return {
-            exitCode: failure === 'permission' || failure === 'rate' ? 7 : 0,
-            output: failure ? `synthetic_${failure} ${secrets.join(' ')}` : output,
-            stdout: failure ? `synthetic_${failure} ${secrets.join(' ')}` : output,
-            stderr: 'Synthetic warning on stderr.',
-          };
-        };
-        const grantVault = await createAppGrantVault(database.pool, {
-          ownerId,
-          keyStore: installationKeyStore,
-        });
-        const options = {
-          apps,
-          ownerId,
-          baseUrl: 'http://localhost:4310',
-          grantVault,
-          transport,
-          oauth: {
-            begin: async () => assert.fail('Token apps do not start OAuth.'),
-            finish: async () => assert.fail('Token apps do not finish OAuth.'),
-            refresh: async () => assert.fail('Token apps do not refresh OAuth.'),
-          },
-          runCli: async (
-            _thread: string,
-            command: import('../src/ports/computer.ts').ConnectedCli,
-            argv: string[],
-            environment: Record<string, string>,
-            timeout?: number,
-          ) => cli(command, argv, environment, timeout),
-          verifyCli: cli,
-        };
-        const discovered = await createDiscoveredConnections(database.pool, options);
-        const provider = fakeProvider({
-          id: 'unused',
-          authorize: async () => assert.fail('Use app setup.'),
-          search: async () => ({ tools: {}, suggestions: [] }),
-          execute: async () => assert.fail('Use the app access path.'),
-        });
-        provider.configured = false;
-        const integrations = await createIntegrations(database.pool, {
-          ownerId,
-          provider,
-          discovered,
-          baseUrl: 'http://localhost:4310',
-          wake: async () => {},
-        });
-        integrations.registerRoutes(server);
-        const catalog = (await server.inject('/api/apps/catalog')).json<AppConnection[]>();
-        assert(catalog.some((app) => app.slug === definition.slug && app.name === definition.name));
-        const start = await server.inject({
-          method: 'POST',
-          url: `/api/apps/${definition.slug}/connect`,
-        });
-        assert.equal(start.statusCode, 200, start.body);
-        const id = new URL(start.json().url, 'http://localhost:4310').searchParams.get('connect')!;
-        const setup = await server.inject(`/api/apps/discovery/${id}`);
-        assert.equal(setup.statusCode, 200, setup.body);
-        assert.equal(setup.json().catalogApp, true);
-        if (definition.kind === 'cli')
-          assert.deepEqual(setup.json().credentialLabels, definition.environment);
-        const complete = (proposalId = id) =>
-          server.inject({
-            method: 'POST',
-            url: `/api/apps/discovery/${proposalId}/complete`,
-            payload: {
-              token: definition.kind === 'cli' ? values : values.token,
-              accountName: 'Synthetic account',
-            },
-          });
-        failure = 'permission';
-        const denied = await complete();
-        assert.equal(denied.statusCode, 409, denied.body);
-        assert.match(denied.body, /synthetic_permission/);
-        for (const secret of secrets) assert(!denied.body.includes(secret));
-        assert.equal(
-          (await database.pool.query('SELECT id FROM discovered_connections')).rowCount,
-          0,
-        );
-        if (definition.kind === 'cli' && definition.contract.format === 'json') {
-          failure = 'invalid-json';
-          const invalid = await complete();
-          assert.equal(invalid.statusCode, 409, invalid.body);
-          assert.match(invalid.body, /valid JSON/);
-        }
-        failure = undefined;
-        const connected = await complete();
-        assert.equal(connected.statusCode, 200, connected.body);
-        const saved = (await discovered.list()).find((app) => app.slug === definition.slug)!;
-        assert(saved?.connectionId);
-        const account = (await discovered.search(definition.name, saved.connectionId)).accounts[0];
-        const pathId = account.paths[0].id;
-        const args =
-          definition.kind === 'http'
-            ? {
-                connectionId: saved.connectionId,
-                pathId,
-                method: definition.contract.request.method,
-                path: definition.contract.request.path,
-                ...(definition.contract.request.method === 'POST'
-                  ? { body: definition.contract.request.body }
-                  : {}),
-              }
-            : definition.kind === 'cli'
-              ? {
-                  connectionId: saved.connectionId,
-                  pathId,
-                  argv: definition.contract.argv,
-                  timeoutSeconds: definition.contract.timeoutSeconds,
-                }
-              : assert.fail('Use an API or CLI fixture.');
-        const action = definition.kind === 'http' ? 'CONNECTED_HTTP' : 'CONNECTED_CLI';
-        const ref = { threadId: randomUUID(), turnId: randomUUID() };
-        const output = await discovered.execute(action, args, ref);
-        for (const secret of secrets) assert(!JSON.stringify(output).includes(secret));
-        const before = calls;
-        await assert.rejects(
-          discovered.execute(action, args, ref, undefined, 'stale-binding'),
-          /changed/,
-        );
-        await assert.rejects(
-          discovered.execute(action, { ...args, pathId: randomUUID() }, ref),
-          /unavailable/,
-        );
-        const stopped = new AbortController();
-        stopped.abort(new Error('synthetic_stop'));
-        await assert.rejects(
-          discovered.execute(action, args, ref, stopped.signal),
-          /synthetic_stop/,
-        );
-        const foreign = await createDiscoveredConnections(database.pool, {
-          ...options,
-          ownerId: 'synthetic-other-owner',
-        });
-        await assert.rejects(foreign.execute(action, args, ref), /unavailable/);
-        assert.equal(calls, before);
-        failure = 'rate';
-        if (definition.kind === 'http')
-          await assert.rejects(discovered.execute(action, args, ref), (error: Error) => {
-            assert.match(error.message, /429.*synthetic_rate/);
-            for (const secret of secrets) assert(!error.message.includes(secret));
-            return true;
-          });
-        else
-          assert.equal(
-            ((await discovered.execute(action, args, ref)) as { exitCode: number }).exitCode,
-            7,
-          );
-        assert.equal(calls, before + 1);
-        failure = undefined;
-        const reconnect = await discovered.reconnect(definition.slug, saved.connectionId);
-        const nextId = new URL(reconnect.url, 'http://localhost:4310').searchParams.get('connect')!;
-        const next = await server.inject(`/api/apps/discovery/${nextId}`);
-        assert.deepEqual(next.json().paths, setup.json().paths);
-        assert.equal((await complete(nextId)).statusCode, 200);
-        const current = (await discovered.list()).find((app) => app.slug === definition.slug)!;
-        assert(current?.connectionId);
-        const currentPath = (await discovered.search(definition.name, current.connectionId))
-          .accounts[0].paths[0].id;
-        await discovered.disconnect(current.connectionId, definition.slug);
-        const afterDisconnect = calls;
-        await assert.rejects(
-          discovered.execute(
-            action,
-            { ...args, connectionId: current.connectionId, pathId: currentPath },
-            ref,
-          ),
-          /unavailable/,
-        );
-        assert.equal(calls, afterDisconnect);
       });
   },
 );
@@ -850,6 +916,8 @@ test(
         if (registered) {
           assert(link.startsWith('/apps?connect='));
           const id = new URL(link, 'http://localhost').searchParams.get('connect');
+          const setup = await server.inject(`/api/apps/discovery/${id}`);
+          assert.equal(setup.json().callbackUrl, 'http://127.0.0.1:4310/api/apps/callback');
           const authorize = await server.inject({
             method: 'POST',
             url: `/api/apps/discovery/${id}/authorize`,

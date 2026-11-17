@@ -236,16 +236,20 @@ export async function createDiscoveredConnections(
       captureConnection(options.analytics, connection(path), status, failureReason);
     const path = failure?.path ?? row.paths[0];
     if (status === 'failed')
-      logFailure('connection_setup_failed', failure?.error, {
-        method: path?.kind,
-        transport: path?.kind === 'mcp' ? 'streamable-http' : undefined,
-        authMode: path?.auth,
-        step: failure?.step,
-        status: [Object(failure?.error).status, Object(failure?.error).code].find(
-          (value) => Number.isInteger(value) && value >= 400 && value < 600,
-        ),
-        reason: failureReason,
-      });
+      logFailure(
+        'connection_setup_failed',
+        { name: 'ConnectionSetupError' },
+        {
+          method: path?.kind,
+          transport: path?.kind === 'mcp' ? 'streamable-http' : undefined,
+          authMode: path?.auth,
+          step: failure?.step,
+          status: [Object(failure?.error).status, Object(failure?.error).code].find(
+            (value) => Number.isInteger(value) && value >= 400 && value < 600,
+          ),
+          reason: failureReason,
+        },
+      );
   }
   await pool.query(`
     CREATE TABLE IF NOT EXISTS discovered_connections (
@@ -346,6 +350,13 @@ export async function createDiscoveredConnections(
     localOrigin?: string,
   ) {
     const parsed = proposalSchema.parse(input);
+    const reviewed = apps.get(parsed.service);
+    if (
+      reviewed &&
+      !reviewed.instancePath &&
+      !isDeepStrictEqual(parsed.paths, [appAccessSchema.parse(appAccessPath(reviewed))])
+    )
+      throw error('Use the reviewed connection definition for this app.', 409);
     let name = parsed.name;
     if (parsed.paths.some((path) => path.auth === 'oauth')) {
       if (parsed.paths.length !== 1 || parsed.paths[0].kind === 'cli')
@@ -814,14 +825,14 @@ export async function createDiscoveredConnections(
           }
         }
       } catch (cause) {
+        const status = [Object(cause).status, Object(cause).code].find(
+          (value) => Number.isInteger(value) && value >= 400 && value < 600,
+        );
         track(pending, 'failed', 'verification_failed', {
           step: path.kind === 'mcp' ? 'list_tools' : 'read_test',
           error: cause,
           path,
         });
-        const status = [Object(cause).status, Object(cause).code].find(
-          (value) => Number.isInteger(value) && value >= 400 && value < 600,
-        );
         const values = typeof entered === 'string' ? [entered] : Object.values(entered);
         const reason =
           cause instanceof Error && cause.message
@@ -1249,6 +1260,15 @@ export async function createDiscoveredConnections(
     );
     const row = rows.rows[0];
     if (!row) throw error('This service is unavailable.', 404);
+    const reviewed = apps.get(service);
+    if (reviewed && !reviewed.instancePath) {
+      const { id, name } = await create(
+        official(service, row.reconnect_required && !newAccount ? row.id : undefined),
+        undefined,
+        returnTo,
+      );
+      return { name, url: `/apps?connect=${id}` };
+    }
     const localOrigin = row.paths.flatMap((path) =>
       path.kind !== 'cli' && path.local ? [new URL(path.endpoint).origin] : [],
     )[0];
@@ -1661,7 +1681,7 @@ export async function createDiscoveredConnections(
         oauthStatus: row.oauth_status === 'completing' ? 'pending' : row.oauth_status,
         authorizationUrl,
         attempt,
-        callbackUrl: row.paths.some((path) => path.kind === 'mcp' && path.clientIdRequired)
+        callbackUrl: row.paths.some((path) => path.kind !== 'cli' && path.clientIdRequired)
           ? callbackUrl()
           : undefined,
         setupUrl: row.setup_url,

@@ -1,7 +1,13 @@
 import { posix } from 'node:path';
 
 export function appRequestUrl(endpoint: string, relative: string) {
-  if (!relative || relative.length > 2048 || relative.startsWith('//') || relative.includes('\\'))
+  if (
+    !relative ||
+    relative.length > 2048 ||
+    relative.startsWith('//') ||
+    relative.includes('\\') ||
+    relative.includes('#')
+  )
     throw new Error('Use a path in the saved API address.');
   const base = new URL(endpoint);
   const url = new URL(

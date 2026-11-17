@@ -39,10 +39,32 @@ const httpsUrl = z.intersection(
     .max(2048)
     .regex(/^[hH][tT][tT][pP][sS]:\/\//),
 );
+export const appEnvironmentNamePattern =
+  /^(?=.*(?:TOKEN|KEY|SECRET|PASSWORD|_ID|_SID|USERNAME|USER|EMAIL|URL)$)[A-Z][A-Z0-9_]*$/;
+export const appEnvironmentNameMaxLength = 64;
 export const appEnvironmentNameSchema = z
   .string()
-  .max(64)
-  .regex(/^(?=.*(?:TOKEN|KEY|SECRET|PASSWORD|_ID|_SID|USERNAME|USER|EMAIL|URL)$)[A-Z][A-Z0-9_]*$/);
+  .max(appEnvironmentNameMaxLength)
+  .regex(appEnvironmentNamePattern);
+const forbiddenCommands = [
+  'bash',
+  'dash',
+  'env',
+  'fish',
+  'node',
+  'npx',
+  'npm',
+  'python[0-9]*',
+  'sh',
+  'su',
+  'sudo',
+  'zsh',
+]
+  .map((name) => name.replace(/[a-z]/g, (letter) => `[${letter}${letter.toUpperCase()}]`))
+  .join('|');
+export const appCliCommandSchema = z
+  .string()
+  .regex(new RegExp(`^(?!(?:${forbiddenCommands})$)[A-Za-z][A-Za-z0-9_-]{0,63}$`));
 export const appCliArgvSchema = z
   .array(
     z
@@ -134,11 +156,7 @@ export const appConnectionSchema = z.union([
   }),
   z.strictObject({
     type: z.literal('cli'),
-    command: z
-      .string()
-      .regex(
-        /^(?!(?:bash|dash|env|fish|node|npx|npm|python(?:3(?:\.\d+)?)?|sh|su|sudo|zsh)$)[A-Za-z][A-Za-z0-9_-]{0,63}$/i,
-      ),
+    command: appCliCommandSchema,
     source: appCliSourceSchema,
     authentication: z.tuple([z.literal('env')]),
     environment: z

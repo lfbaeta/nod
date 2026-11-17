@@ -621,9 +621,8 @@ export function AppDiscoveryDialog({
                 <Field
                   key={name}
                   label={
-                    name === 'token'
-                      ? 'API key or access token'
-                      : (discovery.credentialLabels?.[name] ?? name)
+                    discovery.credentialLabels?.[name === 'token' ? (names?.[0] ?? '') : name] ??
+                    (name === 'token' ? 'API key or access token' : name)
                   }
                 >
                   <Input
@@ -644,7 +643,11 @@ export function AppDiscoveryDialog({
                   saving || paths.some((path) => path.kind === 'http' && !readCheckUrl(path))
                 }
               >
-                {saving ? 'Checking…' : 'Connect account'}
+                {saving
+                  ? paths.length > 0 && paths.every((path) => path.kind === 'cli' && !path.testArgv)
+                    ? 'Saving…'
+                    : 'Checking…'
+                  : 'Connect account'}
               </Button>
             </form>
           ))}
