@@ -13,7 +13,7 @@ The short version: memory notes hold only what the owner said in their messages 
 
 Memory is one JSON document, `memory/MEMORY.md`, in Nod's private object store in the database. It sits outside the thread workspace, so it survives a thread reset. It holds up to 256 KiB.
 
-Each entry has an address, `area/slug`, a text of up to 4,000 characters and an optional one-line abstract. There are five areas:
+Each entry has an address, `area/slug`, a text of up to 4,000 characters and an optional one-line abstract. Notes the owner writes keep their line breaks in memory, in the note card and in the index; summaries such as the note list and the Markdown export show them on one line. Notes the memory model writes are one line. There are five areas:
 
 | Area          | Holds                               |
 | ------------- | ----------------------------------- |
@@ -40,7 +40,7 @@ flowchart TD
   find -- path --> l2
 ```
 
-- The **index** lists every entry's full text in the owner context, one line each as `area/slug: text`, with confirmed entries first. Nothing is cut. Tentative entries are marked `(tentative)`, so Pi treats them as likely rather than certain.
+- The **index** lists every entry's full text in the owner context, one row each as `area/slug: text`, with confirmed entries first. A note with line breaks continues its row on lines indented by two spaces. Nothing is cut. Tentative entries are marked `(tentative)`, so Pi treats them as likely rather than certain.
 - An **area** lists its entries.
 - An **entry** shows its full text, status, source messages and evidence count. Pi receives only the saved support quote, not the whole source message. An older note without a saved quote keeps its source reference. Settings → Memory offers a link only when the server verifies that the source belongs to the owner’s active conversation. Historical sources keep their saved support quote or available message excerpt. Missing sources remain unavailable; message lookup is never widened to make a link work.
 
