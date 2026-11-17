@@ -1029,6 +1029,24 @@ function portableToolCallIds(messages: Context['messages'], model: string): Cont
   });
 }
 
+function textContentParts(event: unknown) {
+  const choices = (event as { choices?: unknown } | null)?.choices;
+  if (!Array.isArray(choices)) return;
+  for (const choice of choices as Array<{ delta?: { content?: unknown } } | null>) {
+    const delta = choice?.delta;
+    if (delta && Array.isArray(delta.content))
+      delta.content = delta.content
+        .map((part: { type?: unknown; text?: unknown } | string | null) =>
+          typeof part === 'string'
+            ? part
+            : part?.type === 'text' && typeof part.text === 'string'
+              ? part.text
+              : '',
+        )
+        .join('');
+  }
+}
+
 export async function createPiModelRuntime(
   access: ModelAccess,
   {
@@ -1201,6 +1219,7 @@ export async function createPiModelRuntime(
       onProviderStreamEvent: async (event, model) => {
         heard();
         phase = 'stream';
+        if (model.api === 'openai-completions') textContentParts(event);
         await options?.onProviderStreamEvent?.(event, model);
       },
       ...(target.provider === 'openrouter' && target.id === 'openrouter/free'

@@ -175,6 +175,7 @@ export function BugReportCard({
               <AlertCircle size={16} aria-hidden="true" />
               Sent without the diagnostic report
             </p>
+            {sent.message && <p>{sent.message}</p>}
             {error && (
               <p className="action-card-error" role="alert">
                 {error}

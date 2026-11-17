@@ -11,7 +11,7 @@ import type { Pool } from 'pg';
 import { Compile } from 'typebox/compile';
 import { unified } from 'unified';
 import remarkParse from 'remark-parse';
-import { appConfirmation } from '../src/ports/agent.ts';
+import { appConfirmation, ContextLimitError, ModelRequestError } from '../src/ports/agent.ts';
 import type {
   Agent,
   AgentEvent,
@@ -47,6 +47,61 @@ import { sourceReadSchema } from '../src/shared/proactivity.ts';
 import { memoryObjectStore } from './fixtures/object-store.ts';
 import { createCommandRedactor, createErrorRedactor } from '../src/server/redaction.ts';
 import type { WorkspaceCommandRecord } from '../src/shared/execution.ts';
+
+test('only a terminal context failure requests a chat context restart', async (t) => {
+  for (const ending of [
+    'context',
+    'context-length',
+    'recovered',
+    'summary-access',
+    'quota',
+    'output',
+  ] as const)
+    await t.test(ending, async () => {
+      const run = () =>
+        fixture(async (_tools, emit) => {
+          emit({ type: 'message_start' });
+          if (ending === 'context-length' || ending === 'output') {
+            emit({
+              type: 'message_end',
+              status: 'incomplete',
+              contextExhausted: ending === 'context-length',
+            });
+            return;
+          }
+          emit({
+            type: 'error',
+            message:
+              ending === 'quota'
+                ? 'Synthetic quota exceeded.'
+                : 'Synthetic context window exceeded.',
+            contextExhausted: ending !== 'quota',
+          });
+          emit({ type: 'message_end', status: 'failed' });
+          if (ending === 'summary-access')
+            emit({ type: 'error', message: 'Compaction failed: HTTP 401 access denied.' });
+          if (ending === 'recovered') {
+            emit({ type: 'retry', model: 'Synthetic model', attempt: 1, attempts: 3 });
+            emit({ type: 'message_start' });
+            emit({ type: 'final', text: 'Synthetic recovered answer.' });
+            emit({ type: 'message_end', status: 'succeeded' });
+          }
+        });
+      if (ending === 'recovered') assert.equal((await run()).result.status, 'succeeded');
+      else
+        await assert.rejects(run, (error: unknown) => {
+          if (ending === 'context' || ending === 'context-length')
+            return error instanceof ContextLimitError;
+          if (ending === 'quota' || ending === 'summary-access')
+            return (
+              error instanceof ModelRequestError &&
+              !(error instanceof ContextLimitError) &&
+              error.message.includes(ending === 'quota' ? 'Synthetic quota exceeded.' : 'HTTP 401')
+            );
+          return error instanceof Error && error.constructor === Error;
+        });
+    });
+});
 
 async function fixture(
   run: (

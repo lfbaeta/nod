@@ -617,7 +617,9 @@ export function createPiAgent(options: {
       };
       let idle = false;
       let activation: ExtensionAPI | undefined;
-      const manager = ephemeral ? SessionManager.inMemory(directory) : openLocalSession(directory);
+      const manager = ephemeral
+        ? SessionManager.inMemory(directory)
+        : openLocalSession(directory, input.contextRestart);
       dropFailedInput(manager);
       closeInterruptedCalls(manager);
       const prior = manager.buildSessionContext().messages;
@@ -1149,6 +1151,7 @@ export function createPiAgent(options: {
       };
       let textBlock: number | undefined;
       let thinking = { index: -1, text: '', scanned: 0 };
+      let contextExhausted = false;
       let compaction:
         { id: string; started: number; error?: string; requests: AssistantMessage[] } | undefined;
       const auxiliarySeen = new Set(manager.getEntries().map((entry) => entry.id));
@@ -1169,7 +1172,7 @@ export function createPiAgent(options: {
           settings.applyOverrides({ compaction: budget.compaction });
           const target = readsNativeAudio(model) ? (connection?.textModel ?? model) : model;
           const error = compaction?.error ?? event.errorMessage;
-          if (error && event.reason === 'overflow')
+          if (error && event.reason === 'overflow' && (compaction || !contextExhausted))
             input.onEvent({
               type: 'error',
               message: `${target.provider} / ${target.id}: ${error}`,
@@ -1260,6 +1263,7 @@ export function createPiAgent(options: {
           }
         }
         if (event.type === 'message_end' && event.message.role === 'assistant') {
+          const overflow = isContextOverflow(event.message, model.contextWindow);
           toolCallCount = Math.max(
             1,
             event.message.content.filter((part) => part.type === 'toolCall').length,
@@ -1269,10 +1273,7 @@ export function createPiAgent(options: {
             tokenRateLimit.test(event.message.errorMessage ?? '')
           )
             settings.applyOverrides({ compaction: { enabled: false } });
-          else if (
-            isContextOverflow(event.message, model.contextWindow) ||
-            isRecoverableLength(event.message, model.maxTokens)
-          ) {
+          else if (overflow || isRecoverableLength(event.message, model.maxTokens)) {
             settings.applyOverrides({ compaction: { keepRecentTokens: 0 } });
           }
           const usage = observeUsage(event.message);
@@ -1281,6 +1282,7 @@ export function createPiAgent(options: {
             input.onEvent({
               type: 'error',
               message: `${event.message.provider} / ${event.message.model}: ${event.message.errorMessage?.trim() || 'The provider gave no reason.'}`,
+              ...(overflow ? { contextExhausted: true } : {}),
             });
           if (event.message.stopReason === 'stop') {
             const blocks = event.message.content.filter((item) => item.type === 'text');
@@ -1300,14 +1302,15 @@ export function createPiAgent(options: {
                   ? 'cancelled'
                   : undefined;
           const tokens = event.message.usage;
-          const contextExhausted =
-            status === 'incomplete' &&
-            tokens.input + tokens.cacheRead + tokens.cacheWrite + tokens.output >=
-              model.contextWindow - budget.margin;
+          contextExhausted =
+            overflow ||
+            (status === 'incomplete' &&
+              tokens.input + tokens.cacheRead + tokens.cacheWrite + tokens.output >=
+                model.contextWindow - budget.margin);
           input.onEvent({
             type: 'message_end',
             ...(status ? { status } : {}),
-            ...(contextExhausted ? { contextExhausted: true } : {}),
+            ...(status === 'incomplete' && contextExhausted ? { contextExhausted: true } : {}),
           });
         }
       });

@@ -40,6 +40,7 @@ export function useAppState(accountId?: string) {
             hiddenMessageIds: [],
             turns: [],
             activity: [],
+            chatRecovery: undefined,
           }
         : current,
     );

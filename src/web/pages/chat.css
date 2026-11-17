@@ -1314,3 +1314,10 @@ button.message-work:is(:hover, :focus-visible) {
   flex-basis: 100%;
   margin: 0;
 }
+.chat-recovery {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
