@@ -14,7 +14,6 @@ import { Button } from './ui';
 type Draft = {
   summary: string;
   enabled: boolean;
-  recipient: string | null;
   receipt: FeedbackReceipt | null;
 };
 
@@ -241,12 +240,8 @@ export function BugReportCard({
                 {error}
               </p>
             )}
-            {draft && (!draft.enabled || draft.recipient) && (
-              <p className="bug-report-card-note">
-                {draft.enabled
-                  ? `Sends this summary as written${included ? ' and the diagnostic report' : ''} to ${draft.recipient}.`
-                  : 'Sending isn’t enabled in this build.'}
-              </p>
+            {draft && !draft.enabled && (
+              <p className="bug-report-card-note">Sending isn’t enabled in this build.</p>
             )}
             <Button type="button" disabled={busy || !draft?.enabled} onClick={() => void send()}>
               <Send size={16} aria-hidden="true" />

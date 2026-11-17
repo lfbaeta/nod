@@ -384,7 +384,6 @@ export async function registerFeedback(
       id,
       summary: draft.summary,
       enabled: options.delivery.configured,
-      recipient: options.delivery.recipient,
       receipt: await sentReceipt(id),
     };
   });
