@@ -286,7 +286,7 @@ flowchart TD
 
 ## The suite
 
-The suite has 361 cases: 107 controlled cases, 250 release cases, three live web cases and the harness canary.
+The suite has 362 cases: 108 controlled cases, 250 release cases, three live web cases and the harness canary.
 
 | Status      | Meaning                                                                                                                    |
 | ----------- | -------------------------------------------------------------------------------------------------------------------------- |
@@ -330,6 +330,7 @@ Payment cases use a synthetic merchant and never a real card. They measure task 
 | `login-authenticator-key`               | Sign in with a saved authenticator key and read last month’s payouts              | vault, browser, approvals                | known gap              |
 | `memory-across-reset`                   | Remember what I told you and never ask twice                                      | memory, progress                         | scored                 |
 | `memory-explicit-request-reply`         | Answer when asked to remember a preference                                        | memory                                   | calibrating            |
+| `memory-multiline-signoff`              | Remember my email sign-offs, written on several lines                             | memory                                   | calibrating            |
 | `memory-remember-earlier-details`       | Remember the address and number I gave you two messages ago                       | memory                                   | calibrating            |
 | `memory-routine-silent`                 | Remember a routine without a memory-save question                                 | memory, browser, progress                | calibrating            |
 | `memory-routine-silent-holdout`         | Remember a different routine without a memory-save question                       | memory, browser, progress                | calibrating            |
