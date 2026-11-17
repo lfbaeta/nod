@@ -6257,11 +6257,13 @@ test('opening a website with any browser tool makes private sign-in available', 
       await session.prompt('Use my saved login to open the synthetic profile.', []);
       await session.dispose();
       assert.equal(active.length, calls.length + 1);
-      assert.ok(!active.at(-2)!.includes('sign_in'));
-      assert.ok(
-        active.at(-1)!.includes('sign_in'),
-        `${opener} opened a page without loading sign_in: ${active.at(-1)!.join(', ')}`,
-      );
+      for (const companion of ['sign_in', 'pay']) {
+        assert.ok(!active.at(-2)!.includes(companion));
+        assert.ok(
+          active.at(-1)!.includes(companion),
+          `${opener} opened a page without loading ${companion}: ${active.at(-1)!.join(', ')}`,
+        );
+      }
     });
   }
 });
