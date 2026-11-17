@@ -1683,7 +1683,10 @@ test('a browser that fails to start reports why through the workspace browser', 
         stdout: JSON.stringify(
           args.includes('info')
             ? { success: true, data: { active: false } }
-            : { success: false, error: 'Chrome exited early (exit code: 21)' },
+            : {
+                success: false,
+                error: `Chrome exited early (exit code: 21) for ${join(directory, 'runtime', 'profiles', 'fixture')}`,
+              },
         ),
       }),
     }),
@@ -1691,7 +1694,10 @@ test('a browser that fails to start reports why through the workspace browser', 
   try {
     await assert.rejects(
       fixture.client(directory).act('fixture', { action: 'open', url: 'https://example.com/' }),
-      /The browser said: Chrome exited early \(exit code: 21\)$/,
+      {
+        message:
+          'The workspace browser could not start, so no page opened. The browser said: Chrome exited early (exit code: 21) for [browser data]',
+      },
     );
   } finally {
     await fixture.close();

@@ -599,24 +599,20 @@ export function createAgentBrowserComputer(options: {
       );
     }
     const reason = typeof response.error === 'string' ? response.error : undefined;
-    const failure =
-      action === 'navigate' &&
-      response.success === false &&
-      reason !== undefined &&
-      /^Navigation failed: net::ERR_[A-Z_]+/.test(reason)
-        ? new BrowserActionError('browser_navigation_failed')
-        : action === 'navigate' &&
-            response.success === false &&
-            reason?.startsWith('Operation timed out.')
-          ? new DaemonCommandError()
-          : result.exitCode || response.success === false
-            ? new DaemonCommandError(reason)
-            : undefined;
+    const failed = Boolean(result.exitCode) || response.success === false;
     if (action === 'navigate') {
       await drainInterruptedCommand(state, 'connect', () =>
         daemonSocket(state, options.signal),
       ).catch((error: unknown) => {
-        throw failure ?? error;
+        if (!failed) throw error;
+        throw new BrowserActionError(
+          'browser_start_failed',
+          reason &&
+            redactBrowserText(reason, state.secrets).replace(
+              new RegExp(`${runtimeRoot.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[^\\s'"]*`, 'g'),
+              '[browser data]',
+            ),
+        );
       });
       state.recovered = false;
       state.pageSize = undefined;
@@ -627,7 +623,20 @@ export function createAgentBrowserComputer(options: {
           { signal: options.signal },
         );
     }
-    if (failure) throw failure;
+    if (
+      action === 'navigate' &&
+      response.success === false &&
+      reason !== undefined &&
+      /^Navigation failed: net::ERR_[A-Z_]+/.test(reason)
+    )
+      throw new BrowserActionError('browser_navigation_failed');
+    if (
+      action === 'navigate' &&
+      response.success === false &&
+      reason?.startsWith('Operation timed out.')
+    )
+      throw new DaemonCommandError();
+    if (failed) throw new DaemonCommandError(reason);
     return response.data ?? {};
   }
 
