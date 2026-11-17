@@ -10846,7 +10846,7 @@ test(
   { skip: !process.env.TEST_DATABASE_URL, timeout: 30_000 },
   async () => {
     const { pool, ownerId, store, post, memory, close } = await memoryFixture();
-    const { state, curator } = scriptedCurator();
+    const { calls, state, curator } = scriptedCurator();
     const learning = createMemoryLearning({ pool, ownerId, memory, curator });
     const add = (area: string, slug: string, text: string) => (m: number) => ({
       op: 'add',
@@ -10874,6 +10874,17 @@ test(
         archived: [],
       });
       assert.equal(await memory.context(), `${path}: ${short}`);
+      const invented = randomUUID();
+      const asked = calls.length;
+      await assert.rejects(
+        learning.remember({ messages: [invented] }, first.sourceMessageId),
+        (error: Error) => error.message.includes(invented),
+      );
+      await assert.rejects(
+        learning.remember({ messages: [short] }, first.sourceMessageId),
+        (error: Error) => error.name !== 'ZodError' && !error.message.includes(short),
+      );
+      assert.equal(calls.length, asked);
       const reopened = createMemoryService({ pool, ownerId, store });
       assert.equal(((await reopened.read({ path })) as { text: string }).text, short);
       const detailed = 'Make progress reports detailed from now on.';
@@ -10976,6 +10987,15 @@ test(
       await remember([add('about', 'before-clear', beforeClear)], beforeClearMessage);
       assert.equal((await memory.view()).notes.length, 1);
       curator.curate = curate;
+
+      const older = await post('My synthetic library card renews in March.');
+      for (let index = 0; index < 10; index++) await post(`Synthetic filler ${index}.`);
+      const renewal = await post('Remember that renewal month.');
+      state.answer = () => ({ ops: [] });
+      await learning.remember({}, renewal.sourceMessageId);
+      assert.doesNotMatch(JSON.stringify(calls.at(-1)!.input), /renews in March/);
+      await learning.remember({ messages: [older.id] }, renewal.sourceMessageId);
+      assert.match(JSON.stringify(calls.at(-1)!.input), /renews in March/);
     } finally {
       await close();
     }
