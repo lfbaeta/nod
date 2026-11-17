@@ -986,15 +986,17 @@ export async function createDiscoveredConnections(
       return result;
     } catch (error) {
       if (attempt) {
-        await pool.query(
-          'UPDATE discovered_connection_proposals SET oauth_error=NULL WHERE id=$1 AND owner_id=$2',
-          [attempt.id, owner],
-        );
         track(attempt, 'started');
         track(attempt, 'failed', authorizationFailed ? 'authorization_failed' : 'unknown', {
           step: authorizationFailed ? 'authorize' : 'save',
           error: authorizationFailed ? authorizationError : error,
         });
+        await pool
+          .query(
+            'UPDATE discovered_connection_proposals SET oauth_error=NULL WHERE id=$1 AND owner_id=$2',
+            [attempt.id, owner],
+          )
+          .catch((cause: unknown) => logFailure('connection_reason_clear_failed', cause));
       }
       throw error;
     }
