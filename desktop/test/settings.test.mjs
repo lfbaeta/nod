@@ -1622,6 +1622,11 @@ test('Windows onboarding waits for storage before unlocking credentials and expo
   f.storage.store.environment = async () =>
     assert.fail('No credentials are needed before storage.');
   try {
+    await mkdir(join(f.profileRoot, 'logs'), { recursive: true });
+    await appendFile(
+      join(f.profileRoot, 'logs', 'startup.log'),
+      'Synthetic earlier line\n'.repeat(4000),
+    );
     await f.launch();
     await f.prepare();
     assert.equal(f.children.length, 0);
@@ -1632,10 +1637,6 @@ test('Windows onboarding waits for storage before unlocking credentials and expo
     const showLog = f.handlers.get('nod:startup-log:show');
     await assert.rejects(showLog({ ...event, senderFrame: { url: event.senderFrame.url } }));
     assert.equal(revealed.length, 0);
-    await appendFile(
-      join(f.profileRoot, 'logs', 'startup.log'),
-      'Synthetic earlier line\n'.repeat(4000),
-    );
     await showLog(event);
     assert.deepEqual(revealed, [join(f.profileRoot, 'logs', 'startup.log')]);
     const log = await readFile(revealed[0], 'utf8');
