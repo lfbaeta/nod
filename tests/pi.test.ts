@@ -619,20 +619,40 @@ test('streamed content part arrays reach the answer as text', async (t) => {
         { headers: { 'content-type': 'text/event-stream' } },
       ),
   );
-  const { runtime, model } = await createPiModelRuntime(
-    smallContextAccess('compatible', 'fixture-parts', 8192),
-  );
-  const streamed: string[] = [];
-  const events = runtime.streamSimple(model, {
-    messages: [{ role: 'user', content: 'Synthetic question.', timestamp: 1 }],
-  });
-  for await (const event of events) if (event.type === 'text_delta') streamed.push(event.delta);
-  const result = await events.result();
-  assert.equal(streamed.join(''), 'Synthetic answer.');
-  assert.deepEqual(
-    result.content.map((block) => (block.type === 'text' ? block.text : block.type)),
-    ['Synthetic answer.'],
-  );
+  const compatible = smallContextAccess('compatible', 'fixture-parts', 8192);
+  const mistral: ModelAccess = {
+    provider: 'mistral',
+    method: 'api_key',
+    effort: 'off',
+    read: async () => ({ type: 'api_key', key: 'fixture-parts-key' }),
+    definition: {
+      ...compatible.definition,
+      spec: {
+        ...compatible.definition.spec,
+        provider: 'mistral',
+        api: 'mistral-conversations',
+        baseUrl: 'https://api.mistral.ai',
+        reasoning: true,
+      },
+    },
+  };
+  for (const [access, blocks] of [
+    [compatible, ['Synthetic answer.']],
+    [mistral, ['thinking', 'Synthetic answer.']],
+  ] as const) {
+    const { runtime, model } = await createPiModelRuntime(access);
+    const streamed: string[] = [];
+    const events = runtime.streamSimple(model, {
+      messages: [{ role: 'user', content: 'Synthetic question.', timestamp: 1 }],
+    });
+    for await (const event of events) if (event.type === 'text_delta') streamed.push(event.delta);
+    const result = await events.result();
+    assert.equal(streamed.join(''), 'Synthetic answer.');
+    assert.deepEqual(
+      result.content.map((block) => (block.type === 'text' ? block.text : block.type)),
+      blocks,
+    );
+  }
 });
 
 test('small Pi sessions save full output and keep nested results available to scripts', async (t) => {

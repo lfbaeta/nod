@@ -1219,7 +1219,7 @@ export async function createPiModelRuntime(
       onProviderStreamEvent: async (event, model) => {
         heard();
         phase = 'stream';
-        textContentParts(event);
+        if (model.api === 'openai-completions') textContentParts(event);
         await options?.onProviderStreamEvent?.(event, model);
       },
       ...(target.provider === 'openrouter' && target.id === 'openrouter/free'
