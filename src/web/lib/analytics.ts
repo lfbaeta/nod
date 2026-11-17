@@ -62,6 +62,7 @@ type AnalyticsEvents = {
     | { setting: 'browser_notifications'; value: 'enabled' | 'disabled' | 'dismissed' };
   notification_opened: { kind: 'reply' };
   app_connection_completed: { entry: 'apps' | 'chat' | 'onboarding' | 'manage' };
+  app_connection_chat_requested: undefined;
   presentation_viewed: { kind: Presentation['type'] };
   presentation_action: {
     kind: Presentation['type'];
@@ -205,6 +206,7 @@ const eventProperties: Record<keyof AnalyticsEvents, Record<string, readonly unk
   },
   notification_opened: { kind: ['reply'] },
   app_connection_completed: { entry: ['apps', 'chat', 'onboarding', 'manage'] },
+  app_connection_chat_requested: {},
   presentation_viewed: { kind: presentationKinds },
   presentation_action: {
     kind: presentationKinds,

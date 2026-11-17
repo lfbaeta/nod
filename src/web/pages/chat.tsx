@@ -379,7 +379,7 @@ export function Chat({
   const [replyTo, setReplyTo] = useState<ComposerReply | null | undefined>(null);
   const [replyNotice, setReplyNotice] = useState('');
   const [unavailableQuestions, setUnavailableQuestions] = useState<ReadonlySet<string>>(new Set());
-  useEffect(() => setReplyNotice(''), [text, replyTo?.id]);
+  useEffect(() => setReplyNotice(''), [text, state.threadId]);
   const taskReply = useRef<string | null>(null);
   const [focusTarget, setFocusTarget] = useState<{
     id: string;
@@ -2484,6 +2484,41 @@ export function Chat({
               {replyNotice}
             </Notice>
           )}
+          {state.chatRecovery && (
+            <Notice kind="info">
+              <div className="chat-recovery">
+                <span>This chat needs a restart. Your messages, files and tasks stay.</span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={!connected || sending || Boolean(chatWork) || recovering}
+                  onClick={async () => {
+                    const expectedThread = threadId;
+                    setRecovering(true);
+                    setError('');
+                    try {
+                      await post('/api/conversation/restart-context', {
+                        threadId,
+                        turnId: state.chatRecovery!.turnId,
+                      });
+                      await refresh();
+                      if (threadRef.current === expectedThread) {
+                        setReplyTo(null);
+                        setReplyNotice('Chat restarted. Send your request again.');
+                        composer.current?.focus();
+                      }
+                    } catch (cause) {
+                      if (threadRef.current === expectedThread) setError(errorMessage(cause));
+                    } finally {
+                      setRecovering(false);
+                    }
+                  }}
+                >
+                  {recovering ? 'Restarting…' : 'Restart chat'}
+                </Button>
+              </div>
+            </Notice>
+          )}
           {error && <Notice>{error}</Notice>}
           {connectionNotice && (
             <Notice kind={connectionNotice.kind} onDismiss={() => setConnectionNotice(null)}>
@@ -2491,6 +2526,7 @@ export function Chat({
             </Notice>
           )}
           {state.configuration.llmReady &&
+            !state.chatRecovery &&
             (state.configuration.modelIssue ||
               (modelFailed && (failedRequest || state.configuration.modelAlternative))) && (
               <Notice kind="info">
@@ -2545,7 +2581,7 @@ export function Chat({
               restoreReply={(saved) => {
                 if (!saved || !hiddenMessageIds.current.has(saved.id)) setReplyTo(saved);
               }}
-              ready={state.configuration.llmReady && !welcoming}
+              ready={state.configuration.llmReady && !welcoming && !recovering}
               busy={connected && working}
               text={text}
               setText={setText}

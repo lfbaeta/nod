@@ -74,6 +74,7 @@ export async function safeRemoteFetch(
   redirects = 5,
 ): Promise<Response> {
   const prepared = new Request(input, init);
+  if (!prepared.headers.has('user-agent')) prepared.headers.set('user-agent', 'nod/0.1.0');
   const signal = AbortSignal.any([prepared.signal, AbortSignal.timeout(600_000)]);
   signal.throwIfAborted();
   const { url, address } = await new Promise<Awaited<ReturnType<typeof publicUrl>>>(
@@ -327,7 +328,6 @@ export function createDiscoveredTransport(
         signal,
         headers: {
           ...headers,
-          'User-Agent': 'nod/0.1.0',
           Accept: 'application/json, */*;q=0.1',
           ...(method !== 'GET' ? { 'Content-Type': 'application/json' } : {}),
         },

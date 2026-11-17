@@ -127,8 +127,24 @@ export async function readPiSessionEntries(options: { threadId: string; sessionR
   return entries(await readFile(latest.path)).slice(1);
 }
 
-export function openLocalSession(directory: string) {
-  const manager = SessionManager.continueRecent(directory, directory);
+const restartType = 'nod-context-restart';
+
+export function openLocalSession(directory: string, contextRestart?: string) {
+  let manager = SessionManager.continueRecent(directory, directory);
+  if (
+    contextRestart &&
+    !manager
+      .getEntries()
+      .some(
+        (entry) =>
+          entry.type === 'custom' &&
+          entry.customType === restartType &&
+          entry.data === contextRestart,
+      )
+  ) {
+    manager = SessionManager.create(directory, directory);
+    manager.appendCustomEntry(restartType, contextRestart);
+  }
   const file = manager.getSessionFile();
   const session =
     file && existsSync(file) && statSync(file).size > rebaseAt
@@ -189,6 +205,10 @@ function rebaseSession(source: SessionManager, next: SessionManager) {
         );
     }
   }
+  const restart = source
+    .getEntries()
+    .findLast((entry) => entry.type === 'custom' && entry.customType === restartType);
+  if (restart?.type === 'custom') next.appendCustomEntry(restartType, restart.data);
   return next;
 }
 

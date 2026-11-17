@@ -49,7 +49,7 @@ import type {
   RuntimeContext,
   RuntimeResult,
 } from '../ports/agent.ts';
-import { appConfirmation, ModelRequestError } from '../ports/agent.ts';
+import { appConfirmation, ContextLimitError, ModelRequestError } from '../ports/agent.ts';
 import { isMessageReaction, reactionEmoji } from '../shared/emoji.ts';
 import { defaultPreferences, isQuietTime } from './preferences.ts';
 import { formattingLocale, timeZoneRegion } from '../shared/date-locale.ts';
@@ -941,6 +941,40 @@ export async function resetThread(expectedThreadId: string, analytics?: CaptureA
   };
 }
 
+export async function chatRecovery(threadId: string, database: Pool | PoolClient = pool) {
+  const { rows } = await database.query<{ turnId: string }>(
+    `SELECT u.id AS "turnId" FROM (
+       SELECT id,status,context_exhausted,created_at FROM turns
+       WHERE owner_id=$1 AND thread_id=$2 AND session_id=$2
+       ORDER BY created_at DESC,id DESC LIMIT 1
+     ) u JOIN threads th ON th.id=$2 AND th.owner_id=$1 AND th.archived_at IS NULL
+     WHERE u.status='failed' AND u.context_exhausted
+       AND u.created_at>COALESCE(th.chat_restarted_at,'-infinity')
+       AND NOT EXISTS (SELECT 1 FROM turns active WHERE active.owner_id=$1 AND active.thread_id=$2
+         AND active.session_id=$2 AND active.status IN ('queued','running'))`,
+    [ownerId, threadId],
+  );
+  return rows[0];
+}
+
+export async function restartChatContext(threadId: string, turnId: string) {
+  await transaction(async (client) => {
+    if (
+      (await lockThread(client)).id !== threadId ||
+      (await chatRecovery(threadId, client))?.turnId !== turnId
+    )
+      throw httpError(
+        'This chat no longer needs a context restart. Reload it before trying again.',
+      );
+    await client.query(
+      'UPDATE threads SET chat_restarted_at=now(),updated_at=now() WHERE id=$1 AND owner_id=$2',
+      [threadId, ownerId],
+    );
+  }, pool);
+  refresh();
+  return { ok: true };
+}
+
 export async function reactToAssistantMessage(
   messageId: string,
   reaction: MessageReaction | null,
@@ -1138,16 +1172,22 @@ async function finishTurn(
   client: PoolClient,
   turnId: string,
   status: string,
-  fields: { waitingReason?: string; error?: string; handoffBrowserId?: string } = {},
+  fields: {
+    waitingReason?: string;
+    error?: string;
+    handoffBrowserId?: string;
+    contextExhausted?: boolean;
+  } = {},
 ) {
   const updated = await client.query(
-    "UPDATE turns SET status=$2,waiting_reason=$3,error=$4,handoff_browser_id=$5,finished_at=now() WHERE id=$1 AND status='running' RETURNING id",
+    "UPDATE turns SET status=$2,waiting_reason=$3,error=$4,handoff_browser_id=$5,context_exhausted=$6,finished_at=now() WHERE id=$1 AND status='running' RETURNING id",
     [
       turnId,
       status,
       fields.waitingReason ?? null,
       fields.error ?? null,
       fields.handoffBrowserId ?? null,
+      fields.contextExhausted ?? false,
     ],
   );
   if (updated.rowCount)
@@ -1206,7 +1246,11 @@ async function failTurn(
   turnId: string,
   present: ThreadDependencies['present'],
   error = interrupted,
-  { next, modelFailure }: { next?: string; modelFailure?: boolean } = {},
+  {
+    next,
+    modelFailure,
+    contextExhausted,
+  }: { next?: string; modelFailure?: boolean; contextExhausted?: boolean } = {},
 ) {
   const turn = await transaction(async (client) => {
     const thread = await lockThread(client);
@@ -1235,7 +1279,7 @@ async function failTurn(
       )
     ).rows[0];
     if (!turn) return;
-    await finishTurn(client, turnId, 'failed', { error });
+    await finishTurn(client, turnId, 'failed', { error, contextExhausted });
     if (modelFailure) await withdraw(client, [turnId], false);
     const task = turn.task_id
       ? (
@@ -1280,7 +1324,7 @@ async function failTurn(
         turnId,
         ownerId,
         turn.thread_id,
-        `${modelFailure ? 'model-failure' : 'failure'}:${turnId}`,
+        `${contextExhausted ? 'context-failure' : modelFailure ? 'model-failure' : 'failure'}:${turnId}`,
         turn.latest_user_message_id,
         Boolean(turn.task_id || work),
         error,
@@ -1292,7 +1336,7 @@ async function failTurn(
         { threadId: turn.thread_id, turnId, taskMessageId: turn.taskMessageId },
         message.trim(),
         [],
-        `${modelFailure ? 'model-failure' : 'failure'}:${turnId}`,
+        `${contextExhausted ? 'context-failure' : modelFailure ? 'model-failure' : 'failure'}:${turnId}`,
       );
   }, pool);
   return true;
@@ -1493,6 +1537,7 @@ async function loadTurnContext(turn: any, dependencies: ThreadDependencies) {
     connectedApps,
     mcpServers,
     confirmedActions,
+    restarted,
   ] = await Promise.all([
     loadMessage(sourceMessageId),
     pool.query(
@@ -1502,10 +1547,11 @@ async function loadTurnContext(turn: any, dependencies: ThreadDependencies) {
        SELECT role,text,audio_caption AS "audioCaption",created_at AS "createdAt",reaction,attachments,presentation,answer_choices AS "answerChoices",unseen,turn_id AS "turnId" FROM (
        SELECT m.role,m.text,m.audio_caption,m.created_at,m.id,m.reaction,m.attachments,m.presentation,m.answer_choices,m.turn_id,
        COALESCE(u.background AND m.created_at > COALESCE(seen.at,'-infinity'),false) AS unseen
-       FROM messages m CROSS JOIN seen CROSS JOIN boundary
+       FROM messages m JOIN threads th ON th.id=m.thread_id CROSS JOIN seen CROSS JOIN boundary
        LEFT JOIN turns u ON u.id=m.turn_id AND u.owner_id=m.owner_id
        WHERE m.owner_id=$1 AND m.thread_id=$2 AND m.hidden_at IS NULL AND m.id IS DISTINCT FROM $3::uuid
        AND m.approval_answer IS NULL AND NOT (m.role='user' AND ${withdrawnSql('m')})
+       AND ($6::uuid<>$2::uuid OR m.created_at>COALESCE(th.chat_restarted_at,'-infinity'))
        AND (NOT $5::boolean OR (m.created_at<=boundary.at AND
          (u.id IS NULL OR u.session_id=$6
           OR (u.status IN ('succeeded','failed','cancelled') AND u.finished_at<=boundary.at))))
@@ -1530,6 +1576,12 @@ async function loadTurnContext(turn: any, dependencies: ThreadDependencies) {
       : dependencies.connectedApps?.().catch(() => undefined),
     dependencies.mcpServers?.().catch(() => undefined),
     dependencies.stoppedOutcomes?.(turn.id),
+    turn.session_id === threadId
+      ? pool.query<{ at: Date | null }>(
+          'SELECT chat_restarted_at AS at FROM threads WHERE id=$1 AND owner_id=$2',
+          [threadId, ownerId],
+        )
+      : undefined,
   ]);
   const preference = preferences.rows[0];
   const historyTurnIds = [
@@ -1553,6 +1605,7 @@ async function loadTurnContext(turn: any, dependencies: ThreadDependencies) {
     ...source,
     history: history.rows,
     context: {
+      ...(restarted?.rows[0]?.at ? { contextRestart: restarted.rows[0].at.toISOString() } : {}),
       firstConversationTurn: source.firstConversationTurn,
       timeZone,
       locale: preference?.locale || formattingLocale(timeZone ? timeZoneRegion(timeZone) : null),
@@ -2333,6 +2386,7 @@ async function executeTurn(turn: any, dependencies: ThreadDependencies) {
         await failTurn(turnId, dependencies.present, failureText(error), {
           modelFailure: failure === 'model',
           next: failure === 'model' ? dependencies.modelAlternative?.() : undefined,
+          contextExhausted: error instanceof ContextLimitError,
         })
       )
         logFailure('turn_failed', error, { threadId, turnId, sessionId: turn.session_id });

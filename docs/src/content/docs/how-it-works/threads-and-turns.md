@@ -169,6 +169,16 @@ Each session also checks in with you. When its model spend since your last messa
 
 ## Reset
 
+### Restart chat context
+
+When a chat turn ends with a confirmed context failure, the web and desktop apps offer **Restart chat**. Automatic retries and compaction finish before this control appears. Other model errors do not offer a context restart.
+
+`POST /api/conversation/restart-context` requires the active thread ID and its latest failed chat turn ID. It refuses a stale request or a chat with queued or running work. An earlier question that a later turn replaced does not block it. It records a restart boundary without a model call. The next chat turn opens a fresh Pi transcript and receives only recent chat after that boundary. Earlier transcripts and messages remain saved. Chat history search can still read earlier messages.
+
+The thread, workspace, browser, independent tasks, schedules, memory, accounts and settings stay. The failed request and its actions do not run again. The owner sends a new request to continue.
+
+### Start a new conversation
+
 Reset is available through the development API at `POST /api/conversation/reset`. It archives the thread, cancels its turns and closes its open task records. The next turn starts a new Pi session, workspace and browser.
 
 | Archived                                             | Deleted                                                    | Kept                                                          |
