@@ -16,10 +16,16 @@ export async function modelServiceError(
   const values = [...new Set(secrets.filter(Boolean))].sort(
     (left, right) => right.length - left.length,
   );
-  const expression = values.length
-    ? new RegExp(values.map((value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'g')
-    : undefined;
-  const redact = (value: string) => (expression ? value.replace(expression, '[redacted]') : value);
+  const redact = (value: string) => {
+    if (!values.length) return value;
+    let result = '';
+    for (let at = 0; at < value.length;) {
+      const secret = values.find((secret) => value.startsWith(secret, at));
+      result += secret ? '[redacted]' : value[at];
+      at += secret?.length ?? 1;
+    }
+    return result;
+  };
   let reason = response.statusText;
   let serviceReason: string | undefined;
   const reader = response.body?.getReader();

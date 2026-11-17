@@ -126,6 +126,15 @@ test('channel verification keeps service failures specific and removes submitted
     assert.equal(overlapping.reason, 'secret: [redacted]');
     assert.ok(overlapping.message.endsWith('secret: [redacted]'));
   }
+  const literal = await modelServiceError(
+    Response.json(
+      { error: { message: 'https://fixtureXexampleXtest/v1 | https://fixture.example.test/v1' } },
+      { status: 403 },
+    ),
+    'Synthetic service',
+    ['https://fixture.example.test/v1'],
+  );
+  assert.equal(literal.reason, 'https://fixtureXexampleXtest/v1 | [redacted]');
   const whatsapp = {
     accessToken: 'synthetic-meta-access-token',
     appSecret: 'a'.repeat(32),
