@@ -114,6 +114,18 @@ test('channel verification keeps service failures specific and removes submitted
   );
   assert.ok(modelError.message.includes('Synthetic model failure'));
   assert.ok(!modelError.message.includes('private-extra-field'));
+  for (const secrets of [
+    ['synthetic-key', 'synthetic-key-with-more-data'],
+    ['a', 'a+b[private]'],
+  ]) {
+    const overlapping = await modelServiceError(
+      Response.json({ error: { message: `secret: ${secrets[1]}` } }, { status: 403 }),
+      'Synthetic service',
+      secrets,
+    );
+    assert.equal(overlapping.reason, 'secret: [redacted]');
+    assert.ok(overlapping.message.endsWith('secret: [redacted]'));
+  }
   const whatsapp = {
     accessToken: 'synthetic-meta-access-token',
     appSecret: 'a'.repeat(32),

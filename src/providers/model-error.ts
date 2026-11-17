@@ -13,11 +13,13 @@ export async function modelServiceError(
   secrets: string[] = [],
   detailFields = ['message', 'type', 'code', 'status', 'param'],
 ) {
-  const redact = (value: string) =>
-    secrets.reduce(
-      (text, secret) => (secret ? text.replaceAll(secret, '[redacted]') : text),
-      value,
-    );
+  const values = [...new Set(secrets.filter(Boolean))].sort(
+    (left, right) => right.length - left.length,
+  );
+  const expression = values.length
+    ? new RegExp(values.map((value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'g')
+    : undefined;
+  const redact = (value: string) => (expression ? value.replace(expression, '[redacted]') : value);
   let reason = response.statusText;
   let serviceReason: string | undefined;
   const reader = response.body?.getReader();
