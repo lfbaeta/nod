@@ -89,7 +89,7 @@ Events use `analytics_schema=v4`, `environment`, and `app_version` when availabl
 
 UI events add `surface` (`web` or `desktop`) and a normalized app `route`. Server events add `capture_source=server`.
 
-Browser SDK metadata can include the browser and OS names/versions, device type, screen and viewport dimensions, SDK name/version, event time/UUID, and pseudonymous session/window IDs. Native first-open, path, and verified-server-connection events have their time and UUID but no browser session or window metadata. The public ingestion identifier is included for routing. This metadata doesn't contain the raw browser user-agent string or private Nod owner, thread, turn, or message IDs.
+Browser SDK metadata can include the browser and OS names/versions, device type, screen and viewport dimensions, SDK name/version, event time/UUID, and pseudonymous session/window IDs. Native first-open, path, local-setup, and verified-server-connection events have their time and UUID but no browser session or window metadata. The public ingestion identifier is included for routing. This metadata doesn't contain the raw browser user-agent string or private Nod owner, thread, turn, or message IDs.
 
 The server SDK adds its name and version, event timestamp and UUID, and a constant server marker (`$is_server=true`). Ordinary events disable GeoIP lookup (`$geoip_disable=true`) and person-profile processing (`$process_person_profile=false`). Explicit `$set` calls add the fixed About you choices and, after separate consent, `email` and consent metadata under the analytics ID.
 
@@ -114,6 +114,7 @@ Model `request_kind` separates `chat`, `task`, `observer`, `helper`, `compaction
 | `$pageview`                                       | Normalized app route. URLs use the placeholder `https://app.example` host.                                                                          |
 | `app_opened`                                      | Fresh packaged native setup opening or first consented app UI session, with fixed entry and route; native setup marks server telemetry support.     |
 | `startup_path_selected`                           | Fresh native Welcome navigation: local Get started, opening the remote-server form, or returning to Welcome. It does not confirm server connection. |
+| `local_setup_observed`                            | Changed native runtime and startup states, setup availability, and fixed platform after local setup is selected. No raw error or path.              |
 | `server_connection_verified`                      | The desktop successfully authenticated with a saved Nod server and entered the ready state. No server URL, token, or owner identifier.              |
 | `onboarding_step_viewed`                          | Step (`welcome`, `email`, `about`, `brain`, `privacy`, `join`) and direction. The native setup window has no step-view event.                       |
 | `onboarding_step_skipped`                         | Skipped `email` step.                                                                                                                               |
@@ -134,6 +135,7 @@ Model `request_kind` separates `chat`, `task`, `observer`, `helper`, `compaction
 | `message_reaction_changed`, `message_action`      | Fixed reaction/action, input method, and assistant/user role. Copy follows clipboard success.                                                       |
 | `attachment_added`                                | Picker/drop/paste, first-file category, and count bucket (`1`, `2-5`, `6+`).                                                                        |
 | `app_connect_clicked`, `app_connection_completed` | Entry point and whether access setup was needed, or completed connection flow.                                                                      |
+| `app_connection_chat_requested`                   | Selection of Open chat in an Apps connection-success notice. No app, account, sign-in link, or message content.                                     |
 | `model_selected`                                  | Provider, settings/onboarding entry, and whether the recommendation was chosen.                                                                     |
 | `ui_error`                                        | Fixed area and action, without error text.                                                                                                          |
 | `feedback_sent`                                   | Bug/feature/other category and attachment/report booleans, without feedback content.                                                                |
@@ -144,7 +146,13 @@ Connecting email is optional. About you answers are counted as fixed choices in 
 
 Native setup-opening, startup-path, and verified-server-connection events use the local desktop ID. Opening the server form records a remote path choice, and returning to Welcome records a new path choice. Verification records an authenticated connection after the saved server starts; checking a candidate address before saving it does not count. The desktop rechecks the server's current usage-sharing choice and revision before recording verification. Older servers without a revision still connect, but their successful connections are not observed by this event until upgraded. This allows first-open-to-verified-connection measurement for a desktop ID. The connected server's other events use its own ID and cannot be joined to that desktop journey. A later opt-out or failed delivery can leave an opening without observed continuation; missing continuation is not confirmed abandonment.
 
+After **Get started** saves a local choice with usage sharing on, `local_setup_observed` records the current native state and later state changes. It also records an unfinished local setup when the app restarts. `runtime_status` and `startup_status` use `idle`, `preparing`, `starting`, `ready`, `failed`, or `unknown`. `setup_available` means the local service passed its health and setup checks; runtime preparation can still be in progress. `platform` is `darwin`, `win32`, `linux`, or `other`. The event sends no messages, errors, file paths, server addresses, or progress text. Repeated progress updates with the same state do not send another observation. Choosing the remote path stops local observations. Turning sharing off drops queued observations and does not replay them later.
+
+Startup-path events from these builds include `local_setup_telemetry_available=true`. Use this marker and a complete observation window for local setup cohorts. State observations do not prove that the web setup page appeared or that an owner finished onboarding. A missing observation can result from closure, opt-out, or failed delivery.
+
 Native first opens from builds that can emit `server_connection_verified` include `server_connection_telemetry_available=true`. Use that marker to limit the first-day server-connection rate to eligible first-open cohorts; older native opens lack it. There is no separate install event.
+
+After a confirmed connection from Apps, selecting **Open chat** records `app_connection_chat_requested`. It records a navigation request, not a message, task, or successful goal. It does not send a message or start work. The event has no connection name, account, or sign-in address.
 
 ### Runs, models, and connected services
 
@@ -188,6 +196,8 @@ Task completion records a declared status, not verified success. `notified` mean
 An explicitly reported API cost of zero remains zero. A zero estimate without a reported charge is unpriced and has no `cost_usd`. Positive plan estimates remain priced even when the provider reports no charge. Costs are rounded to six decimal places after pricing is classified, so a tiny known cost can display as zero.
 
 Saved connections don't prove access works. Successful service calls don't prove task success. Connection observations occur at startup, when sharing turns on, and after changes. Individual `connection_observed` events omit the zero state and can include older connections. `connection_inventory_observed` adds one zero-inclusive app-type snapshot after a successful read; the latest snapshot is the latest observed state, not continuously verified live inventory. Several accounts of the same public app, or several custom connections, count as one type. Source reads measure observed calls and bounded results, without source identifiers or content.
+
+Model connection failures include a failure to start ChatGPT or OpenRouter sign-in. Explicit sign-in cancellation is not a failed connection. Older releases can omit failures before sign-in starts.
 
 Channel observations include both channels, including disabled ones, after a successful settings read while sharing is on. Telegram reports `connected` only after an owner is paired and its configured polling or registered webhook mode is ready. Linked WhatsApp reports `connected` only while the link reports that state; a configured cloud webhook remains `configured_unverified`. These states describe observed setup, not successful message delivery.
 

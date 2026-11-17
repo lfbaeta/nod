@@ -262,6 +262,7 @@ export interface Configuration {
   conversationResetEnabled: boolean;
 }
 export interface AppState {
+  chatRecovery?: { turnId: string };
   tasks?: Task[];
   threadId: string;
   hasEarlierMessages?: boolean;

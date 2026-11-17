@@ -73,13 +73,13 @@ For a small run, add `--tier pr --repeat 1`. To cap the spend at $20, add `--bud
 
 ### Run the release suite
 
-The release suite adds 247 cases: 200 of everyday work across every connected app, the browser, computer use, Vault and payments, files, memory, schedules, background events and the trust check, and 47 generated proactivity cases: 45 stress and population cases and two attention cases. Run it on your computer before a release. CI never runs it, because a full pass is several hundred attempts.
+The release suite adds 250 cases: 203 of everyday work across every connected app, the browser, computer use, Vault and payments, files, memory, schedules, background events and the trust check, and 47 generated proactivity cases: 45 stress and population cases and two attention cases. Run it on your computer before a release. CI never runs it, because a full pass is several hundred attempts.
 
 ```sh title="Terminal"
 pnpm run eval:capability run --tier release --repeat 3 --concurrency 3 --budget 500
 ```
 
-`--tier release` runs the release cases together with every controlled case, 351 attempts per repeat before time-window skips. Each attempt starts its own workspace and browser containers; `--concurrency 6` fits in 8 GB of Docker memory. Database connections are a separate limit. Start with concurrency two when you use a standard disposable database. Each attempt starts several connection pools. Parallel campaigns add their load. Increase concurrency only when the database has spare connections. To run one area, add `--capability vault`, or name cases with `--scenario`.
+`--tier release` runs the release cases together with every controlled case, 354 attempts per repeat before time-window skips. Each attempt starts its own workspace and browser containers; `--concurrency 6` fits in 8 GB of Docker memory. Database connections are a separate limit. Start with concurrency two when you use a standard disposable database. Each attempt starts several connection pools. Parallel campaigns add their load. Increase concurrency only when the database has spare connections. To run one area, add `--capability vault`, or name cases with `--scenario`.
 
 Results go to `.local/capability-evals/<label>/`. Open `report.html` to read every transcript and check. A label never overwrites an earlier run. If a worker fails before it can save checks, its log records the phase: start, prepare, play, collect, or grade.
 
@@ -218,7 +218,7 @@ The branch's code runs with the eval keys.
 
 With a baseline, the run summary shows the verdict and both sides' scores. Without one, it shows this run's scores. The `capability-evals` artifact, kept for 14 days, has a `report.html` for each run. A low score doesn't fail the workflow. It fails only when nothing could be scored.
 
-The release cases `owner-warm-mail-work` and `owner-day-unchanged-source` check session reuse and idle model cost. `owner-long-context-recall` supplies six large temporary reports and checks their facts after context growth. Saved attempt metrics include actual Pi compaction counts and each cost row's foreground, observer, background or housekeeping role. Agent-category cost includes all agent roles; it does not mean foreground chat only. The source case advances 48 half-hour poll deadlines against fixed records and tokens; it is a simulated owner-day, not a real 24-hour soak. `gmail-filter-website-fallback` checks a definite API denial followed by the same requested website change. `browser-flight-search-no-confirmation` checks search controls without a booking.
+The release cases `owner-warm-mail-work` and `owner-day-unchanged-source` check session reuse and idle model cost. `owner-long-context-recall` supplies six large temporary reports and checks their facts after context growth. `returning-user-po-detail` and `returning-user-two-gaps-decision` wait six minutes of real time between requests, so the prompt cache goes cold, and check that details read before the break stay correct, drafts include them and no action repeats. Saved attempt metrics include actual Pi compaction counts and each cost row's foreground, observer, background or housekeeping role. Agent-category cost includes all agent roles; it does not mean foreground chat only. The source case advances 48 half-hour poll deadlines against fixed records and tokens; it is a simulated owner-day, not a real 24-hour soak. `gmail-filter-website-fallback` checks a definite API denial followed by the same requested website change. `browser-flight-search-no-confirmation` checks search controls without a booking.
 
 ## Read the scores
 
@@ -286,7 +286,7 @@ flowchart TD
 
 ## The suite
 
-The suite has 355 cases: 104 controlled cases, 247 release cases, three live web cases and the harness canary.
+The suite has 358 cases: 104 controlled cases, 250 release cases, three live web cases and the harness canary.
 
 | Status      | Meaning                                                                                                                    |
 | ----------- | -------------------------------------------------------------------------------------------------------------------------- |
@@ -313,6 +313,7 @@ Payment cases use a synthetic merchant and never a real card. They measure task 
 | `catalog-connect-mcp`                   | Discover ClickUp MCP and provide a private sign-in handoff                        | apps                                     | calibrating            |
 | `catalog-reconnect`                     | Reconnect an expired saved account without adding or replacing another one        | apps                                     | calibrating            |
 | `chase-unpaid-invoice`                  | Chase an unpaid invoice, but ask me before the second nudge                       | long-running, schedules, approvals, apps | calibrating            |
+| `chat-change-topic`                     | Change topics in the same chat and finish a supplied-data comparison              | progress                                 | calibrating            |
 | `competitor-digest`                     | Weekly competitor digest with screenshots of what changed                         | browser, schedules, memory, files        | scored                 |
 | `finance-sheet`                         | Spending by category vs budget from my sheet, then a daily check                  | apps, files, schedules, approvals        | scored                 |
 | `french-site-portuguese-reply`          | Explain a French shop's repair process in Portuguese                              | research, browser                        | calibrating            |
@@ -517,6 +518,8 @@ Every release case is calibrating until it has been run and sorted. The table li
 | `reply-launch-thread`              | In #launch, reply to the launch-date thread that we're moving it                                                                  | apps, approvals                 |
 | `reschedule-and-tell`              | Push tomorrow's design review back an hour and email Ana to let her know                                                          | apps, approvals                 |
 | `return-wrong-size`                | Start a return for the jacket from order 48213, it's the wrong size. I'm keeping the shoes.                                       | browser, apps                   |
+| `returning-user-po-detail`         | After a six-minute break, what was the PO number in Priya's email, and when is it due? Then draft a reply with it                 | apps, long-running              |
+| `returning-user-two-gaps-decision` | After two six-minute breaks, draft an email to the printer vendor I chose earlier                                                 | apps, long-running              |
 | `sales-pdf-report`                 | Make a one-page PDF summary with total revenue and the best month, and send it                                                    | files, progress                 |
 | `schedule-ny-time`                 | Every day at 9am New York time, remind me to check the US market open                                                             | schedules                       |
 | `scheduled-post-linear-to-slack`   | Every Friday at 17:00, post the Web issues we closed this week in #eng                                                            | schedules, apps                 |
@@ -537,6 +540,7 @@ Every release case is calibrating until it has been run and sorted. The table li
 | `slack-mentions-needing-me`        | Did anyone mention me in Slack in the last day and need something from me?                                                        | apps                            |
 | `spa-rendered-data`                | What's the current wait time at the Alfama clinic on clinicas-lx.example.net?                                                     | browser, research               |
 | `status-question-mid-task`         | Add a row to my Invoices sheet for each invoice email this quarter, and tell me how far along you are                             | progress, apps, long-running    |
+| `stop-background-work`             | Stop all background work, it keeps using credits                                                                                  | schedules                       |
 | `stop-one-schedule`                | Stop the daily news digest                                                                                                        | schedules                       |
 | `stop-then-new-task`               | Stop the thank-you drafts halfway, then answer a quick sum instead                                                                | progress, apps, long-running    |
 | `summary-tab-totals`               | Add a Summary tab to my Budget Q3 sheet with the total per category                                                               | apps, files                     |
