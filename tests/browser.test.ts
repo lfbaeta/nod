@@ -6979,6 +6979,7 @@ test('chat shows pending sends and active work before a model step', async () =>
         assert.ok(!document.querySelector('.thinking').textContent.includes('hotel'));
         const history = document.querySelector('.thinking details');
         assert.equal(history.open, true);
+        assert.deepEqual(Array.from(history.querySelectorAll('ol > li'), entry => entry.textContent), ['Read the synthetic report']);
         assert.equal(document.querySelector('[role="status"] [role="status"]'), null);
         await act(async () => history.querySelector('summary').click());
         await settle(() => !history.open);
