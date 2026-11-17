@@ -7,6 +7,8 @@ sidebar:
 
 Besides [Composio apps](/connect/apps/), Nod connects to Notion, Linear and n8n through their own MCP servers. For other services, it can set up an MCP server, an HTTP API or a command-line tool (CLI).
 
+These built-in MCP apps use the same folder format as community apps. Browse their [app pages](/connect/community-apps/), or follow [Creating your own connectors](/contribute/apps/) to add one.
+
 ## Notion and Linear
 
 Notion and Linear connect through their own hosted MCP servers, the same way as any [other MCP server](#connect-another-service). Open **Apps**, select **Connect** and sign in.

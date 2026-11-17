@@ -88,6 +88,7 @@ import {
 } from '../providers/discovered/remote.ts';
 import { createDiscoveredOAuth } from '../providers/discovered/oauth.ts';
 import { createDiscoveredConnections } from './discovered-connections.ts';
+import { bundledApps } from './app-catalog.ts';
 import { createLocalFiles, isLocalFilesAction } from './local-files.ts';
 import { createAppGrantVault } from './vault-app-grants.ts';
 import { createDockerWorkspace } from '../providers/docker/index.ts';
@@ -893,7 +894,10 @@ async function initializeApplication(
   };
   const mailCheck = createMailCheck({ curator, decisions });
   const skillLibrary = createSkillLibrary(
-    fileURLToPath(new URL('../runtime/skills/', import.meta.url)),
+    [
+      fileURLToPath(new URL('../runtime/skills/', import.meta.url)),
+      ...[...bundledApps.values()].flatMap((app) => (app.skills ? [app.skills] : [])),
+    ],
     coreSkills,
   );
   const analyzeImages =

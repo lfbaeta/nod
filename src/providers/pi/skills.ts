@@ -4,10 +4,12 @@ import { loadSkills } from '@earendil-works/pi-coding-agent';
 import type { SkillLibrary } from '../../ports/agent.ts';
 
 export function createSkillLibrary(
-  directory: string,
+  directory: string | readonly string[],
   excluded: readonly string[] = [],
 ): SkillLibrary {
-  const root = realpathSync(directory);
+  const roots = (typeof directory === 'string' ? [directory] : directory).map((path) =>
+    realpathSync(path),
+  );
   const checkedPath = (base: string, file: string) => {
     const path = realpathSync(resolve(base, file));
     if (!path.startsWith(base + sep) || !path.endsWith('.md'))
@@ -15,21 +17,24 @@ export function createSkillLibrary(
     if (!statSync(path).isFile()) throw new Error('The skill file must be a regular file.');
     return path;
   };
-  const skillPaths = readdirSync(root, { withFileTypes: true })
-    .filter(
-      (entry) =>
-        entry.isDirectory() && !entry.name.startsWith('.') && !excluded.includes(entry.name),
-    )
-    .sort((a, b) => a.name.localeCompare(b.name))
-    .map((entry) => checkedPath(resolve(root, entry.name), 'SKILL.md'));
+  const skillPaths = roots.flatMap((root) =>
+    readdirSync(root, { withFileTypes: true })
+      .filter(
+        (entry) =>
+          entry.isDirectory() && !entry.name.startsWith('.') && !excluded.includes(entry.name),
+      )
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map((entry) => checkedPath(resolve(root, entry.name), 'SKILL.md')),
+  );
   const { skills, diagnostics } = loadSkills({
-    cwd: root,
-    agentDir: root,
+    cwd: roots[0],
+    agentDir: roots[0],
     skillPaths,
     includeDefaults: false,
   });
   if (
     diagnostics.length ||
+    new Set(skills.map((skill) => skill.name)).size !== skills.length ||
     skills.length !== skillPaths.length ||
     skills.some((skill) => skill.name !== basename(skill.baseDir))
   )
@@ -40,8 +45,9 @@ export function createSkillLibrary(
     core: excluded,
     catalog: enabled.map(({ name, description }) => ({ name, description: description.trim() })),
     read(name: string, file = 'SKILL.md') {
-      const base = byName.get(name) ?? (excluded.includes(name) ? resolve(root, name) : undefined);
-      if (!base || !base.startsWith(root + sep))
+      const base =
+        byName.get(name) ?? (excluded.includes(name) ? resolve(roots[0], name) : undefined);
+      if (!base || !roots.some((root) => base.startsWith(root + sep)))
         throw new Error('Select a skill from the skill library.');
       return { name, file, content: readFileSync(checkedPath(base, file), 'utf8').trim() };
     },

@@ -1,4 +1,5 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { bundledApps, type BundledApp } from './app-catalog.ts';
 import { posix } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import type { Pool, PoolClient } from 'pg';
@@ -153,15 +154,6 @@ const oauthErrors = [
   'account_selection_required',
 ];
 
-export const officialMcp = new Map<
-  string,
-  { name: string; endpoint?: string; scope?: string; instancePath?: string; local?: string }
->([
-  ['notion', { name: 'Notion', endpoint: 'https://mcp.notion.com/mcp' }],
-  ['linear', { name: 'Linear', endpoint: 'https://mcp.linear.app/mcp', scope: 'read write' }],
-  ['n8n', { name: 'n8n', instancePath: '/mcp-server/http', local: 'http://localhost:5678' }],
-]);
-
 export class DiscoveredConnectionError extends Error {
   constructor(
     message: string,
@@ -269,6 +261,7 @@ export async function createDiscoveredConnections(
   pool: Pool,
   options: {
     ownerId: string;
+    apps?: ReadonlyMap<string, BundledApp>;
     analytics?: CaptureAnalytics;
     analyticsConsent?: () => { enabled: boolean; revision?: string };
     baseUrl: string;
@@ -289,6 +282,7 @@ export async function createDiscoveredConnections(
   },
 ) {
   const owner = options.ownerId;
+  const apps = options.apps ?? bundledApps;
   function connection(path: AccessPath): AnalyticsConnection {
     return {
       connection_method: path.kind,
@@ -497,12 +491,13 @@ export async function createDiscoveredConnections(
     return bound;
   }
   async function nearby(service: string) {
-    const server = officialMcp.get(service);
-    if (!server?.local || !options.local) return undefined;
+    const server = apps.get(service);
+    const local = service === 'n8n' ? 'http://localhost:5678' : undefined;
+    if (!server?.instancePath || !local || !options.local) return undefined;
     const answer = await options
-      .local(server.local)
+      .local(local)
       .transport.http(
-        `${server.local}/.well-known/oauth-protected-resource${server.instancePath}`,
+        `${local}/.well-known/oauth-protected-resource${server.instancePath}`,
         {},
         'GET',
         undefined,
@@ -510,7 +505,7 @@ export async function createDiscoveredConnections(
       )
       .catch(() => undefined);
     const body = answer && 'body' in answer ? (answer.body as { resource?: unknown }) : null;
-    return typeof body?.resource === 'string' ? server.local : undefined;
+    return typeof body?.resource === 'string' ? local : undefined;
   }
   async function addressProposal(
     service: string,
@@ -518,7 +513,7 @@ export async function createDiscoveredConnections(
     connectionId?: string,
     returnTo?: ReturnTarget,
   ) {
-    const server = officialMcp.get(service)!;
+    const server = apps.get(service)!;
     let name = server.name;
     if (connectionId) {
       const existing = await account(connectionId);
@@ -543,7 +538,7 @@ export async function createDiscoveredConnections(
       .strict()
       .parse(input);
     const pending = await proposal(id);
-    const server = officialMcp.get(pending.service);
+    const server = apps.get(pending.service);
     if (!server?.instancePath || pending.paths.length)
       throw error('This connection does not take an address.');
     if (
@@ -564,7 +559,8 @@ export async function createDiscoveredConnections(
     let endpoint = `${url.origin}${servicePath}`;
     let local = false;
     await options.transport.validateEndpoint(endpoint).catch(async () => {
-      if (!options.local) throw error(`Use a public HTTPS address for ${server.name}.`);
+      if (pending.service !== 'n8n' || !options.local)
+        throw error(`Use a public HTTPS address for ${server.name}.`);
       if (schemeless) url.protocol = 'http:';
       endpoint = `${url.origin}${servicePath}`;
       await options
@@ -621,9 +617,12 @@ export async function createDiscoveredConnections(
       [id, owner, JSON.stringify([path]), url.host, same ?? null],
     );
     if (!updated.rowCount) throw error('This connection request expired.', 409);
-    const unreachable = parsed.token
-      ? `Nod could not use this token at ${url.host}. Check the address and the token in ${server.name} under Settings, Instance-level MCP.`
-      : `${server.name} did not answer at ${url.host}. Check the address, and turn on MCP access in ${server.name} under Settings, Instance-level MCP.`;
+    const unreachable =
+      pending.service !== 'n8n'
+        ? `${server.name} MCP setup failed.`
+        : parsed.token
+          ? `Nod could not use this token at ${url.host}. Check the address and the token in ${server.name} under Settings, Instance-level MCP.`
+          : `${server.name} did not answer at ${url.host}. Check the address, and turn on MCP access in ${server.name} under Settings, Instance-level MCP.`;
     try {
       return parsed.token
         ? await complete(id, { token: parsed.token, accountName: url.host })
@@ -640,11 +639,15 @@ export async function createDiscoveredConnections(
         cause.statusCode !== 409
       )
         throw cause;
-      throw error(unreachable, 502);
+      const detail = cause instanceof Error ? cause.message : 'The MCP setup failed.';
+      throw error(
+        `${unreachable} ${parsed.token ? String(redact(detail, parsed.token)) : detail}`,
+        502,
+      );
     }
   }
   function official(service: string, connectionId?: string) {
-    const server = officialMcp.get(service);
+    const server = apps.get(service);
     if (!server?.endpoint) throw error('This service is unavailable.', 404);
     return {
       service,
@@ -653,7 +656,7 @@ export async function createDiscoveredConnections(
         {
           kind: 'mcp',
           endpoint: server.endpoint,
-          auth: 'oauth',
+          auth: server.auth,
           ...(server.scope ? { scope: server.scope } : {}),
         },
       ],
@@ -661,7 +664,7 @@ export async function createDiscoveredConnections(
     };
   }
   async function signIn(service: string, turn?: TurnRef, connectionId?: string) {
-    if (officialMcp.get(service)?.instancePath) return addressProposal(service, turn, connectionId);
+    if (apps.get(service)?.instancePath) return addressProposal(service, turn, connectionId);
     return propose(official(service, connectionId), turn);
   }
   async function authorize(
@@ -686,10 +689,16 @@ export async function createDiscoveredConnections(
         ...(await beginOAuth(pending.id, { restart: true, returnTo }, hash)),
       };
     }
-    if (officialMcp.get(service)?.instancePath)
+    if (apps.get(service)?.instancePath)
       return addressProposal(service, undefined, connectionId, returnTo);
     const { id, name } = await create(official(service, connectionId), undefined, returnTo);
-    return { name, ...(await beginOAuth(id, { returnTo })) };
+    const server = apps.get(service)!;
+    return {
+      name,
+      ...(server.auth === 'oauth'
+        ? await beginOAuth(id, { returnTo })
+        : { url: `/apps?connect=${id}` }),
+    };
   }
   async function abandonSetup(linkHash: string, reason: 'cancelled' | 'unavailable' | 'unknown') {
     const abandoned = await transaction(async (client) => {
@@ -1568,7 +1577,7 @@ export async function createDiscoveredConnections(
         typeof saved?.url === 'string' && (saved.attempt === undefined || attempt)
           ? saved.url
           : undefined;
-      const address = officialMcp.get(row.service)?.instancePath && !row.paths.length;
+      const address = apps.get(row.service)?.instancePath && !row.paths.length;
       const localAddress = address ? await nearby(row.service) : undefined;
       return reply.header('Cache-Control', 'no-store').send({
         service: row.service,
@@ -1625,6 +1634,7 @@ export async function createDiscoveredConnections(
     );
   }
   return {
+    apps,
     binding,
     analyticsConnections,
     list,

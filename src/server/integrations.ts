@@ -24,9 +24,9 @@ import { integrationMetadata, integrationServiceIds } from '../shared/integratio
 import { untrustedBlock } from '../shared/untrusted.ts';
 import {
   DiscoveredConnectionError,
-  officialMcp,
   type createDiscoveredConnections,
 } from './discovered-connections.ts';
+import { bundledApps } from './app-catalog.ts';
 import { transaction } from './transaction.ts';
 import type { WorkAdmission } from './work-admission.ts';
 import type { SiteIcon } from '../ports/link-preview.ts';
@@ -297,6 +297,7 @@ function protectedCallback(row: Pick<ConnectionRow, 'callback_claim_id' | 'callb
 }
 
 export async function createIntegrations(pool: Pool, options: IntegrationOptions) {
+  const directApps = options.discovered?.apps ?? bundledApps;
   const mailCheck = options.mailCheck ?? noMailCheck;
   const configuredOwner = z.string().min(1).max(200).parse(options.ownerId);
   const provider = options.provider;
@@ -337,6 +338,15 @@ export async function createIntegrations(pool: Pool, options: IntegrationOptions
     .parse(provider.id);
   let serviceCatalog: Map<string, IntegrationServiceInfo> | undefined;
   function serviceInfo(slug: string): IntegrationServiceInfo {
+    const direct = directApps.get(slug);
+    if (direct)
+      return {
+        slug,
+        name: direct.name,
+        description: direct.description,
+        categories: direct.categories,
+        ...(direct.icon ? { logoUrl: `/api/apps/catalog/${slug}/icon` } : {}),
+      };
     const info = serviceCatalog?.get(slug);
     return { slug, ...info, ...integrationMetadata(slug, info) };
   }
@@ -512,9 +522,9 @@ export async function createIntegrations(pool: Pool, options: IntegrationOptions
   }
 
   async function catalog(): Promise<Connection[]> {
-    const services = await providerCatalog();
-    if (options.discovered && !services.has('notion'))
-      services.set('notion', serviceInfo('notion'));
+    const services = new Map(await providerCatalog());
+    if (options.discovered)
+      for (const slug of directApps.keys()) services.set(slug, serviceInfo(slug));
     return [...services.values()]
       .sort((left, right) => {
         const featured = (slug: string) => {
@@ -696,11 +706,12 @@ export async function createIntegrations(pool: Pool, options: IntegrationOptions
     const result: Connection[] = [];
     const services = new Set<string>([
       ...integrationServiceIds,
+      ...directApps.keys(),
       ...rows.filter((row) => row.account_id).map((row) => row.slug),
     ]);
     for (const slug of services) {
       const service = serviceInfo(slug);
-      if (officialMcp.has(slug)) {
+      if (directApps.has(slug)) {
         result.push({
           slug,
           name: service.name,
@@ -1703,7 +1714,7 @@ export async function createIntegrations(pool: Pool, options: IntegrationOptions
               Object.entries(found.tools as Record<string, unknown>).filter(([action]) => {
                 const slug = matchingService(action, services);
                 return (
-                  !(slug && officialMcp.has(slug)) &&
+                  !(slug && directApps.has(slug)) &&
                   slug !== retiredNotionMcp &&
                   (!connectionId || rows.some((row) => row.slug === slug))
                 );
@@ -2610,6 +2621,20 @@ export async function createIntegrations(pool: Pool, options: IntegrationOptions
           apps,
         } satisfies AppSetupStatus);
       });
+      scope.get<{ Params: { slug: string } }>(
+        '/api/apps/catalog/:slug/icon',
+        async (request, reply) => {
+          const value = directApps.get(request.params.slug)?.icon;
+          if (!value) return reply.code(404).send({ error: 'The app icon is unavailable.' });
+          return reply
+            .header('Content-Type', value.mimeType)
+            .header('X-Content-Type-Options', 'nosniff')
+            .header('Content-Security-Policy', "default-src 'none'; sandbox")
+            .header('Cross-Origin-Resource-Policy', 'same-origin')
+            .header('Cache-Control', 'private, max-age=300')
+            .send(Buffer.from(value.bytes));
+        },
+      );
       scope.get<{ Params: { id: string } }>('/api/apps/:id/icon', async (request, reply) => {
         const value = await icon(request.params.id);
         if (!value) return reply.code(404).send({ error: 'The app icon is unavailable.' });
@@ -2662,7 +2687,7 @@ export async function createIntegrations(pool: Pool, options: IntegrationOptions
         const service = request.params.slug === retiredNotionMcp ? 'notion' : request.params.slug;
         if (request.params.slug === retiredNotionMcp && input.connectionId)
           throw new IntegrationError(retiredNotionMessage, 409);
-        if (officialMcp.has(service)) {
+        if (directApps.has(service)) {
           if (!options.discovered)
             throw new IntegrationError('Discovered connections are unavailable.', 503);
           const selected = (await options.discovered.list()).find(
@@ -3064,7 +3089,7 @@ export async function createIntegrations(pool: Pool, options: IntegrationOptions
       const slug = slugSchema.parse(service === retiredNotionMcp ? 'notion' : service);
       if (service === retiredNotionMcp && connectionId)
         throw new IntegrationError(retiredNotionMessage, 409);
-      if (officialMcp.has(slug)) {
+      if (directApps.has(slug)) {
         if (!options.discovered)
           throw new IntegrationError('Discovered connections are unavailable.', 503);
         const accounts = (await options.discovered.list())
