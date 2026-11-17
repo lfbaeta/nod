@@ -27,6 +27,7 @@ type Discovery = {
   needsAddress?: boolean;
   localAddress?: string;
   oauthStatus?: 'pending' | 'connected' | 'cancelled' | 'failed' | null;
+  oauthError?: string;
   authorizationUrl?: string;
   attempt?: string;
   callbackUrl?: string;
@@ -156,7 +157,7 @@ export function AppDiscoveryDialog({
         const current = pending.current;
         if (value.oauthStatus) {
           if (value.oauthStatus === 'connected') report.current?.();
-          setError('');
+          setError(value.oauthError ?? '');
           const replaced =
             current?.url && value.authorizationUrl && current.url !== value.authorizationUrl;
           show({

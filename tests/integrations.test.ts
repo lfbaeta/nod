@@ -6537,6 +6537,7 @@ test(
     const states: string[] = [];
     const issuer = 'https://auth.fixture.example';
     let issSupported = true;
+    let beginFails = false;
     let finished = 0;
     let finishStarted: () => void = () => {};
     let finishRelease: () => void = () => {};
@@ -6559,6 +6560,7 @@ test(
       },
       oauth: {
         begin: async (_endpoint: string, redirectUri: string, state: string) => {
+          if (beginFails) throw new Error('Synthetic start failure');
           states.push(state);
           return {
             url: `https://fixture.example/authorize?state=${state}`,
@@ -6704,8 +6706,15 @@ test(
       (await app.inject({ url: path, headers: { host: headers.host } })).statusCode,
       401,
     );
-    assert.equal(await callback(states[0], 'error=access_denied'), 'cancelled');
+    assert.equal(
+      await callback(
+        states[0],
+        'error=access_denied&error_description=Declined&error_description=Declined',
+      ),
+      'cancelled',
+    );
     assert.equal((await status()).oauthStatus, 'cancelled');
+    assert.equal((await status()).oauthError, undefined);
     assert.equal((await rawStatus(first.json().url)).apps[0].available, false);
     assert.notEqual((await setupStatus()).apps[0].available, false);
     const firstHash = createHash('sha256').update(first.json().url).digest('hex');
@@ -6735,18 +6744,40 @@ test(
     assert.equal((await status()).oauthStatus, 'pending');
     assert.equal(await callback(states[1], 'code=fail'), 'failed');
     assert.equal((await status()).oauthStatus, 'failed');
+    assert.match((await status()).oauthError, /Synthetic exchange failure/);
+    beginFails = true;
+    assert.equal((await authorize({ restart: true })).statusCode, 502);
+    assert.equal((await status()).oauthError, undefined);
+    beginFails = false;
     assert.equal((await rawStatus(authorizations.get(states[1])!.url)).apps[0].available, false);
     assert.notEqual((await setupStatus()).apps[0].available, false);
     assert.equal((await authorize()).statusCode, 200);
-    assert.equal(states.length, 3);
+    assert.equal((await status()).oauthError, undefined);
+    assert.equal(
+      await callback(
+        states[2],
+        `error=invalid_request&error_description=${encodeURIComponent('Synthetic resource parameter refused.\0 Bearer synthetic-private-leak')}`,
+      ),
+      'failed',
+    );
+    assert.equal((await status()).oauthStatus, 'failed');
+    assert.match(
+      (await status()).oauthError,
+      /invalid_request.*Synthetic resource parameter refused/,
+    );
+    assert.equal((await authorize()).statusCode, 200);
+    assert.equal(await callback(states[3], 'error='), 'failed');
+    assert.match((await status()).oauthError, /no authorization code/);
+    assert.equal((await authorize()).statusCode, 200);
+    assert.equal(states.length, 5);
     assert.equal(await callback(states[1], 'code=fixture-code'), 'expired');
     assert.equal((await status()).oauthStatus, 'pending');
-    const interrupted = callback(states[2], 'code=hold');
+    const interrupted = callback(states[4], 'code=hold');
     await finishing;
-    assert.equal((await rawStatus(authorizations.get(states[2])!.url)).apps[0].available, true);
+    assert.equal((await rawStatus(authorizations.get(states[4])!.url)).apps[0].available, true);
     assert.equal((await authorize()).statusCode, 409);
     assert.equal((await authorize({ restart: true, returnTo: 'window' })).statusCode, 409);
-    assert.equal(await callback(states[2], 'code=fixture-code'), 'expired');
+    assert.equal(await callback(states[4], 'code=fixture-code'), 'expired');
     assert.equal(finished, 2);
     await createDiscoveredConnections(f.pool, { ...options, ownerId: 'foreign-owner' });
     assert.equal((await status()).oauthStatus, 'pending');
@@ -6754,19 +6785,19 @@ test(
     assert.equal((await status()).oauthStatus, 'failed');
     await assert.rejects(grantVault.read(id!));
     assert.equal((await authorize()).statusCode, 200);
-    assert.equal(states.length, 4);
+    assert.equal(states.length, 6);
     finishRelease();
     assert.equal(await interrupted, 'failed');
     assert.equal((await status()).oauthStatus, 'pending');
-    assert.equal(await callback(states[2], 'code=fixture-code'), 'expired');
-    assert.equal(await callback(states[3], 'code=fixture-code', ''), 'failed');
+    assert.equal(await callback(states[4], 'code=fixture-code'), 'expired');
+    assert.equal(await callback(states[5], 'code=fixture-code', ''), 'failed');
     issSupported = false;
     assert.equal((await authorize()).statusCode, 200);
-    assert.equal(await callback(states[4], 'code=fixture-code', 'https://other.example'), 'failed');
+    assert.equal(await callback(states[6], 'code=fixture-code', 'https://other.example'), 'failed');
     assert.equal((await authorize()).statusCode, 200);
-    assert.equal(states.length, 6);
+    assert.equal(states.length, 8);
     assert.equal(finished, 2);
-    assert.equal(await callback(states[5], 'code=fixture-code', ''), 'connected');
+    assert.equal(await callback(states[7], 'code=fixture-code', ''), 'connected');
     assert.equal((await status()).oauthStatus, 'connected');
     assert.deepEqual(await setupStatus(), { completed: [setupHash], apps: [] });
     await createDiscoveredConnections(f.pool, options);
