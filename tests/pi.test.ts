@@ -5142,7 +5142,7 @@ test('a loaded schema that exceeds the request budget returns to deferred tools'
   assert.ok(sources.some((source) => source.includes(description)));
 });
 
-test('a tool loaded in one turn stays declared in the next turn of the session', async (t) => {
+test('loaded tools stay available across turns until they are removed', async (t) => {
   const { bodies, url, close } = await contextRecoveryServer(0, 1, -1, false, undefined, [
     { name: 'nod_tool_search', args: { query: 'synthetic_lookup', limit: 1 } },
     { name: 'synthetic_lookup', args: {} },
@@ -5165,25 +5165,28 @@ test('a tool loaded in one turn stays declared in the next turn of the session',
   const declared = (body: (typeof bodies)[number]) =>
     (body.tools ?? []).map((tool) => (tool as { function: { name: string } }).function.name);
   const events: AgentEvent[] = [];
-  for (const text of ['Look up the synthetic record.', 'Look it up again.']) {
+  for (const text of ['Look up the synthetic record.', 'Look it up again.', 'The tool is gone.']) {
     const session = await agent.open({
       ...fakeExecution(threadId),
       restricted: true,
       systemPrompt: 'Use synthetic tools.',
       workspace,
       runTool: async (_name, _params, run) => run(),
-      tools: [
-        {
-          name: 'synthetic_lookup',
-          description: 'Look up the synthetic record.',
-          deferred: { namespace: 'synthetic', description: 'Synthetic tools.' },
-          parameters: Type.Object({}),
-          execute: async () => {
-            lookups++;
-            return { content: [{ type: 'text', text: 'Synthetic record.' }] };
-          },
-        },
-      ],
+      tools:
+        text === 'The tool is gone.'
+          ? []
+          : [
+              {
+                name: 'synthetic_lookup',
+                description: 'Look up the synthetic record.',
+                deferred: { namespace: 'synthetic', description: 'Synthetic tools.' },
+                parameters: Type.Object({}),
+                execute: async () => {
+                  lookups++;
+                  return { content: [{ type: 'text', text: 'Synthetic record.' }] };
+                },
+              },
+            ],
       shouldStop: () => false,
       onEvent: (event) => events.push(event),
     });
@@ -5192,9 +5195,11 @@ test('a tool loaded in one turn stays declared in the next turn of the session',
   }
   assert.ok(!events.some((event) => event.type === 'error'));
   assert.equal(lookups, 1);
-  assert.equal(bodies.length, 4);
+  assert.equal(bodies.length, 5);
   assert.ok(!declared(bodies[0]!).includes('synthetic_lookup'));
   assert.ok(declared(bodies[3]!).includes('synthetic_lookup'));
+  assert.ok(!declared(bodies[4]!).includes('synthetic_lookup'));
+  assert.ok(JSON.stringify(bodies[4]!.messages).includes('synthetic_lookup'));
 });
 
 test('a failed request cannot remain inside a compaction checkpoint', async (t) => {
@@ -6914,8 +6919,10 @@ test('the live line shows a model retry and the text before a tool call while th
   const shown = new Promise<'step'>((resolve) => (stepShown = () => resolve('step')));
   let released: 'step' | 'timeout' | undefined;
   let requests = 0;
+  const exposedTools = new Set<string>();
   const server = createServer((request, response) => {
-    request.resume();
+    let body = '';
+    request.on('data', (chunk) => (body += chunk));
     request.on('end', async () => {
       const send = (delta: object, finish?: string) =>
         response.write(
@@ -6929,12 +6936,13 @@ test('the live line shows a model retry and the text before a tool call while th
         );
       if (request.url === '/v1/models')
         return response.end(
-          JSON.stringify({ data: [{ id: 'fixture-qwen', context_length: 32_768 }] }),
+          JSON.stringify({ data: [{ id: 'fixture-qwen', context_length: 131_072 }] }),
         );
       if (request.url !== '/v1/chat/completions') {
         response.writeHead(404);
         return response.end('{}');
       }
+      for (const tool of JSON.parse(body).tools ?? []) exposedTools.add(tool.function.name);
       if (++requests === 1) {
         response.writeHead(503, { 'content-type': 'application/json' });
         return response.end(
@@ -7023,6 +7031,7 @@ test('the live line shows a model retry and the text before a tool call while th
   assert.equal(released, 'step');
   assert.equal(scripts.filter((script) => script.includes('fixture-read-notes')).length, 1);
   assert.equal(requests, 4);
+  assert.equal(exposedTools.has('set_status'), false);
   assert.ok(emitted.find(([type]) => type === 'retry')?.[1].includes(definition.choice.name));
 });
 

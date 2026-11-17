@@ -304,62 +304,9 @@ test('command output removes whole secrets before taking a bounded tail', async 
   assert.equal(records[5]?.output, '{"name":"password","value":"[redacted]"}');
 });
 
-test('live status stays out of chat replies and removes known secrets', async () => {
-  const events: Array<{ type: string; summary: string }> = [];
-  const statuses = ['Finding flights back from Copenhagen', 'Comparing flight prices'];
-  let delegated = false;
-  const result = await fixture(
-    async (tools, emit, options) => {
-      if (options.parentRunId) {
-        assert.equal(tools.has('set_status'), false);
-        delegated = true;
-        emit({ type: 'final', text: 'The synthetic flight comparison is complete.' });
-        return;
-      }
-      const status = tools.get('set_status')!;
-      assert.ok(status.eager, 'Live status must be available before tool discovery.');
-      for (const prompt of [options.systemPrompt, options.compactInstructions?.systemPrompt])
-        assert.ok(
-          prompt?.includes(status.name),
-          'Every model context needs the status capability.',
-        );
-      await call(tools, 'set_status', { text: statuses[0] });
-      await call(tools, 'set_status', { text: statuses[1] });
-      await call(tools, 'set_status', { text: 'Checking synthetic-private-code' });
-      await assert.rejects(call(tools, 'set_status', { text: ' '.repeat(3) }));
-      await assert.rejects(call(tools, 'set_status', { text: 'x'.repeat(141) }));
-      await call(tools, 'delegate', {
-        title: 'Check synthetic flights',
-        instruction: 'Compare the two synthetic flight options.',
-      });
-      emit({ type: 'final', text: 'Two flights meet your budget.' });
-    },
-    {
-      emit: async (type, summary) => {
-        events.push({ type, summary });
-      },
-    },
-    { redactError: (text) => String(text).replaceAll('synthetic-private-code', '[redacted]') },
-  );
-  assert.equal(delegated, true);
-  assert.deepEqual(
-    events.filter(({ type }) => type === 'step').map(({ summary }) => summary),
-    [...statuses, 'Checking [redacted]'],
-  );
-  assert.deepEqual(result.replies, ['Two flights meet your budget.']);
-  assert.equal(result.result.status, 'succeeded');
-  await fixture(
-    async (tools) => {
-      assert.equal(tools.has('set_status'), false);
-    },
-    { background: true },
-  );
-});
-
 test('partial delivery continues across browser and app reads in chat and saved tasks', async () => {
   for (const task of [false, true]) {
     const delivered: string[] = [];
-    const steps: string[] = [];
     const first = 'The public plan costs EUR 12 per seat. The account price is not checked yet.';
     const final = 'Your account price is EUR 10 per seat, so keep your current plan.';
     let reads = 0;
@@ -369,7 +316,6 @@ test('partial delivery continues across browser and app reads in chat and saved 
         await call(tools, 'send_message', { text: first, intent: 'update' });
         assert.deepEqual(delivered, [first]);
         assert.equal(options.shouldStop(), false);
-        await call(tools, 'set_status', { text: 'Checking the account price' });
         await call(tools, 'apps', {
           action: 'READ_PLAN',
           args: { plan_id: 'synthetic-plan' },
@@ -398,9 +344,6 @@ test('partial delivery continues across browser and app reads in chat and saved 
         reply: async (text) => {
           delivered.push(text);
         },
-        emit: async (type, summary) => {
-          if (type === 'step') steps.push(summary);
-        },
       },
       {
         computer: fakeComputer({
@@ -414,7 +357,6 @@ test('partial delivery continues across browser and app reads in chat and saved 
     );
     assert.equal(reads, 2);
     assert.deepEqual(delivered, [first, final]);
-    assert.deepEqual(steps, ['Checking the account price']);
     assert.equal(result.status, 'succeeded');
     assert.equal(aborted, false);
   }
