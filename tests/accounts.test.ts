@@ -36,6 +36,7 @@ import {
   createErrorRedactor,
   createRedactor,
   createTextRedactor,
+  redactSecretText,
 } from '../src/server/redaction.ts';
 
 test('decision reservations release only requests that did not reach dispatch', async () => {
@@ -2641,6 +2642,13 @@ test('secret redaction finishes for long malformed Basic credentials', async () 
        }`,
     ],
     { timeout: 5000 },
+  );
+});
+
+test('secret redaction hides every bearer token character', () => {
+  assert.equal(
+    redactSecretText('Rejected Bearer synthetic~private+token/1== for this client'),
+    'Rejected [redacted] for this client',
   );
 });
 

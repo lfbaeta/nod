@@ -41,7 +41,7 @@ export function redactSecretText(value: string): string {
   return value
     .replace(/-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?-----END [^-]*PRIVATE KEY-----/g, hidden)
     .replace(
-      /\b(Bearer|Basic)\s+([A-Za-z0-9+/_.=:-]+)/gi,
+      /\b(Bearer|Basic)\s+([A-Za-z0-9+/_.=:~-]+)/gi,
       (match, scheme: string, token: string) => {
         if (scheme.toLowerCase() !== 'basic') return hidden;
         const decoded = Buffer.from(token, 'base64');
