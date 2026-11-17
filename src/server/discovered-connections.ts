@@ -408,7 +408,12 @@ export async function createDiscoveredConnections(
         : {}),
     }));
   }
-  async function create(input: unknown, turn?: TurnRef, returnTo?: ReturnTarget) {
+  async function create(
+    input: unknown,
+    turn?: TurnRef,
+    returnTo?: ReturnTarget,
+    localOrigin?: string,
+  ) {
     const parsed = proposalSchema.parse(input);
     let name = parsed.name;
     if (parsed.paths.some((path) => path.auth === 'oauth')) {
@@ -449,10 +454,17 @@ export async function createDiscoveredConnections(
         paths.push({ ...path, id: pathId });
         continue;
       }
+      const local =
+        localOrigin !== undefined &&
+        options.local !== undefined &&
+        new URL(path.endpoint).origin === localOrigin;
       const checked = {
         ...path,
-        endpoint: await options.transport.validateEndpoint(path.endpoint),
+        endpoint: local
+          ? await options.local!(localOrigin!).transport.validateEndpoint(path.endpoint)
+          : await options.transport.validateEndpoint(path.endpoint),
         id: pathId,
+        ...(local ? { local: true } : {}),
       };
       if (checked.kind === 'http') target(checked, checked.testPath);
       paths.push(checked);
@@ -1253,7 +1265,10 @@ export async function createDiscoveredConnections(
     );
     const row = rows.rows[0];
     if (!row) throw error('This service is unavailable.', 404);
-    return propose(
+    const localOrigin = row.paths.flatMap((path) =>
+      path.kind !== 'cli' && path.local ? [new URL(path.endpoint).origin] : [],
+    )[0];
+    const { id, name } = await create(
       {
         service,
         name: row.name,
@@ -1281,7 +1296,9 @@ export async function createDiscoveredConnections(
       },
       undefined,
       returnTo,
+      localOrigin,
     );
+    return { name, url: `/apps?connect=${id}` };
   }
   async function search(query: string, connectionId?: string, signal?: AbortSignal) {
     signal?.throwIfAborted();
@@ -1527,7 +1544,13 @@ export async function createDiscoveredConnections(
       const parsed = z
         .object({
           name: proposalSchema.shape.name,
-          endpoint: z.url().max(2048),
+          endpoint: z
+            .string()
+            .trim()
+            .transform((value) =>
+              /^[a-z][a-z0-9+.-]*:\/\//i.test(value) ? value : `https://${value}`,
+            )
+            .pipe(z.url({ protocol: /^https?$/ }).max(2048)),
           auth: z.enum(['oauth', 'bearer', 'x-api-key']),
           clientIdRequired: z.boolean().optional(),
         })
@@ -1536,9 +1559,25 @@ export async function createDiscoveredConnections(
         .safeParse(request.body);
       if (!parsed.success) throw error('Enter a name, server URL and authentication method.');
       const { name, auth } = parsed.data;
-      const endpoint = await options.transport.validateEndpoint(parsed.data.endpoint).catch(() => {
-        throw error('Use a public HTTPS server address without a query or fragment.');
-      });
+      let localOrigin: string | undefined;
+      const endpoint = await options.transport
+        .validateEndpoint(parsed.data.endpoint)
+        .catch(async (cause: unknown) => {
+          const reason = cause instanceof Error ? cause.message : String(cause);
+          if (!options.local)
+            throw error(`Use a public HTTPS server address without a query or fragment. ${reason}`);
+          const origin = new URL(parsed.data.endpoint).origin;
+          const checked = await options
+            .local(origin)
+            .transport.validateEndpoint(parsed.data.endpoint)
+            .catch((local: unknown) => {
+              throw error(
+                `Nod could not use ${origin}: ${local instanceof Error ? local.message : String(local)}`,
+              );
+            });
+          localOrigin = origin;
+          return checked;
+        });
       const service = `mcp-${createHash('sha256').update(endpoint).digest('hex').slice(0, 24)}`;
       const result = await create(
         {
@@ -1555,6 +1594,7 @@ export async function createDiscoveredConnections(
         },
         undefined,
         'apps',
+        localOrigin,
       );
       return reply.header('Cache-Control', 'no-store').send(result);
     });

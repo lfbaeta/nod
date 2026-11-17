@@ -6,15 +6,9 @@ import {
   type DiscoveredOAuth,
   type DiscoveredOAuthState,
 } from '../../ports/discovered.ts';
-import { publicUrl } from '../agent-browser/network.ts';
-import { safeRemoteFetch } from './remote.ts';
+import { publicHttps, safeRemoteFetch } from './remote.ts';
 
-async function publicSignIn(link: string) {
-  const destination = await publicUrl(link);
-  if (destination.url.protocol !== 'https:')
-    throw new Error('The service sign-in link must use HTTPS.');
-  return destination.url.href;
-}
+const publicSignIn = async (link: string) => (await publicHttps(link)).url.href;
 
 export function createDiscoveredOAuth(
   fetchFn: FetchLike = safeRemoteFetch,

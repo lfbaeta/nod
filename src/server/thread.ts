@@ -1754,7 +1754,7 @@ async function executeTurn(turn: any, dependencies: ThreadDependencies) {
   ) => {
     const source = text;
     const postedFor = sourceMessageId;
-    const plain = !attachments.length && !presentation && !replyFileReferences(source).length;
+    let plain = !attachments.length && !presentation;
     const created = new Map<string, Artifact>();
     const cleanup: Array<() => Promise<void>> = [];
     let rolledBack = false;
@@ -1772,19 +1772,30 @@ async function executeTurn(turn: any, dependencies: ThreadDependencies) {
           if (!artifact) {
             const read = dependencies.readArtifact;
             if (!read) throw new Error('Workspace file delivery is unavailable.');
-            artifact = await artifacts.publishArtifact(
-              threadId,
-              path,
-              undefined,
-              read,
-              client,
-              (remove) => cleanup.push(remove),
-            );
+            await client.query('SAVEPOINT reply_file');
+            try {
+              artifact = await artifacts.publishArtifact(
+                threadId,
+                path,
+                undefined,
+                read,
+                client,
+                (remove) => cleanup.push(remove),
+              );
+              await client.query('RELEASE SAVEPOINT reply_file');
+            } catch (error) {
+              if (signal.aborted) throw error;
+              await client.query('ROLLBACK TO SAVEPOINT reply_file');
+              await client.query('RELEASE SAVEPOINT reply_file');
+              logFailure('reply_file_skipped', error, { threadId, turnId });
+              continue;
+            }
             created.set(path, artifact);
           }
           files.set(artifact.id, artifact);
           replacements.push({ ...reference, artifact });
         }
+        if (files.size) plain = false;
         for (const { start, end, artifact } of replacements.reverse()) {
           const label = artifact.name.replace(/([\\`*_<>\[\]])/g, '\\$1');
           text = `${text.slice(0, start)}[${label}](${artifact.url})${text.slice(end)}`;

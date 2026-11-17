@@ -24,7 +24,7 @@ import { previewableUrl, publicMediaUrl } from '../src/shared/link-preview.ts';
 import { MessageQuote, MessageText } from '../src/web/components/message.tsx';
 import { connectionUrl } from '../src/web/lib/connection-url.ts';
 import { messageSetupLinks } from '../src/web/lib/message-links.ts';
-import { ownerAddress } from '../src/providers/discovered/remote.ts';
+import { ownerAddress, publicHttps } from '../src/providers/discovered/remote.ts';
 import { paymentExplanation, paymentInvitation } from '../src/runtime/communication.ts';
 import {
   escapeForwarder,
@@ -389,6 +389,18 @@ test('an owner-entered address binds every request and consent page to that inst
   await assert.rejects(
     ownerAddress('http://93.184.216.34')('http://93.184.216.34/mcp-server/http'),
   );
+  const signIn = ownerAddress('http://100.100.1.1:8080', publicHttps);
+  assert.equal(
+    (await signIn('http://100.100.1.1:8080/.well-known/oauth-protected-resource')).address,
+    '100.100.1.1',
+  );
+  assert.equal((await signIn('https://93.184.216.34/oauth/token')).address, '93.184.216.34');
+  for (const value of [
+    'http://93.184.216.34/oauth/token',
+    'https://192.168.1.1/oauth/token',
+    'https://100.100.1.2/oauth/token',
+  ])
+    await assert.rejects(signIn(value));
   const origin = 'http://localhost:4320';
   assert.equal(
     connectionUrl('http://localhost:5678/mcp-oauth/authorize', origin, 'http://127.0.0.1:5678'),

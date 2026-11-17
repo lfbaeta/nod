@@ -85,6 +85,7 @@ import {
   createDiscoveredTransport,
   ownerAddress,
   ownerFetch,
+  publicHttps,
 } from '../providers/discovered/remote.ts';
 import { createDiscoveredOAuth } from '../providers/discovered/oauth.ts';
 import { createDiscoveredConnections } from './discovered-connections.ts';
@@ -1225,15 +1226,18 @@ async function initializeApplication(
     transport: createDiscoveredTransport(),
     oauth: createDiscoveredOAuth(),
     local: (origin) => {
-      const fetch = ownerFetch(origin);
       const check = ownerAddress(origin);
+      const signIn = ownerAddress(origin, publicHttps);
       return {
-        transport: createDiscoveredTransport(fetch, async (endpoint) => {
+        transport: createDiscoveredTransport(ownerFetch(origin), async (endpoint) => {
           const { url } = await check(endpoint);
           if (url.hash || url.search) throw new Error('Use an address without a query.');
           return url.href;
         }),
-        oauth: createDiscoveredOAuth(fetch, async (link) => (await check(link)).url.href),
+        oauth: createDiscoveredOAuth(
+          ownerFetch(origin, publicHttps),
+          async (link) => (await signIn(link)).url.href,
+        ),
       };
     },
     runCli: workspace.connectedCliAvailable
@@ -2861,7 +2865,6 @@ async function initializeApplication(
     analytics,
     model: () => adapters.model,
     accounts: localAccounts,
-    origin: publicOrigin,
     localUser: { id: ownerId, name: 'You', email: null, avatarUrl: null },
     developerIds: desktopMode ? new Set() : new Set([ownerId]),
     start: welcome,

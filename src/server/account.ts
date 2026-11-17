@@ -18,7 +18,6 @@ const accountUpdate = z
 
 export function createAccountSession(options: {
   accounts: AccountStore;
-  origin: string;
   localUser: AccountUser;
   developerIds?: ReadonlySet<string>;
   analytics?: Analytics;
@@ -30,7 +29,6 @@ export function createAccountSession(options: {
   updatesEmail?: boolean;
   prepare?(signal: AbortSignal): Promise<void>;
 }) {
-  const origin = new URL(options.origin).origin;
   const user = options.localUser;
   const owner = user.id;
   let accountVersion = 0;
@@ -140,10 +138,6 @@ export function createAccountSession(options: {
     }
   }
   function guard(request: FastifyRequest, reply: FastifyReply) {
-    if (request.headers.origin !== origin || request.headers['sec-fetch-site'] === 'cross-site') {
-      reply.code(403).send({ error: 'This origin is not permitted.' });
-      return false;
-    }
     const expected = request.headers['x-nod-account'];
     if (expected !== undefined && expected !== owner) {
       reply.code(401).send({ error: 'Sign in to continue.' });
