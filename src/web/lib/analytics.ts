@@ -86,7 +86,11 @@ type AnalyticsEvents = {
     input: 'text' | 'voice';
   };
   chat_stop_requested: undefined;
-  task_card_started: { kind?: 'immediate' | 'ongoing'; position: number };
+  task_card_started: {
+    kind?: 'immediate' | 'ongoing';
+    origin: 'learned' | 'common';
+    position: number;
+  };
   setup_link_clicked: { setup: 'app' | 'vault' | 'browser' };
   browser_handoff_action: { action: 'done' | 'back' | 'reload' | 'expand' | 'collapse' };
   message_reaction_changed: {
@@ -229,7 +233,11 @@ const eventProperties: Record<keyof AnalyticsEvents, Record<string, readonly unk
     input: ['text', 'voice'],
   },
   chat_stop_requested: {},
-  task_card_started: { kind: ['immediate', 'ongoing'], position: [0, 1, 2, 3, 4, 5] },
+  task_card_started: {
+    kind: ['immediate', 'ongoing'],
+    origin: ['learned', 'common'],
+    position: [0, 1, 2, 3, 4, 5],
+  },
   setup_link_clicked: { setup: ['app', 'vault', 'browser'] },
   browser_handoff_action: { action: ['done', 'back', 'reload', 'expand', 'collapse'] },
   message_reaction_changed: {

@@ -2271,6 +2271,7 @@ export function Chat({
                           ...(task.kind
                             ? { kind: task.kind === 'ongoing' ? 'ongoing' : 'immediate' }
                             : {}),
+                          origin: task.origin === 'common' ? 'common' : 'learned',
                           position,
                         });
                         void send(task.title, [], null, 'task_card');
