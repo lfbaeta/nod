@@ -1067,7 +1067,7 @@ export async function createDiscoveredConnections(
         },
         parsed.error === 'access_denied'
           ? undefined
-          : [parsed.error ?? 'no authorization code', parsed.error_description]
+          : [parsed.error || 'no authorization code', parsed.error_description]
               .filter(Boolean)
               .join(': '),
       );
