@@ -9,6 +9,8 @@ Chat is where you give Nod work, answer its questions and get the results.
 
 Nod keeps one ongoing conversation with you. The desktop app, the web app, Telegram and WhatsApp all add to that same conversation, so Nod remembers what you said in any of them.
 
+To change topics, type your new request in this conversation. There is no **New chat** control. You do not need to delete data to change topics.
+
 Nod follows your latest clear message's language, spoken or typed, including questions, confirmations and connection instructions. An explicit language request takes precedence. Only your own messages set it, never your email or other data, and before you've written anything, such as at the start of setup, Nod writes in English. Asking for an email or document in a different language applies to that output; a neutral acknowledgement such as "OK" keeps the preceding language. What Nod reads on websites, in email and in documents comes back translated. It keeps the original wording only in quotes, such as a menu or button name you need to find, with a short translation when the meaning isn't clear. Voice, region, date format and time zone are separate preferences.
 
 ## Send a message
