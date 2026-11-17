@@ -5839,6 +5839,7 @@ test(
     const states: string[] = [];
     const issuer = 'https://auth.fixture.example';
     let issSupported = true;
+    let beginFails = false;
     let finished = 0;
     let finishStarted: () => void = () => {};
     let finishRelease: () => void = () => {};
@@ -5861,6 +5862,7 @@ test(
       },
       oauth: {
         begin: async (_endpoint: string, redirectUri: string, state: string) => {
+          if (beginFails) throw new Error('Synthetic start failure');
           states.push(state);
           return {
             url: `https://fixture.example/authorize?state=${state}`,
@@ -6045,6 +6047,10 @@ test(
     assert.equal(await callback(states[1], 'code=fail'), 'failed');
     assert.equal((await status()).oauthStatus, 'failed');
     assert.match((await status()).oauthError, /Synthetic exchange failure/);
+    beginFails = true;
+    assert.equal((await authorize({ restart: true })).statusCode, 502);
+    assert.equal((await status()).oauthError, undefined);
+    beginFails = false;
     assert.equal((await rawStatus(authorizations.get(states[1])!.url)).apps[0].available, false);
     assert.notEqual((await setupStatus()).apps[0].available, false);
     assert.equal((await authorize()).statusCode, 200);

@@ -986,6 +986,10 @@ export async function createDiscoveredConnections(
       return result;
     } catch (error) {
       if (attempt) {
+        await pool.query(
+          'UPDATE discovered_connection_proposals SET oauth_error=NULL WHERE id=$1 AND owner_id=$2',
+          [attempt.id, owner],
+        );
         track(attempt, 'started');
         track(attempt, 'failed', authorizationFailed ? 'authorization_failed' : 'unknown', {
           step: authorizationFailed ? 'authorize' : 'save',
@@ -1035,7 +1039,10 @@ export async function createDiscoveredConnections(
             hash,
             outcome,
             message &&
-              `Sign-in could not finish: ${redactSecretText(message.replaceAll('\0', '')).slice(0, 500)}`,
+              `Sign-in could not finish: ${redactSecretText(message.replaceAll('\0', ''))}`.slice(
+                0,
+                500,
+              ),
           ],
         );
         if (changed.rowCount) await options.grantVault.remove(pending.id, client);
