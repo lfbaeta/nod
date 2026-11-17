@@ -1673,6 +1673,8 @@ test('a failed workspace browser action names only Nod-authored reasons', async 
 
 test('a browser that fails to start reports why through the workspace browser', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'nod-browser-start-failure-'));
+  let failure = (args: string[]) =>
+    `Chrome exited early (exit code: 21) for ${args[args.indexOf('--profile') + 1]} and ${/--disk-cache-dir=([^,]+)/.exec(args.join(' '))?.[1]}`;
   const fixture = await harness({
     computer: createAgentBrowserComputer({
       dataRoot: directory,
@@ -1685,7 +1687,7 @@ test('a browser that fails to start reports why through the workspace browser', 
             ? { success: true, data: { active: false } }
             : {
                 success: false,
-                error: `Chrome exited early (exit code: 21) for ${args[args.indexOf('--profile') + 1]} and ${/--disk-cache-dir=([^,]+)/.exec(args.join(' '))?.[1]}`,
+                error: failure(args),
               },
         ),
       }),
@@ -1698,6 +1700,11 @@ test('a browser that fails to start reports why through the workspace browser', 
         message:
           'The workspace browser could not start, so no page opened. The browser said: Chrome exited early (exit code: 21) for [browser data] and [browser data]',
       },
+    );
+    failure = () => 'Navigation failed: net::ERR_NAME_NOT_RESOLVED';
+    await assert.rejects(
+      fixture.client(directory).act('fixture', { action: 'open', url: 'https://example.com/' }),
+      { message: new BrowserActionError('browser_navigation_failed').message },
     );
   } finally {
     await fixture.close();

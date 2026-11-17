@@ -605,15 +605,26 @@ export function createAgentBrowserComputer(options: {
     }
     const reason = typeof response.error === 'string' ? response.error : undefined;
     const failed = Boolean(result.exitCode) || response.success === false;
+    const known =
+      action !== 'navigate' || response.success !== false || reason === undefined
+        ? undefined
+        : /^Navigation failed: net::ERR_[A-Z_]+/.test(reason)
+          ? new BrowserActionError('browser_navigation_failed')
+          : reason.startsWith('Operation timed out.')
+            ? new DaemonCommandError()
+            : undefined;
     if (action === 'navigate') {
       await drainInterruptedCommand(state, 'connect', () =>
         daemonSocket(state, options.signal),
       ).catch((error: unknown) => {
         if (!failed) throw error;
-        throw new BrowserActionError(
-          'browser_start_failed',
-          reason &&
-            redactBrowserText(reason, state.secrets).replace(internalPaths, '[browser data]'),
+        throw (
+          known ??
+          new BrowserActionError(
+            'browser_start_failed',
+            reason &&
+              redactBrowserText(reason, state.secrets).replace(internalPaths, '[browser data]'),
+          )
         );
       });
       state.recovered = false;
@@ -625,19 +636,7 @@ export function createAgentBrowserComputer(options: {
           { signal: options.signal },
         );
     }
-    if (
-      action === 'navigate' &&
-      response.success === false &&
-      reason !== undefined &&
-      /^Navigation failed: net::ERR_[A-Z_]+/.test(reason)
-    )
-      throw new BrowserActionError('browser_navigation_failed');
-    if (
-      action === 'navigate' &&
-      response.success === false &&
-      reason?.startsWith('Operation timed out.')
-    )
-      throw new DaemonCommandError();
+    if (known) throw known;
     if (failed) throw new DaemonCommandError(reason);
     return response.data ?? {};
   }
