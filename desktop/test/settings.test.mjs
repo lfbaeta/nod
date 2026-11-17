@@ -2472,7 +2472,7 @@ test('a missing native setup renderer offers explicit recovery without hidden ke
       try {
         const launched = f.launch();
         for (let attempt = 0; !f.windows.length && attempt < 100; attempt++)
-          await new Promise(setImmediate);
+          await new Promise((resolve) => wait(resolve, 5));
         const window = f.windows[0];
         assert.ok(window);
         assert.equal(window.isVisible(), false);
