@@ -4683,6 +4683,36 @@ test('composer preserves keyboard shortcuts, upload retries, previews and failed
         await submit();
         assert.equal(sends.at(-1).text, introPaste);
         await assertVisiblePaste(sends.at(-1), introPaste);
+        for (const pasted of [true, false]) {
+          await act(async () => replaceText(pasted ? '' : 'See the synthetic docs today'));
+          if (pasted) await paste('See the synthetic docs today');
+          await act(async () => {
+            const field = document.querySelector('[contenteditable]');
+            field.focus();
+            const walker = document.createTreeWalker(field, NodeFilter.SHOW_TEXT);
+            let node = walker.nextNode();
+            while (node && !node.data.includes('synthetic docs')) node = walker.nextNode();
+            const start = node.data.indexOf('synthetic docs');
+            const range = document.createRange();
+            range.setStart(node, start);
+            range.setEnd(node, start + 'synthetic docs'.length);
+            window.getSelection().removeAllRanges();
+            window.getSelection().addRange(range);
+            document.dispatchEvent(new Event('selectionchange'));
+            await new Promise((resolve) => setTimeout(resolve, 20));
+            field.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true, cancelable: true }));
+          });
+          await settle(() => document.querySelector('[aria-label="Link URL"]'));
+          await act(async () => {
+            const input = document.querySelector('[aria-label="Link URL"]');
+            Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, 'docs.example.test/guide');
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+          });
+          await click('Apply link');
+          await settle(() => !document.querySelector('[aria-label="Link URL"]'));
+          await submit();
+          assert.equal(sends.at(-1).text, 'See the [synthetic docs](https://docs.example.test/guide) today');
+        }
         await act(async () => root.unmount());
         closed = true;
         const literalDraftKey = 'synthetic-owner.literal-paste';
