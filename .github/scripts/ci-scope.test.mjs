@@ -53,6 +53,11 @@ test('container and native checks follow their inputs', () => {
   assert.equal(selectChecks(['desktop/ui/setup.tsx']).macos, false);
   assert.equal(selectChecks(['desktop/runtime/index.mjs']).network, true);
   assert.equal(selectChecks(['desktop/runtime/index.mjs']).desktop, true);
+  assert.equal(selectChecks(['desktop/runtime/index.mjs']).integration, false);
+  for (const name of ['worker.ts', 'audio-codec-worker.ts', 'phonemizer-worker.ts'])
+    assert.equal(selectChecks([`src/providers/synthetic/${name}`]).testMode, 'all');
+  for (const name of ['workerpool.ts', 'workerless.ts', 'networkworker.ts'])
+    assert.equal(selectChecks([`src/providers/synthetic/${name}`]).testMode, 'affected');
   assert.equal(selectChecks(['deployment/n8n/install.ps1']).windows, true);
   assert.deepEqual(enabled(['evals/src/cli.ts']), ['evals']);
 });
@@ -411,6 +416,19 @@ test('Vitest follows imports without running test files and reruns non-imported 
       'throw new Error("This input must not execute during selection.");\n',
     );
     assert.deepEqual(select().sort(), files, path);
+    await rm(join(root, path));
+  }
+  for (const path of [
+    'desktop/runtime/index.mjs',
+    'src/providers/synthetic/workerpool.ts',
+    'src/providers/synthetic/workerless.ts',
+  ]) {
+    await mkdir(join(root, path, '..'), { recursive: true });
+    await writeFile(
+      join(root, path),
+      'throw new Error("This input must not execute during selection.");\n',
+    );
+    assert.deepEqual(select(), ['tests/route.test.ts'], path);
     await rm(join(root, path));
   }
 });

@@ -75,7 +75,10 @@ export function selectChecks(paths) {
     }
     if (path.startsWith('src/')) {
       integration();
-      if (!/\.[cm]?[jt]sx?$/.test(path) || /worker[^/]*\.[cm]?[jt]sx?$/i.test(path))
+      if (
+        !/\.[cm]?[jt]sx?$/.test(path) ||
+        /(?:^|[-_.])worker\.[cm]?[jt]sx?$/i.test(path.split('/').at(-1))
+      )
         testMode = 'all';
       if (/^src\/(shared|ports)\//.test(path)) enable('build', 'desktop');
       if (/^src\/providers\/(docker|container-browser|agent-browser)\//.test(path))
@@ -106,7 +109,7 @@ export function selectChecks(paths) {
     }
     if (path.startsWith('desktop/')) {
       enable('desktop');
-      if (/^desktop\/(main|preload|runtime)\//.test(path)) {
+      if (/^desktop\/(main|preload)\//.test(path)) {
         enable('integration');
         testMode = 'all';
       }
