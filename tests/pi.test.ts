@@ -596,6 +596,45 @@ test('wide output models reserve room for request input', async (t) => {
   assert.equal(bodies[0].max_tokens, 50_000);
 });
 
+test('streamed content part arrays reach the answer as text', async (t) => {
+  const chunks = [
+    [{ type: 'thinking', thinking: [{ type: 'text', text: 'Synthetic plan.' }] }],
+    [
+      { type: 'text', text: 'Synthetic ' },
+      { type: 'text', text: 'answer' },
+    ],
+    '.',
+  ];
+  t.mock.method(
+    globalThis,
+    'fetch',
+    async () =>
+      new Response(
+        [
+          ...chunks.map((content) => ({ choices: [{ index: 0, delta: { content } }] })),
+          { choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] },
+        ]
+          .map((chunk) => `data: ${JSON.stringify({ id: 'fixture-parts', ...chunk })}\n\n`)
+          .join('') + 'data: [DONE]\n\n',
+        { headers: { 'content-type': 'text/event-stream' } },
+      ),
+  );
+  const { runtime, model } = await createPiModelRuntime(
+    smallContextAccess('compatible', 'fixture-parts', 8192),
+  );
+  const streamed: string[] = [];
+  const events = runtime.streamSimple(model, {
+    messages: [{ role: 'user', content: 'Synthetic question.', timestamp: 1 }],
+  });
+  for await (const event of events) if (event.type === 'text_delta') streamed.push(event.delta);
+  const result = await events.result();
+  assert.equal(streamed.join(''), 'Synthetic answer.');
+  assert.deepEqual(
+    result.content.map((block) => (block.type === 'text' ? block.text : block.type)),
+    ['Synthetic answer.'],
+  );
+});
+
 test('small Pi sessions save full output and keep nested results available to scripts', async (t) => {
   const { workspace, prefix, root } = await hostSandbox(t);
   const directory = await mkdtemp(join(tmpdir(), 'nod-small-output-'));
