@@ -3364,7 +3364,7 @@ async function chatgptIssuer() {
   };
 }
 
-test('ChatGPT sign-in listens only on a free loopback callback before requesting tokens', async (t) => {
+test('ChatGPT sign-in falls back to a pasted callback when the loopback port cannot be opened', async (t) => {
   const { createPiModelBackend } = await import('../src/providers/pi/models.ts');
   const { createServer, Server } = await import('node:http');
   const blocker = createServer();
@@ -3375,13 +3375,20 @@ test('ChatGPT sign-in listens only on a free loopback callback before requesting
   const port = (blocker.address() as import('node:net').AddressInfo).port;
   const listen = Server.prototype.listen;
   const owned: import('node:http').Server[] = [];
+  let refusal: 'busy' | 'denied' = 'busy';
   t.mock.method(
     Server.prototype,
     'listen',
     function (this: import('node:http').Server, ...args: unknown[]) {
       assert.deepEqual(args.slice(0, 2), [1455, '127.0.0.1']);
-      args[0] = port;
       owned.push(this);
+      if (refusal === 'denied') {
+        process.nextTick(() =>
+          this.emit('error', Object.assign(new Error('listen EACCES'), { code: 'EACCES' })),
+        );
+        return this;
+      }
+      args[0] = port;
       return Reflect.apply(listen, this, args);
     },
   );
@@ -3390,30 +3397,54 @@ test('ChatGPT sign-in listens only on a free loopback callback before requesting
     requests++;
     throw new Error('Unexpected network request');
   });
-  const controller = new AbortController();
-  let flow:
-    Awaited<ReturnType<import('../src/ports/models.ts').ModelBackend['signIn']>> | undefined;
+  const controllers: AbortController[] = [];
+  const flows: Awaited<ReturnType<import('../src/ports/models.ts').ModelBackend['signIn']>>[] = [];
   t.after(async () => {
-    controller.abort();
-    await flow?.result.catch(() => {});
+    for (const controller of controllers) controller.abort();
+    await Promise.all(flows.map((flow) => flow.result.catch(() => {})));
     for (const server of owned) {
       server.closeAllConnections();
       server.close();
     }
     await new Promise<void>((resolve) => blocker.close(() => resolve()));
   });
-  await assert.rejects(
-    createPiModelBackend()
-      .signIn({ signal: controller.signal, hostId: chatgptHostId })
-      .then((value) => {
-        flow = value;
-        return value;
-      }),
-    /already in use/,
-  );
-  assert.equal(flow, undefined);
-  assert.equal(requests, 0);
-  assert.ok(owned.every((server) => !server.listening));
+  for (const reason of ['busy', 'denied'] as const) {
+    refusal = reason;
+    const controller = new AbortController();
+    controllers.push(controller);
+    const flow = await createPiModelBackend().signIn({
+      signal: controller.signal,
+      hostId: chatgptHostId,
+    });
+    flows.push(flow);
+    assert.equal(flow.manual, true, reason);
+    assert.equal(
+      new URL(flow.url).searchParams.get('redirect_uri'),
+      'http://127.0.0.1:1455/auth/callback',
+    );
+    assert.ok(
+      owned.every((server) => !server.listening),
+      reason,
+    );
+    assert.equal(requests, 0, reason);
+    assert.throws(
+      () =>
+        flow.complete(
+          new URL(
+            'http://127.0.0.1:1455/auth/callback?state=other&code=pasted&client_id=fixture-client',
+          ),
+        ),
+      /invalid or was declined/,
+    );
+    flow.complete(
+      new URL(
+        `http://127.0.0.1:1455/auth/callback?state=${flow.state}&code=pasted&client_id=fixture-client`,
+      ),
+    );
+    await assert.rejects(flow.result, /didn’t finish/);
+    assert.equal(requests, 1, reason);
+    requests = 0;
+  }
   assert.equal(blocker.listening, true);
 });
 
@@ -3521,6 +3552,7 @@ test('ChatGPT sign-in validates callbacks, exchanges PKCE once, verifies the acc
       dispose();
     }
   }
+  assert.equal(signIn.manual, false);
   const authorization = new URL(signIn.url);
   assert.equal(
     authorization.origin + authorization.pathname,

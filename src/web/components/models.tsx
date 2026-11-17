@@ -933,7 +933,11 @@ export function ModelSettings({ onDirtyChange }: { onDirtyChange?(dirty: boolean
           )}
           {flow.signIn && (
             <div className="model-sign-in">
-              <p>Finish sign-in in your browser.</p>
+              <p>
+                {flow.signIn.manual
+                  ? 'Nod can’t receive this sign-in automatically. After you approve in your browser, paste the address it ends up on below.'
+                  : 'Finish sign-in in your browser.'}
+              </p>
               <div className="model-service-actions">
                 <Button type="button" variant="secondary" size="sm" onClick={flow.reopen}>
                   Open sign-in
@@ -953,7 +957,7 @@ export function ModelSettings({ onDirtyChange }: { onDirtyChange?(dirty: boolean
                   Cancel sign-in
                 </Button>
               </div>
-              <details className="model-details">
+              <details className="model-details" open={flow.signIn.manual}>
                 <summary>Browser didn’t return to Nod?</summary>
                 <form
                   onSubmit={(event) => {

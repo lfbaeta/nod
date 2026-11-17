@@ -135,9 +135,9 @@ If setup still fails, select **Show startup log** and [send feedback](#send-feed
 
 ## Models and apps
 
-### Port 1455 is already in use
+### ChatGPT sign-in asks you to paste an address
 
-ChatGPT sign-in receives its callback on port 1455. Another Nod app or another sign-in is using it. Close it, then try again.
+ChatGPT sign-in receives its callback on port 1455. If Nod can't open that port, for example because another program uses it or Windows reserves it, Nod still opens OpenAI and asks you to paste the address. After you approve, your browser ends on a page that doesn't load or shows another program's error. Copy its full address into Nod and select **Complete sign-in**, or **Finish** during onboarding.
 
 ### An app connection fails
 

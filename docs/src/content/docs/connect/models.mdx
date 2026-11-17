@@ -90,7 +90,7 @@ Each connection keeps its own region. Nod does not switch regions after a failed
 
 Nod uses OpenAI's [Sign in with ChatGPT](https://developers.openai.com/siwc/token-sharing-open-source) for open-source and locally hosted apps. Requests go to the OpenAI API and use your plan's included usage. ChatGPT lists Nod under [Settings → Usage](https://chatgpt.com/settings/usage), where you can see and limit its usage or disconnect it. It needs ChatGPT Plus or Pro. On other plans, OpenAI's consent page says a required permission isn't available, and the sign-in fails. In a workspace your organization manages, an admin has to allow third-party apps first, or OpenAI says your organization hasn't enabled access for this app. Otherwise, connect an OpenAI API key instead.
 
-ChatGPT sign-in listens on port `1455` where Nod's server runs. If another program uses that port, Nod stops with an error before it opens OpenAI. When connecting to a remote server, the final browser address may not load on your device. Copy that full address into **Callback URL** in Nod and select **Complete sign-in**. The server checks the sign-in and stores the connection; you do not need to expose port `1455` publicly.
+ChatGPT sign-in listens on port `1455` where Nod's server runs. If Nod can't open that port, for example because another program uses it or Windows reserves it, Nod still opens OpenAI and asks you to paste the final browser address. When connecting to a remote server, the final browser address may not load on your device. Copy that full address into **Callback URL** in Nod and select **Complete sign-in**. The server checks the sign-in and stores the connection; you do not need to expose port `1455` publicly.
 
 </TabItem>
 <TabItem label="Anthropic">
