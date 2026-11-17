@@ -116,7 +116,7 @@ flowchart LR
 
 The network has no internet access, and your source folders are mounted read-only. The run fails if any test is skipped.
 
-Use short retry intervals in fixtures that check retry results, not the delay. Keep the same request count and failure checks.
+Keep independent browser cases in the matching test files so they can run in separate processes. Use short retry intervals in fixtures that check retry results, not the delay. Keep the same request count and failure checks.
 
 Wait for a controlled frame to finish loading before checking an old control binding. A reload can still show the previous document while navigation is pending.
 
@@ -208,11 +208,11 @@ flowchart TD
 | `deployment/n8n/`                                                           | n8n delivery contracts. Main also selects Windows acceptance when installer inputs change.                                                                                                                                                                                                                                                                               |
 | Root package files, dependency patches, CI selection code or unknown inputs | Every check for the current stage.                                                                                                                                                                                                                                                                                                                                       |
 
-A daily CI run at 03:17 UTC uses every check, including both Mac architectures and full Windows update acceptance. A manual CI run also uses every check, except a run on `release/desktop`, which compares that branch with `main`. The scope job fetches two commits to read the merge base. A manual run on `release/desktop` fetches full history. If that base is unavailable, CI runs every check. New pull request commits cancel older runs for that pull request. Main runs stay bound to each commit because releases require CI to pass on their exact source. Daily runs have a separate group so a push cannot cancel them.
+A daily CI run at 03:17 UTC uses every check, including both Mac architectures and full Windows update acceptance. A manual CI run also uses every check, except a run on `release/desktop`, which compares that branch with `main`. The shared runner fetches two commits to read the merge base. A manual run on `release/desktop` fetches full history. If that base is unavailable, CI runs every check. New pull request commits cancel older runs for that pull request. Main runs stay bound to each commit because releases require CI to pass on their exact source. Daily runs have a separate group so a push cannot cancel them.
 
 The **Self-host bundle** workflow builds and checks both Linux architectures on `main` when package, container, deployment, or bundled documentation inputs change. Pull requests do not export these release bundles. It also runs each Sunday at 04:47 UTC and on request. Ordinary web and server changes do not create both bundles. To get a bundle for a specific revision, run that workflow on the revision. Draft release creation still needs its separate manual input.
 
-The selection rules are in [`.github/scripts/ci-scope.mjs`](https://github.com/n8n-io/nod/blob/main/.github/scripts/ci-scope.mjs). The scope job uses Node.js without a dependency install. The shared runner selects affected tests after installing the tools. CI tests these rules with disposable Git repositories, including renames, removed tests and version-only releases. Workflow changes also run a pinned, checksum-verified actionlint to check syntax and expressions.
+The selection rules are in [`.github/scripts/ci-scope.mjs`](https://github.com/n8n-io/nod/blob/main/.github/scripts/ci-scope.mjs). The shared runner selects checks and affected tests after installing the tools. It starts without waiting for a separate selection job. CI tests these rules with disposable Git repositories, including renames, removed tests and version-only releases. Workflow changes also run a pinned, checksum-verified actionlint to check syntax and expressions.
 
 Actionlint 1.7.12 [does not yet accept GitHub's `queue` key](https://github.com/rhysd/actionlint/issues/657). CI ignores that specific parser error and checks the queue values and cancellation settings in its own tests.
 

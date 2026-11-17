@@ -120,6 +120,7 @@ test(
           `--user-data-dir=${profile}`,
           '--dump-dom',
           '--virtual-time-budget=1500',
+          '--timeout=5000',
           `http://127.0.0.1:${address.port}`,
         ],
         { signal: AbortSignal.timeout(20_000) },

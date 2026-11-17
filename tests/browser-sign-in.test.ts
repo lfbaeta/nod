@@ -1,3 +1,10 @@
+import { createServer as createHttpServer } from 'node:http';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
+import { BrowserActionError } from '../src/ports/computer.ts';
+import { createAgentBrowserComputer } from '../src/providers/agent-browser/index.ts';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
@@ -405,6 +412,217 @@ test(
       await pool.end();
       await admin.query(`DROP SCHEMA ${schema} CASCADE`);
       await admin.end();
+    }
+  },
+);
+
+function deferred<T = void>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+// Core browser API: ownership and private-capture locks
+
+test(
+  'reloading a page reached by a form POST does not resubmit it',
+  { timeout: 60_000 },
+  async () => {
+    let posts = 0;
+    const server = createHttpServer((request, response) => {
+      response.setHeader('content-type', 'text/html');
+      if (request.method === 'POST') {
+        posts += 1;
+        response.end(`<title>Done</title><p>count ${posts}</p>`);
+        return;
+      }
+      response.end('<form method="post" action="/submit"><button id="go">Go</button></form>');
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const origin = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+    const directory = await mkdtemp(join(tmpdir(), 'nod-reload-'));
+    const computer = createAgentBrowserComputer({
+      dataRoot: directory,
+      browserExecutable: process.env.NOD_TEST_BROWSER_EXECUTABLE,
+      privateNetwork: true,
+      headless: true,
+    });
+    try {
+      await computer.act('post', { action: 'open', url: origin });
+      await computer.act('post', { action: 'click', selector: '#go' });
+      await computer.act('post', { action: 'wait', text: 'count 1' });
+      assert.equal(posts, 1);
+      await computer.act('post', { action: 'reload' });
+      await computer.act('post', { action: 'wait', load: 'load' });
+      assert.equal(posts, 1);
+      await computer.act('post', { action: 'open', url: origin });
+      await computer.act('post', { action: 'reload' });
+      assert.equal(posts, 1);
+    } finally {
+      await computer.dispose();
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  'private submission keeps SPA state, delayed requests and field formats, and pauses scripts while a value stays',
+  { timeout: 60_000 },
+  async () => {
+    const submitted = deferred<string>();
+    const cardSubmitted = deferred<string>();
+    let submissions = 0;
+    const server = createHttpServer(async (request, response) => {
+      response.setHeader('content-type', 'text/html');
+      if (request.url === '/record') {
+        let body = '';
+        for await (const bytes of request) body += bytes;
+        submissions++;
+        submitted.resolve(body);
+        response.end('Accepted');
+      } else if (request.url === '/card-record') {
+        let body = '';
+        for await (const bytes of request) body += bytes;
+        cardSubmitted.resolve(body);
+        response.end('Accepted');
+      } else if (request.url === '/delayed') {
+        response.end(`<input id="company"><input id="password" type="password"><button id="submit">Continue</button><script>
+        document.querySelector('button').onclick = () => setTimeout(() => fetch('/record', { method: 'POST', body: JSON.stringify({company: document.querySelector('#company').value, password: document.querySelector('#password').value}) }), 1200);
+      </script>`);
+      } else if (request.url === '/card') {
+        response.end(
+          '<h2>Order total EUR 30</h2><input id="number"><select id="month"><option value="">Choose month</option><option value="aug">August</option></select><input id="year"><input id="expiry"><button id="submit">Pay</button><script>document.querySelector("button").onclick = () => fetch("/card-record", {method:"POST", body:JSON.stringify({month:document.querySelector("#month").value, year:document.querySelector("#year").value, expiry:document.querySelector("#expiry").value})});</script>',
+        );
+      } else {
+        response.end(`<input id="username"><button id="submit">Continue</button><script>
+        document.querySelector('button').onclick = () => { document.body.innerHTML = '<h1>Password step</h1><input type="password" id="password">'; };
+      </script>`);
+      }
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const origin = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+    const directory = await mkdtemp(join(tmpdir(), 'nod-private-state-'));
+    const computer = createAgentBrowserComputer({
+      dataRoot: directory,
+      browserExecutable: process.env.NOD_TEST_BROWSER_EXECUTABLE,
+      privateNetwork: true,
+      headless: true,
+    });
+    try {
+      await computer.act('state', { action: 'open', url: origin });
+      await computer.injectCredentials({
+        threadId: 'state',
+        origin,
+        kind: 'identifier',
+        username: 'synthetic@example.test',
+        usernameSelector: '#username',
+        submitSelector: '#submit',
+      });
+      assert.match((await computer.act('state', { action: 'snapshot' })).text, /Password step/);
+      await computer.act('state', { action: 'open', url: `${origin}/delayed` });
+      await computer.act('state', {
+        action: 'fill',
+        selector: '#company',
+        text: 'Synthetic company',
+      });
+      await computer.act('state', { action: 'evaluate', script: 'document.title' });
+      await computer.injectCredentials({
+        threadId: 'state',
+        origin,
+        kind: 'password',
+        password: 'Synthetic private value',
+        passwordSelector: '#password',
+        submitSelector: '#submit',
+      });
+      assert.deepEqual(JSON.parse(await submitted.promise), {
+        company: 'Synthetic company',
+        password: 'Synthetic private value',
+      });
+      assert.equal(submissions, 1);
+      assert.equal(
+        (await computer.act('state', { action: 'snapshot' })).text.includes(
+          'Synthetic private value',
+        ),
+        false,
+      );
+      await assert.rejects(
+        computer.act('state', {
+          action: 'evaluate',
+          script: 'Promise.resolve(document.querySelector("#password").value.length)',
+        }),
+        /scripts are paused/,
+      );
+      await computer.act('state', { action: 'open', url: `${origin}/card` });
+      const fields = {
+        number: '#number',
+        expiryMonth: '#month',
+        expiryYear: { selector: '#year', format: 'YY' },
+        expiry: { selector: '#expiry', format: 'YYYY-MM' },
+      };
+      const bound = await computer.cardDestinations('state', fields);
+      await computer.fillCard({
+        threadId: 'state',
+        ...bound,
+        fields,
+        submitSelector: '#submit',
+        card: {
+          cardNumber: '4242424242424242',
+          expiryMonth: 8,
+          expiryYear: 2030,
+          cardholder: 'Synthetic owner',
+        },
+      });
+      assert.deepEqual(JSON.parse(await cardSubmitted.promise), {
+        month: 'aug',
+        year: '30',
+        expiry: '2030-08',
+      });
+      assert.match(
+        (await computer.act('state', { action: 'snapshot' })).text,
+        /Order total EUR 30/,
+      );
+      await assert.rejects(
+        computer.act('state', {
+          action: 'evaluate',
+          script: 'document.querySelector("#number").value',
+        }),
+        /scripts are paused/,
+      );
+      await computer.act('fence', { action: 'open', url: `${origin}/card` });
+      await computer.act('fence', {
+        action: 'evaluate',
+        script: 'globalThis.__nodScripted = false',
+      });
+      const recovered = createAgentBrowserComputer({
+        dataRoot: directory,
+        browserExecutable: process.env.NOD_TEST_BROWSER_EXECUTABLE,
+        privateNetwork: true,
+        headless: true,
+      });
+      try {
+        assert.equal((await recovered.currentPage('fence')).origin, origin);
+        await recovered.act('fence', { action: 'snapshot' });
+        await assert.rejects(
+          recovered.cardDestinations('fence', fields),
+          /script ran on this document/,
+        );
+        await computer.act('fence', { action: 'reload' });
+        assert.equal(
+          (await recovered.cardDestinations('fence', fields)).destinations.number,
+          origin,
+        );
+      } finally {
+        await recovered.dispose();
+      }
+    } finally {
+      await computer.dispose();
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await rm(directory, { recursive: true, force: true });
     }
   },
 );

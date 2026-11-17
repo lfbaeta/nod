@@ -18,40 +18,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  scope:
-    name: Select checks for changed files
-    runs-on: blacksmith-2vcpu-ubuntu-2404
-    timeout-minutes: 5
-    outputs:
-      types: ${{ steps.scope.outputs.types }}
-      build: ${{ steps.scope.outputs.build }}
-      integration: ${{ steps.scope.outputs.integration }}
-      desktop: ${{ steps.scope.outputs.desktop }}
-      macos: ${{ steps.scope.outputs.macos }}
-      windows: ${{ steps.scope.outputs.windows }}
-      n8n: ${{ steps.scope.outputs.n8n }}
-      evals: ${{ steps.scope.outputs.evals }}
-      images: ${{ steps.scope.outputs.images }}
-      network: ${{ steps.scope.outputs.network }}
-      ci: ${{ steps.scope.outputs.ci }}
-      test_files: ${{ steps.scope.outputs.test_files }}
-      desktop_test_files: ${{ steps.scope.outputs.desktop_test_files }}
-      quality_checks: ${{ steps.scope.outputs.quality_checks }}
-      format_files: ${{ steps.scope.outputs.format_files }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          fetch-depth: ${{ github.ref == 'refs/heads/release/desktop' && '0' || '2' }}
-          persist-credentials: false
-      - name: Select checks before starting runners
-        id: scope
-        env:
-          CI_DIFF_BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before || '' }}
-        run: node .github/scripts/ci-scope.mjs --plan
-
   notes:
     name: Delete Git notes
-    needs: scope
+    needs: checks
     if: ${{ !cancelled() && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -70,13 +39,27 @@ jobs:
 
   checks:
     name: Checks, tests and build
-    needs: scope
-    if: ${{ !cancelled() }}
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 15
+    outputs:
+      types: ${{ steps.scope.outputs.types }}
+      build: ${{ steps.scope.outputs.build }}
+      integration: ${{ steps.scope.outputs.integration }}
+      desktop: ${{ steps.scope.outputs.desktop }}
+      macos: ${{ steps.scope.outputs.macos }}
+      windows: ${{ steps.scope.outputs.windows }}
+      n8n: ${{ steps.scope.outputs.n8n }}
+      evals: ${{ steps.scope.outputs.evals }}
+      images: ${{ steps.scope.outputs.images }}
+      network: ${{ steps.scope.outputs.network }}
+      ci: ${{ steps.scope.outputs.ci }}
+      test_files: ${{ steps.scope.outputs.test_files }}
+      desktop_test_files: ${{ steps.scope.outputs.desktop_test_files }}
+      quality_checks: ${{ steps.scope.outputs.quality_checks }}
+      format_files: ${{ steps.scope.outputs.format_files }}
     services:
       postgres:
-        image: ${{ (needs.scope.outputs.integration == 'true' || needs.scope.outputs.evals == 'true') && 'postgres:17-alpine' || '' }}
+        image: postgres:17-alpine
         env:
           POSTGRES_USER: nod
           POSTGRES_PASSWORD: nod-ci
@@ -92,19 +75,6 @@ jobs:
       CI: 'true'
       TEST_DATABASE_URL: postgresql://nod:nod-ci@127.0.0.1:5432/nod_ci
     steps:
-      - name: Require valid check selection
-        shell: node {0}
-        env:
-          CI_SCOPE_RESULT: ${{ needs.scope.result }}
-          CI_SCOPE: ${{ toJSON(needs.scope.outputs) }}
-        run: |
-          if (process.env.CI_SCOPE_RESULT !== 'success')
-            throw new Error('CI could not select the required checks.');
-          const scope = JSON.parse(process.env.CI_SCOPE);
-          for (const name of ['types', 'build', 'integration', 'desktop', 'macos', 'windows', 'n8n', 'evals', 'images', 'network', 'ci']) {
-            if (!['true', 'false'].includes(scope[name]))
-              throw new Error(`The ${name} scope is missing or invalid.`);
-          }
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -115,14 +85,27 @@ jobs:
       - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: .local/ci-test-timings
-          key: ci-test-timings-v1-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: ci-test-timings-v1-
+          key: ci-test-timings-v2-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: ci-test-timings-v2-
       - name: Select tests with the installed tools
         id: scope
         env:
           CI_DIFF_BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before || '' }}
           CI_TEST_TIMINGS: .local/ci-test-timings
         run: node .github/scripts/ci-scope.mjs
+      - name: Require valid check selection
+        shell: node {0}
+        env:
+          CI_SCOPE_RESULT: ${{ steps.scope.outcome }}
+          CI_SCOPE: ${{ toJSON(steps.scope.outputs) }}
+        run: |
+          if (process.env.CI_SCOPE_RESULT !== 'success')
+            throw new Error('CI could not select the required checks.');
+          const scope = JSON.parse(process.env.CI_SCOPE);
+          for (const name of ['types', 'build', 'integration', 'desktop', 'macos', 'windows', 'n8n', 'evals', 'images', 'network', 'ci']) {
+            if (!['true', 'false'].includes(scope[name]))
+              throw new Error(`The ${name} scope is missing or invalid.`);
+          }
       - name: Prepare the browser fixture without building an image
         if: steps.scope.outputs.integration == 'true'
         shell: bash
@@ -237,12 +220,12 @@ jobs:
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: .local/ci-test-timings
-          key: ci-test-timings-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          key: ci-test-timings-v2-${{ github.run_id }}-${{ github.run_attempt }}
 
   images:
     name: Container and self-host checks
-    needs: scope
-    if: needs.scope.outputs.images == 'true'
+    needs: checks
+    if: needs.checks.outputs.images == 'true'
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 25
     steps:
@@ -264,7 +247,7 @@ jobs:
           docker tag nod-ci-browser nod-browser:ci
           docker tag nod-ci-workspace nod-workspace:ci
       - name: Check workspace egress and command recovery in the workspace image
-        if: needs.scope.outputs.images == 'true'
+        if: needs.checks.outputs.images == 'true'
         env:
           NOD_TEST_WORKSPACE_IMAGE: nod-ci-workspace
         run: pnpm exec tsx --test --test-name-pattern='workspace egress|fully detached' tests/sandbox.test.ts
@@ -279,8 +262,8 @@ jobs:
 
   macos:
     name: macOS native identity and updates (${{ matrix.arch }})
-    needs: scope
-    if: needs.scope.outputs.macos == 'true'
+    needs: checks
+    if: needs.checks.outputs.macos == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -319,8 +302,8 @@ jobs:
 
   windows:
     name: Windows setup and installer
-    needs: scope
-    if: needs.scope.outputs.windows == 'true'
+    needs: checks
+    if: needs.checks.outputs.windows == 'true'
     runs-on: windows-2025
     timeout-minutes: 35
     env:

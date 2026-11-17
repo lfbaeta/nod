@@ -11,7 +11,10 @@ import { readTimings, orderTests } from './ci-tests.mjs';
 
 const ciWorkflow = parse(await readFile(new URL('../workflows/ci.yml', import.meta.url), 'utf8'));
 const requireChecks = (needs) =>
-  new Function('process', ciWorkflow.jobs.checks.steps[0].run)({
+  new Function(
+    'process',
+    ciWorkflow.jobs.checks.steps.find((step) => step.name === 'Require valid check selection').run,
+  )({
     env: { CI_SCOPE_RESULT: needs.scope?.result, CI_SCOPE: JSON.stringify(needs.scope?.outputs) },
   });
 
@@ -151,14 +154,13 @@ test('PRs keep release acceptance off the merge path and retain it on main', () 
 test('the shared runner and qualification jobs use the selected scope', async () => {
   const jobs = ciWorkflow.jobs;
   assert.equal(jobs.checks.name, 'Checks, tests and build');
-  assert.equal(jobs.checks.needs, 'scope');
-  assert.ok(jobs.checks.if.includes('!cancelled()'));
+  assert.equal(jobs.checks.needs, undefined);
   for (const name of ['macos', 'windows', 'images']) {
-    assert.equal(jobs[name].needs, 'scope');
-    assert.equal(jobs[name].if, `needs.scope.outputs.${name} == 'true'`);
+    assert.equal(jobs[name].needs, 'checks');
+    assert.equal(jobs[name].if, `needs.checks.outputs.${name} == 'true'`);
   }
   for (const name of enabled(null))
-    assert.equal(jobs.scope.outputs[name], '${{ steps.scope.outputs.' + name + ' }}');
+    assert.equal(jobs.checks.outputs[name], '${{ steps.scope.outputs.' + name + ' }}');
   assert.ok(ciWorkflow.on.schedule.length);
   assert.ok(ciWorkflow.on.merge_group);
   const bundle = parse(
