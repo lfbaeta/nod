@@ -247,7 +247,12 @@ export function createAgentBrowserComputer(options: {
   const screenStatuses = new Map<string, ReturnType<NonNullable<Computer['screenStatus']>>>();
   const namespace = `sk-${createHash('sha256').update(runtimeRoot).digest('hex').slice(0, 12)}`;
   const uploadRoot = resolve('/tmp/nod-browser-uploads', namespace);
-  const cachePath = (state: BrowserState) => resolve('/tmp/nod-browser-cache', namespace, state.id);
+  const cacheRoot = resolve('/tmp/nod-browser-cache', namespace);
+  const cachePath = (state: BrowserState) => resolve(cacheRoot, state.id);
+  const internalPaths = new RegExp(
+    `(?:${[runtimeRoot, uploadRoot, cacheRoot].map((path) => path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})[^\\s'"]*`,
+    'g',
+  );
   const executable =
     options.executable ?? resolve(process.cwd(), 'node_modules/.bin/agent-browser');
   const run = options.run ?? runProcess;
@@ -608,10 +613,7 @@ export function createAgentBrowserComputer(options: {
         throw new BrowserActionError(
           'browser_start_failed',
           reason &&
-            redactBrowserText(reason, state.secrets).replace(
-              new RegExp(`${runtimeRoot.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[^\\s'"]*`, 'g'),
-              '[browser data]',
-            ),
+            redactBrowserText(reason, state.secrets).replace(internalPaths, '[browser data]'),
         );
       });
       state.recovered = false;

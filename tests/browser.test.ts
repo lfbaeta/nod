@@ -1685,7 +1685,7 @@ test('a browser that fails to start reports why through the workspace browser', 
             ? { success: true, data: { active: false } }
             : {
                 success: false,
-                error: `Chrome exited early (exit code: 21) for ${join(directory, 'runtime', 'profiles', 'fixture')}`,
+                error: `Chrome exited early (exit code: 21) for ${args[args.indexOf('--profile') + 1]} and ${/--disk-cache-dir=([^,]+)/.exec(args.join(' '))?.[1]}`,
               },
         ),
       }),
@@ -1696,7 +1696,7 @@ test('a browser that fails to start reports why through the workspace browser', 
       fixture.client(directory).act('fixture', { action: 'open', url: 'https://example.com/' }),
       {
         message:
-          'The workspace browser could not start, so no page opened. The browser said: Chrome exited early (exit code: 21) for [browser data]',
+          'The workspace browser could not start, so no page opened. The browser said: Chrome exited early (exit code: 21) for [browser data] and [browser data]',
       },
     );
   } finally {
