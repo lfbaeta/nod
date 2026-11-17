@@ -158,6 +158,10 @@ export function Onboarding({
     desktopRendererReady();
   }, []);
 
+  useEffect(() => {
+    if (step !== position.step) setPosition({ step, arrived });
+  }, [step]);
+
   useEffect(
     () =>
       subscribeAppEvents(user.id, {
