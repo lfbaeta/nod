@@ -88,7 +88,7 @@ The panel remembers reading state for up to eight recently viewed files, with a 
 
 - **Use in message** adds an existing file to your draft.
 - **Copy image** copies raster image data where the clipboard supports it. **Download** keeps the original file format.
-- In the desktop app, drag a file card, image, or preview file icon to a folder to copy the file. **Save to Downloads** shows **Open** and **Show in folder** after the save completes. The file menu uses the system menu.
+- In the desktop app, drag a file card, image, or preview file icon to a folder to copy the file. **Save to Downloads** shows **Open** and **Show in folder** after the save completes. The file menu uses the system menu. Right-click a file card, a preview in chat, or the open file in the panel to open it. Links, fields and selected text keep their own menu.
 
 Desktop file actions prepare private copies in the system temporary folder, up to eight files. They're removed when the cache needs room or the app quits. A forced stop can leave one behind. Saving creates a separate file in Downloads.
 
