@@ -1020,11 +1020,16 @@ export function createModelService(options: {
     return attempt?.provider;
   }
   function start(provider: 'openai' | 'openrouter', connectionId?: string) {
-    const result = starting.then(() => begin(provider, connectionId));
+    const capture = snapshotAnalytics(analytics);
+    const result = starting.then(() => begin(provider, connectionId, capture));
     starting = result.catch(() => {});
     return result;
   }
-  async function begin(provider: 'openai' | 'openrouter', connectionId?: string) {
+  async function begin(
+    provider: 'openai' | 'openrouter',
+    connectionId?: string,
+    capture?: CaptureAnalytics,
+  ) {
     if (closed) throw new ConnectionError('Model connections have stopped.');
     try {
       await checkStorage();
@@ -1103,6 +1108,13 @@ export function createModelService(options: {
         phase: 'start',
         elapsedMs: Date.now() - started,
       });
+      if (!closed && capture)
+        connectionChanged(
+          provider,
+          provider === 'openai' ? 'subscription' : 'oauth',
+          'failed',
+          capture,
+        );
       controller.abort();
       await flow?.result.catch(() => {});
       throw error;

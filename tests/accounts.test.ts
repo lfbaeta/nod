@@ -4237,6 +4237,7 @@ describe('model connections', { skip: !process.env.TEST_DATABASE_URL }, () => {
     Object.assign(f.keyStore, createEnvironmentKeyStore(invalidKey));
     const calls = { signIn: 0, authorize: 0, catalog: 0 };
     let rejectSignIn = false;
+    let rejectStart = false;
     const signIn = stubSignIn(async () => {
       if (rejectSignIn) throw new Error('Synthetic sign-in failure');
       return subscriptionCredential();
@@ -4245,10 +4246,12 @@ describe('model connections', { skip: !process.env.TEST_DATABASE_URL }, () => {
       ...f.backend,
       signIn(input) {
         calls.signIn++;
+        if (rejectStart) throw new Error('Synthetic sign-in start failure');
         return signIn(input);
       },
       authorize(input) {
         calls.authorize++;
+        if (rejectStart) throw new Error('Synthetic sign-in start failure');
         return f.backend.authorize(input);
       },
       catalog(provider, method) {
@@ -4321,6 +4324,50 @@ describe('model connections', { skip: !process.env.TEST_DATABASE_URL }, () => {
     );
     assert.deepEqual(captured.slice(failures.length + 1), [failures[0]]);
     assert.deepEqual(calls, { signIn: 2, authorize: 0, catalog: 1 });
+    rejectStart = true;
+    for (const provider of ['openai', 'openrouter'] as const)
+      await assert.rejects(owner.start(provider), /Synthetic sign-in start failure/);
+    assert.deepEqual(captured.slice(failures.length + 2), [failures[0], failures[1]]);
+    assert.deepEqual(calls, { signIn: 3, authorize: 1, catalog: 1 });
+  });
+
+  test('sign-in start failures keep the consent period that started the request', async (t) => {
+    const f = await fixture(t);
+    let entered!: () => void;
+    let reject!: (error: Error) => void;
+    const starting = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const result = new Promise<never>((_resolve, fail) => {
+      reject = fail;
+    });
+    const ownerId = 'fixture-sign-in-consent';
+    const owner = await f.create(ownerId, {
+      ...f.backend,
+      signIn: async () => {
+        entered();
+        return result;
+      },
+    });
+    const captured: Parameters<ProductAnalytics['capture']>[0][] = [];
+    const analytics = await createAnalytics({
+      provider: { capture: (event) => captured.push(event), shutdown: async () => {} },
+      environment: 'development',
+      dataRoot: '.',
+      installationId: randomUUID(),
+    });
+    t.after(() => analytics.shutdown());
+    analytics.setUsageData(ownerId, true);
+    const app = Fastify();
+    owner.register(app, analytics.forOwner(ownerId));
+    t.after(() => app.close());
+    const failed = assert.rejects(owner.start('openai'), /Synthetic sign-in start failure/);
+    await starting;
+    analytics.setUsageData(ownerId, false);
+    analytics.setUsageData(ownerId, true);
+    reject(new Error('Synthetic sign-in start failure'));
+    await failed;
+    assert.equal(captured.length, 0);
   });
 
   test('removing a selected model records only committed clearing within its consent period', async (t) => {
