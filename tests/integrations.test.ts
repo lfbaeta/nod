@@ -48,7 +48,11 @@ import { logFailure } from '../src/server/failure-log.ts';
 import { serviceEnvironment } from '../src/providers/process.ts';
 import { createIntegrationIdentityCheckpoint } from '../src/server/integration-identity.ts';
 import { createIntegrationBrowser } from '../src/server/integration-browser.ts';
-import { createDiscoveredTransport, safeRemoteFetch } from '../src/providers/discovered/remote.ts';
+import {
+  createDiscoveredTransport,
+  ownerAddress,
+  safeRemoteFetch,
+} from '../src/providers/discovered/remote.ts';
 import { createAgentRuntime } from '../src/runtime/index.ts';
 import { createDiscoveredConnections } from '../src/server/discovered-connections.ts';
 import { registerLocalAccess } from '../src/server/access.ts';
@@ -7674,6 +7678,143 @@ test(
 );
 
 test(
+  'manual MCP setup accepts an owner-typed private address and binds it to that origin',
+  { skip: !process.env.TEST_DATABASE_URL },
+  async (t) => {
+    const schema = `test_manual_local_mcp_${randomUUID().replaceAll('-', '')}`;
+    const admin = new pg.Pool({ connectionString: process.env.TEST_DATABASE_URL });
+    await admin.query(`CREATE SCHEMA ${schema}`);
+    const pool = new pg.Pool({
+      connectionString: process.env.TEST_DATABASE_URL,
+      options: `-c search_path=${schema}`,
+    });
+    const app = Fastify();
+    t.after(async () => {
+      await app.close();
+      await pool.end();
+      await admin.query(`DROP SCHEMA ${schema} CASCADE`);
+      await admin.end();
+    });
+    const ownerId = 'fixture-local-mcp-owner';
+    const key = randomBytes(32);
+    const keyStore = { id: 'fixture', configured: true, getKey: async () => key };
+    const grantVault = await createAppGrantVault(pool, { ownerId, keyStore });
+    const unused = async () => {
+      throw new Error('Proposal creation must not call the remote server.');
+    };
+    const oauth: Parameters<typeof createDiscoveredConnections>[1]['oauth'] = {
+      begin: unused,
+      finish: unused,
+      refresh: unused,
+    };
+    const origins: string[] = [];
+    const options = {
+      ownerId,
+      baseUrl: 'http://localhost:4310',
+      grantVault,
+      transport: createDiscoveredTransport(unused),
+      oauth,
+      local: (origin: string) => {
+        origins.push(origin);
+        const check = ownerAddress(origin);
+        return {
+          transport: createDiscoveredTransport(unused, async (endpoint) => {
+            const { url } = await check(endpoint);
+            if (url.hash || url.search) throw new Error('Use an address without a query.');
+            return url.href;
+          }),
+          oauth,
+        };
+      },
+    };
+    const connections = await createDiscoveredConnections(pool, options);
+    connections.registerRoutes(app);
+    const create = (endpoint: string) =>
+      app.inject({
+        method: 'POST',
+        url: '/api/apps/mcp',
+        payload: { name: 'Local MCP', endpoint, auth: 'bearer' },
+      });
+    const accepted = await create('http://127.0.0.1:4931/mcp');
+    assert.equal(accepted.statusCode, 200, accepted.body);
+    const saved = (
+      await pool.query('SELECT paths FROM discovered_connection_proposals WHERE id=$1', [
+        accepted.json().id,
+      ])
+    ).rows[0];
+    assert.deepEqual(saved.paths, [
+      {
+        id: accepted.json().id,
+        kind: 'mcp',
+        endpoint: 'http://127.0.0.1:4931/mcp',
+        auth: 'bearer',
+        local: true,
+      },
+    ]);
+    assert.deepEqual(origins, ['http://127.0.0.1:4931', 'http://127.0.0.1:4931']);
+    const schemeless = await create('127.0.0.1:4931/mcp');
+    assert.equal(schemeless.statusCode, 200, schemeless.body);
+    assert.equal(
+      (
+        await pool.query('SELECT paths FROM discovered_connection_proposals WHERE id=$1', [
+          schemeless.json().id,
+        ])
+      ).rows[0].paths[0].endpoint,
+      'https://127.0.0.1:4931/mcp',
+    );
+    for (const endpoint of [
+      'http://93.184.216.34/mcp',
+      'http://127.0.0.1:4931/mcp?token=synthetic',
+      'http://user:synthetic@127.0.0.1:4931/mcp',
+      'ftp://127.0.0.1:4931/mcp',
+      'file:///synthetic/mcp',
+      'data:text/plain,synthetic',
+    ]) {
+      const rejected = await create(endpoint);
+      assert.equal(rejected.statusCode, 400, rejected.body);
+    }
+    const service = 'mcp-synthetic-local';
+    await pool.query(
+      `INSERT INTO discovered_connections (id,owner_id,service,name,account_name,paths,reconnect_required)
+       VALUES($1,$2,$3,'Local MCP','Local MCP',$4,true)`,
+      [
+        randomUUID(),
+        ownerId,
+        service,
+        JSON.stringify([
+          {
+            id: randomUUID(),
+            kind: 'mcp',
+            endpoint: 'http://127.0.0.1:4931/mcp',
+            auth: 'bearer',
+            local: true,
+          },
+        ]),
+      ],
+    );
+    const reconnected = await connections.reconnect(service);
+    const renewed = (
+      await pool.query('SELECT paths FROM discovered_connection_proposals WHERE id=$1', [
+        new URL(reconnected.url, 'http://localhost').searchParams.get('connect'),
+      ])
+    ).rows[0];
+    assert.equal(renewed.paths[0].endpoint, 'http://127.0.0.1:4931/mcp');
+    assert.equal(renewed.paths[0].local, true);
+    const proposed = await connections
+      .propose({
+        name: 'Proposed',
+        service: 'proposed-local',
+        paths: [{ kind: 'mcp', endpoint: 'http://127.0.0.1:4931/mcp', auth: 'bearer' }],
+      })
+      .then(
+        () => 'accepted',
+        () => 'rejected',
+      );
+    assert.equal(proposed, 'rejected', 'A model proposal never reaches a private address.');
+  },
+);
+
+test(
   'discovered setup preserves owned paths, scoped discovery and account replacement',
   { skip: !process.env.TEST_DATABASE_URL },
   async () => {
@@ -11745,7 +11886,7 @@ test('connected provider cancellation reaches session creation, search, schemas,
   assert.equal(requests.length, 4);
 });
 
-test('discovered requests follow redirects only to checked public addresses and drop credentials across origins', async () => {
+test('discovered requests identify Nod, follow redirects only to checked public addresses and drop credentials across origins', async () => {
   const { PassThrough } = await import('node:stream');
   const { EventEmitter } = await import('node:events');
   const sent: Array<{ url: string; authorization?: string }> = [];
@@ -11767,12 +11908,14 @@ test('discovered requests follow redirects only to checked public addresses and 
     'https://api.fixture.example/broken': { status: 302, location: 'https://[' },
   };
   const methods: string[] = [];
+  const agents: Array<string | undefined> = [];
   const request = ((
     url: URL,
     options: { method: string; headers: Record<string, string> },
     callback: (incoming: unknown) => void,
   ) => {
     methods.push(options.method);
+    agents.push(options.headers['user-agent']);
     sent.push({ url: url.href, authorization: options.headers.authorization });
     const route = routes[url.href]!;
     const incoming = Object.assign(new PassThrough(), {
@@ -11801,6 +11944,15 @@ test('discovered requests follow redirects only to checked public addresses and 
     { url: 'https://api.fixture.example/start', authorization: 'Bearer synthetic-token' },
     { url: 'https://files.fixture.example/data', authorization: undefined },
   ]);
+  assert.equal(agents.length, 2);
+  for (const agent of agents) assert.match(agent ?? '', /^nod\/\S+$/);
+  agents.length = 0;
+  await safeRemoteFetch(
+    'https://files.fixture.example/data',
+    { headers: { 'User-Agent': 'synthetic-client/2.0' } },
+    { validate, request },
+  );
+  assert.deepEqual(agents, ['synthetic-client/2.0']);
   await assert.rejects(
     safeRemoteFetch(
       'https://api.fixture.example/private',
