@@ -68,6 +68,7 @@ export async function initializeDatabase() {
     );
     CREATE UNIQUE INDEX IF NOT EXISTS threads_active_owner ON threads(owner_id) WHERE archived_at IS NULL;
     ALTER TABLE threads ADD COLUMN IF NOT EXISTS observer_session_id uuid NOT NULL DEFAULT gen_random_uuid();
+    ALTER TABLE threads ADD COLUMN IF NOT EXISTS chat_restarted_at timestamptz;
     CREATE TABLE IF NOT EXISTS turns (
       id uuid PRIMARY KEY, owner_id text NOT NULL, thread_id uuid NOT NULL REFERENCES threads(id),
       session_id uuid NOT NULL, source text NOT NULL, source_id text, message_id uuid, prompt text NOT NULL,
@@ -80,6 +81,7 @@ export async function initializeDatabase() {
     ALTER TABLE turns ADD COLUMN IF NOT EXISTS proactive boolean NOT NULL DEFAULT false;
     ALTER TABLE turns ADD COLUMN IF NOT EXISTS start_after timestamptz;
     ALTER TABLE turns ADD COLUMN IF NOT EXISTS withdrawn boolean NOT NULL DEFAULT false;
+    ALTER TABLE turns ADD COLUMN IF NOT EXISTS context_exhausted boolean NOT NULL DEFAULT false;
     CREATE INDEX IF NOT EXISTS turns_withdrawn_message ON turns(message_id) WHERE withdrawn;
     CREATE INDEX IF NOT EXISTS turns_reaction_message ON turns(owner_id,message_id) WHERE starts_with(source_id,'reaction-reply:');
     CREATE OR REPLACE FUNCTION turns_session() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
