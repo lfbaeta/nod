@@ -12452,7 +12452,7 @@ test(
         CREATE TABLE tasks(id uuid PRIMARY KEY, owner_id text NOT NULL, session_id uuid, title text, now_text text,
           message_id uuid, created_at timestamptz DEFAULT now());
         CREATE TABLE turn_events(id uuid PRIMARY KEY DEFAULT gen_random_uuid(), turn_id uuid, type text, summary text DEFAULT '',
-          site text, call_id uuid, created_at timestamptz DEFAULT now());
+          site text, call_id uuid, run_id uuid, created_at timestamptz DEFAULT now());
         CREATE TABLE messages(id uuid PRIMARY KEY, owner_id text, turn_id uuid, role text, created_at timestamptz DEFAULT now())`);
       const { createActivity } = await import('../src/server/activity.ts');
       const owner = 'activity-fixture-owner';
@@ -12555,6 +12555,44 @@ test(
       item = await live();
       assert.equal(item.step, null);
       assert.ok(item.tool);
+      const mainRun = randomUUID();
+      const helperRun = randomUUID();
+      const recentCall = randomUUID();
+      await pool.query(
+        "INSERT INTO turn_events(turn_id,type,summary,run_id) VALUES($1,'step','Checking the synthetic report',$2)",
+        [chat, mainRun],
+      );
+      await pool.query(
+        "INSERT INTO turn_events(turn_id,type,summary,run_id,call_id) VALUES($1,'tool_start','read',$2,$3)",
+        [chat, mainRun, recentCall],
+      );
+      await pool.query(
+        "INSERT INTO turn_events(turn_id,type,summary,run_id) VALUES($1,'step','Checking a separate helper source',$2)",
+        [chat, helperRun],
+      );
+      const completed = await pool.query<{ id: string }>(
+        "INSERT INTO turn_events(turn_id,type,summary,run_id,call_id) VALUES($1,'tool_complete','read',$2,$3) RETURNING id",
+        [chat, mainRun, recentCall],
+      );
+      await pool.query(
+        "INSERT INTO turn_events(turn_id,type,summary) VALUES($1,'tool_failed','Synthetic failed operation'),($1,'tool_complete','set status')",
+        [chat],
+      );
+      item = await live();
+      assert.equal(item.recent?.length, 4);
+      assert.deepEqual(item.recent?.[0], {
+        id: completed.rows[0]!.id,
+        summary: 'Checking the synthetic report',
+        site: null,
+      });
+      assert.equal(
+        item.recent?.some((entry) => entry.summary.includes('failed')),
+        false,
+      );
+      assert.equal(
+        item.recent?.some((entry) => entry.summary === 'set status'),
+        false,
+      );
       const taskSession = randomUUID();
       const taskTurn = randomUUID();
       const observerTurn = randomUUID();
@@ -12572,6 +12610,32 @@ test(
       assert.equal(
         items.some((entry) => entry.turnId === observerTurn),
         false,
+      );
+      const foreignThread = randomUUID();
+      const foreignTurn = randomUUID();
+      await pool.query("INSERT INTO threads(id,owner_id) VALUES($1,'other-activity-owner')", [
+        foreignThread,
+      ]);
+      await pool.query(
+        "INSERT INTO turns(id,owner_id,thread_id,session_id,source,status,started_at) VALUES($1,'other-activity-owner',$2,$2,'user','running',now())",
+        [foreignTurn, foreignThread],
+      );
+      await pool.query(
+        "INSERT INTO turn_events(turn_id,type,summary) VALUES($1,'tool_complete','Synthetic task operation'),($2,'tool_complete','Synthetic foreign operation')",
+        [taskTurn, foreignTurn],
+      );
+      const scoped = await activity.read();
+      assert.equal(
+        scoped.some((entry) => entry.turnId === foreignTurn),
+        false,
+      );
+      assert.equal(
+        scoped.find((entry) => entry.turnId === chat)?.recent?.[0]?.id,
+        completed.rows[0]!.id,
+      );
+      assert.equal(
+        scoped.find((entry) => entry.turnId === taskTurn)?.recent?.[0]?.summary,
+        'Synthetic task operation',
       );
     } finally {
       await pool.end();

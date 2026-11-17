@@ -299,7 +299,7 @@ function WorkLabel({ work }: { work: MessageWork }) {
       <span className="message-work-title">{work.title}</span>
       {work.status === 'working' && (
         <span className="message-work-step" role="status">
-          <LiveLine item={work.live} />
+          <LiveLine item={work.live} history={false} />
         </span>
       )}
     </>

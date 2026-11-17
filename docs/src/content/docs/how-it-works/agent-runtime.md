@@ -269,6 +269,8 @@ For an enabled recurring schedule on its current revision, Nod chooses the stabl
 
 ## Message cadence
 
+The live line shows up to four completed tool calls from its current turn, with the newest first. Select the line to hide or show them. Each entry uses the description saved before that call started in the same run, or the tool's display label. A newer owner message prevents an older description from being reused. Status updates do not appear as completed work. The server reads these entries from `turn_events`, with no extra model request. Each chat and task keeps its own list.
+
 Nod keeps two things apart:
 
 - **Live status** briefly names the current activity when an update helps you follow the work. It updates in place without notifying you. Its activity records are separate from chat messages.

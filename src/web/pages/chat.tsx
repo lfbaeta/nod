@@ -139,13 +139,21 @@ function Working({
     : null;
   if (!thinking && !label && !receipt) return null;
   return (
-    <div className="thinking" role="status">
+    <div className="thinking">
       <NodGlyph size={28} mode="thinking" />
       <div className="working-details">
-        <span className="working-text">
-          {thinking ? <LiveLine item={chat} quiet={quiet} /> : (label ?? receipt)}
-        </span>
-        {thinking && receipt && <span className="working-receipt">{receipt}</span>}
+        <div className="working-text">
+          {thinking ? (
+            <LiveLine item={chat} quiet={quiet} />
+          ) : (
+            <span role="status">{label ?? receipt}</span>
+          )}
+        </div>
+        {thinking && receipt && (
+          <span className="working-receipt" role="status">
+            {receipt}
+          </span>
+        )}
       </div>
     </div>
   );

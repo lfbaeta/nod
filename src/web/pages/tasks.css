@@ -198,6 +198,16 @@
   outline: 2px solid var(--primary);
   outline-offset: -2px;
 }
+.task-preview-head-live {
+  padding-bottom: 4px;
+}
+.task-preview-live-line {
+  min-width: 0;
+  padding: 0 16px 16px;
+  color: var(--text-secondary);
+  font-size: var(--text-control);
+  line-height: 1.5;
+}
 .task-preview-heading {
   margin: 0;
   font: inherit;
