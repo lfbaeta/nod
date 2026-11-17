@@ -514,13 +514,6 @@ export function Apps({
     return (
       <div className={catalogCards ? 'app-grid app-catalog-grid' : 'app-grid'}>
         {items.map(({ key, service, accounts }) => {
-          const addAccount =
-            accounts.find(
-              (account) => account.slug === service.slug && account.status !== 'not_configured',
-            ) ??
-            (service.direct ? service : undefined) ??
-            accounts.find((account) => account.status !== 'not_configured') ??
-            service;
           const usableNotion =
             service.slug === 'notion' &&
             accounts.some((account) => account.slug === 'notion' && !connectionIssue(account));
@@ -528,10 +521,6 @@ export function Apps({
             (account) =>
               !(usableNotion && account.slug === 'notion_mcp') && connectionIssue(account),
           );
-          const connectLabel =
-            service.slug === 'notion' && !usableNotion
-              ? `Connect ${service.name}`
-              : `Connect another ${service.name} account`;
           return (
             <IntegrationCard
               key={key}
@@ -551,44 +540,30 @@ export function Apps({
               }
               actions={
                 accounts.length ? (
-                  <>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="app-manage"
-                      data-manage-service={key}
-                      data-pointer-restored={pointerRestoredService === key || undefined}
-                      aria-label={`Manage ${service.name} accounts (${accounts.length})${issue ? ', sign-in required' : ''}`}
-                      title={`${accounts.length} ${accounts.length === 1 ? 'account' : 'accounts'}${issue ? ' · Sign-in required' : ''} · Manage accounts`}
-                      onKeyDown={() => setPointerRestoredService(null)}
-                      onBlur={() => setPointerRestoredService(null)}
-                      onClick={(event) => {
-                        dialogService.current = key;
-                        manageKeyboard.current = event.detail === 0;
-                        setPointerRestoredService(null);
-                        setError('');
-                        setManageService(key);
-                      }}
-                    >
-                      <Users size={16} aria-hidden="true" />
-                      <span className="app-account-count" aria-hidden="true">
-                        {accounts.length > 99 ? '99+' : accounts.length}
-                      </span>
-                      {issue && <span className="app-account-attention" aria-hidden="true" />}
-                    </Button>
-                    {!addAccount.browserUrl && !addAccount.savedLogin && (
-                      <Button
-                        variant="outline"
-                        size="icon"
-                        aria-label={connectLabel}
-                        title={connectLabel}
-                        disabled={locked || addAccount.status === 'not_configured'}
-                        onClick={() => void connect(addAccount, 'apps', true)}
-                      >
-                        <Plus size={16} aria-hidden="true" />
-                      </Button>
-                    )}
-                  </>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="app-manage"
+                    data-manage-service={key}
+                    data-pointer-restored={pointerRestoredService === key || undefined}
+                    aria-label={`Manage ${service.name} accounts (${accounts.length})${issue ? ', sign-in required' : ''}`}
+                    title={`${accounts.length} ${accounts.length === 1 ? 'account' : 'accounts'}${issue ? ' · Sign-in required' : ''} · Manage accounts`}
+                    onKeyDown={() => setPointerRestoredService(null)}
+                    onBlur={() => setPointerRestoredService(null)}
+                    onClick={(event) => {
+                      dialogService.current = key;
+                      manageKeyboard.current = event.detail === 0;
+                      setPointerRestoredService(null);
+                      setError('');
+                      setManageService(key);
+                    }}
+                  >
+                    <Users size={16} aria-hidden="true" />
+                    <span className="app-account-count" aria-hidden="true">
+                      {accounts.length > 99 ? '99+' : accounts.length}
+                    </span>
+                    {issue && <span className="app-account-attention" aria-hidden="true" />}
+                  </Button>
                 ) : (
                   <Button
                     variant="outline"
