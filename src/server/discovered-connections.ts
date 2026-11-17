@@ -68,6 +68,7 @@ type ProposalRow = {
   account_name: string | null;
   oauth_state_hash: string | null;
   oauth_status: 'pending' | 'completing' | 'connected' | 'cancelled' | 'failed' | null;
+  oauth_error: string | null;
   callback_return_to: ReturnTarget | null;
   connection_id: string | null;
   turn_id: string | null;
@@ -270,6 +271,7 @@ export async function createDiscoveredConnections(
     ALTER TABLE discovered_connection_proposals ADD COLUMN IF NOT EXISTS oauth_status text,
       ADD COLUMN IF NOT EXISTS link_hash text,
       ADD COLUMN IF NOT EXISTS callback_return_to text,
+      ADD COLUMN IF NOT EXISTS oauth_error text,
       ADD COLUMN IF NOT EXISTS created_at timestamptz NOT NULL DEFAULT now();
   `);
   const interrupted = await transaction(async (recovery) => {
@@ -583,7 +585,7 @@ export async function createDiscoveredConnections(
         : await beginOAuth(id, { returnTo: parsed.returnTo });
     } catch (cause) {
       await pool.query(
-        `UPDATE discovered_connection_proposals SET paths='[]'::jsonb,oauth_status=NULL,oauth_state_hash=NULL
+        `UPDATE discovered_connection_proposals SET paths='[]'::jsonb,oauth_status=NULL,oauth_error=NULL,oauth_state_hash=NULL
          WHERE id=$1 AND owner_id=$2 AND (oauth_status IS NULL OR oauth_status IN ('pending','failed'))`,
         [id, owner],
       );
@@ -669,7 +671,7 @@ export async function createDiscoveredConnections(
   async function proposal(id: string, client: Pool | PoolClient = pool, lock = false) {
     const row = (
       await client.query<ProposalRow>(
-        `SELECT id,owner_id,service,name,paths,connection_id,turn_id,setup_url,setup_text,account_name,oauth_state_hash,oauth_status,callback_return_to,created_at
+        `SELECT id,owner_id,service,name,paths,connection_id,turn_id,setup_url,setup_text,account_name,oauth_state_hash,oauth_status,oauth_error,callback_return_to,created_at
        FROM discovered_connection_proposals
        WHERE id=$1 AND owner_id=$2 AND expires_at>now()${lock ? ' FOR UPDATE' : ''}`,
         [z.uuid().parse(id), owner],
@@ -941,7 +943,7 @@ export async function createDiscoveredConnections(
         }
         const updated = await client.query(
           `UPDATE discovered_connection_proposals
-         SET account_name=$3,oauth_state_hash=$4,oauth_status='pending',link_hash=$5,callback_return_to=$6
+         SET account_name=$3,oauth_state_hash=$4,oauth_status='pending',oauth_error=NULL,link_hash=$5,callback_return_to=$6
          WHERE id=$1 AND owner_id=$2 AND expires_at>now()`,
           [
             pending.id,
@@ -975,6 +977,12 @@ export async function createDiscoveredConnections(
           step: authorizationFailed ? 'authorize' : 'save',
           error: authorizationFailed ? authorizationError : error,
         });
+        await pool
+          .query(
+            'UPDATE discovered_connection_proposals SET oauth_error=NULL WHERE id=$1 AND owner_id=$2',
+            [attempt.id, owner],
+          )
+          .catch((cause: unknown) => logFailure('connection_reason_clear_failed', cause));
       }
       throw error;
     }
@@ -985,6 +993,7 @@ export async function createDiscoveredConnections(
         state: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
         code: z.string().min(1).optional(),
         error: z.string().optional(),
+        error_description: z.string().optional().catch(undefined),
         iss: z.string().optional(),
       })
       .parse(input);
@@ -1006,12 +1015,23 @@ export async function createDiscoveredConnections(
         | 'invalid_configuration'
         | 'unknown' = 'authorization_failed',
       failure: { step: string; error?: unknown } = { step: 'callback' },
+      message?: string,
     ) {
       const changed = await transaction(async (client) => {
         const changed = await client.query(
-          `UPDATE discovered_connection_proposals SET oauth_status=$4,oauth_state_hash=NULL
+          `UPDATE discovered_connection_proposals SET oauth_status=$4,oauth_error=$5,oauth_state_hash=NULL
            WHERE id=$1 AND owner_id=$2 AND oauth_state_hash=$3 AND oauth_status='completing' RETURNING id`,
-          [pending.id, owner, hash, outcome],
+          [
+            pending.id,
+            owner,
+            hash,
+            outcome,
+            message &&
+              `Sign-in could not finish: ${redactSecretText(message.replaceAll('\0', ''))}`.slice(
+                0,
+                500,
+              ),
+          ],
         );
         if (changed.rowCount) await options.grantVault.remove(pending.id, client);
         return Boolean(changed.rowCount);
@@ -1027,22 +1047,32 @@ export async function createDiscoveredConnections(
       };
     }
     if (parsed.error || !parsed.code)
-      return failed('cancelled', undefined, {
-        step: 'callback',
-        error: {
-          code: !parsed.error
-            ? 'missing_code'
-            : oauthErrors.includes(parsed.error)
-              ? parsed.error
-              : 'other',
+      return failed(
+        parsed.error === 'access_denied' ? 'cancelled' : 'failed',
+        undefined,
+        {
+          step: 'callback',
+          error: {
+            code: !parsed.error
+              ? 'missing_code'
+              : oauthErrors.includes(parsed.error)
+                ? parsed.error
+                : 'other',
+          },
         },
-      });
+        parsed.error === 'access_denied'
+          ? undefined
+          : [parsed.error || 'no authorization code', parsed.error_description]
+              .filter(Boolean)
+              .join(': '),
+      );
     const path = pending.paths[0];
     if (!path || path.kind === 'cli' || path.auth !== 'oauth')
       return failed('failed', 'invalid_configuration');
     let failureReason: 'authorization_failed' | 'verification_failed' | 'unknown' =
       'authorization_failed';
     let step = 'callback';
+    const secrets: string[] = [];
     try {
       const grant = JSON.parse((await options.grantVault.read(pending.id)).value);
       const saved = (grant.state ?? grant) as DiscoveredOAuthState;
@@ -1059,6 +1089,7 @@ export async function createDiscoveredConnections(
       step = 'token';
       const connected = await via(path).oauth.finish(path.endpoint, saved, parsed.code);
       const token = connected.tokens?.access_token;
+      secrets.push(token ?? '', connected.tokens?.refresh_token ?? '');
       if (!token) throw new Error('The service returned no access token.');
       failureReason = 'verification_failed';
       step = path.kind === 'http' ? 'read_test' : 'list_tools';
@@ -1082,10 +1113,16 @@ export async function createDiscoveredConnections(
           pending.callback_return_to ?? (pending.turn_id ? ('chat' as const) : ('apps' as const)),
       };
     } catch (error) {
-      return failed('failed', failureReason, {
-        step,
-        error,
-      });
+      const message = (error instanceof Error && error.message) || String(error);
+      return failed(
+        'failed',
+        failureReason,
+        {
+          step,
+          error,
+        },
+        secrets.reduce((text, secret) => (secret ? String(redact(text, secret)) : text), message),
+      );
     }
   }
   const refreshes = new Map<
@@ -1679,6 +1716,7 @@ export async function createDiscoveredConnections(
             : undefined,
         ...(address ? { needsAddress: true, localAddress } : {}),
         oauthStatus: row.oauth_status === 'completing' ? 'pending' : row.oauth_status,
+        oauthError: row.oauth_error ?? undefined,
         authorizationUrl,
         attempt,
         callbackUrl: row.paths.some((path) => path.kind !== 'cli' && path.clientIdRequired)
