@@ -317,6 +317,8 @@ export function createCommandWorkspace(options: {
                 return {
                   exitCode: result.exitCode,
                   output: Buffer.concat([result.stdout, result.stderr]).toString('utf8'),
+                  stdout: result.stdout.toString('utf8'),
+                  stderr: result.stderr.toString('utf8'),
                 };
               },
             }

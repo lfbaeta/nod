@@ -1,6 +1,9 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { bundledApps, type BundledApp } from './app-catalog.ts';
-import { posix } from 'node:path';
+import { bundledApps, appAccessPath, type BundledApp } from './app-catalog.ts';
+import { appRequestUrl, appRequestHeaders } from './app-requests.ts';
+import { appEnvironmentNameSchema, appDefinitionSchema } from '../shared/app-definitions.ts';
+import { appAccessSchema } from './app-access.ts';
+import { isDeepStrictEqual } from 'node:util';
 import type { FastifyInstance } from 'fastify';
 import type { Pool, PoolClient } from 'pg';
 import { z } from 'zod';
@@ -12,7 +15,7 @@ import {
   type DiscoveredOAuthState,
   type DiscoveredTransport,
 } from '../ports/discovered.ts';
-import type { ConnectedCli } from '../ports/computer.ts';
+import type { ConnectedCli, ConnectedCliResult } from '../ports/computer.ts';
 import type { ConnectedMcpServer } from '../ports/agent.ts';
 import type { Connection } from '../shared/contracts.ts';
 import { transaction } from './transaction.ts';
@@ -29,88 +32,21 @@ import {
   type AnalyticsConnection,
 } from './analytics-connections.ts';
 
-const remoteSpec = String.raw`(?:https|git\+https):\/\/[^\s]+`;
-const cliSourceSchema = z.union([
-  z
-    .object({
-      npm: z
-        .string()
-        .max(512)
-        .regex(
-          new RegExp(
-            String.raw`^(?:(?:@[A-Za-z0-9][\w.~-]*\/)?[A-Za-z0-9][\w.~-]*(?:@(?!(?:file|link|git\+file):|\.{0,2}\/|~)[^@\s](?:[^@\x00-\x1f]*[^@\s])?)?|[A-Za-z0-9][\w.-]*\/[\w.-]+(?:#[^\s#]+)?|(?:github|gitlab|bitbucket):[^\s]+|${remoteSpec})$`,
-          ),
-        ),
-    })
-    .strict(),
-  z
-    .object({
-      pypi: z
-        .string()
-        .max(512)
-        .regex(
-          new RegExp(
-            String.raw`^(?:[A-Za-z0-9](?:[\w.-]*[A-Za-z0-9])?(?:\[[\w., -]+\])?(?:\s*(?:===|==|!=|~=|>=|<=|>|<)\s*[\w.*+!-]+(?:\s*,\s*(?:===|==|!=|~=|>=|<=|>|<)\s*[\w.*+!-]+)*)?|${remoteSpec})$`,
-          ),
-        ),
-    })
-    .strict(),
-  z
-    .object({
-      url: z.url({ protocol: /^https$/, normalize: true }).max(2048),
-      sha256: z
-        .string()
-        .toLowerCase()
-        .regex(/^[a-f0-9]{64}$/)
-        .optional(),
-    })
-    .strict(),
-]);
-const envName = z.string().regex(/^[A-Z][A-Z0-9_]{0,63}(?:TOKEN|KEY|SECRET|PASSWORD|_ID|_SID)$/);
-const pathSchema = z.discriminatedUnion('kind', [
-  z.object({
-    kind: z.literal('http'),
-    endpoint: z.url().max(2048),
-    auth: z.enum(['bearer', 'x-api-key']).default('bearer'),
-    testPath: z.string().min(1).max(500),
-    scope: z.never().optional(),
-    clientIdRequired: z.never().optional(),
-  }),
-  z.object({
-    kind: z.literal('mcp'),
-    endpoint: z.url().max(2048),
-    auth: z.enum(['bearer', 'x-api-key', 'oauth']).default('bearer'),
-    testPath: z.string().max(500).optional(),
-    scope: z.string().trim().min(1).max(500).optional(),
-    clientIdRequired: z.boolean().optional(),
-  }),
-  z.object({
-    kind: z.literal('cli'),
-    command: z.string().regex(/^[A-Za-z][A-Za-z0-9_-]{0,63}$/),
-    auth: z.literal('env').default('env'),
-    env: z
-      .array(envName)
-      .min(1)
-      .refine((names) => new Set(names).size === names.length),
-    source: cliSourceSchema,
-  }),
-]);
+const envName = appEnvironmentNameSchema;
+
 const proposalSchema = z.object({
   service: z
     .string()
     .trim()
     .toLowerCase()
     .regex(/^[a-z][a-z0-9-]{1,39}$/),
-  name: z
-    .string()
-    .trim()
-    .regex(/^[A-Za-z0-9][A-Za-z0-9 .&'_-]{1,79}$/),
-  paths: z.array(pathSchema).min(1).max(4),
+  name: z.string().trim().pipe(appDefinitionSchema.shape.displayName),
+  paths: z.array(appAccessSchema).min(1).max(4),
   setupUrl: z.url().max(2048).optional(),
   setupText: z.string().trim().min(1).max(500).optional(),
   connectionId: z.uuid().optional(),
 });
-type AccessPath = z.infer<typeof pathSchema> & { id: string; local?: boolean };
+type AccessPath = z.infer<typeof appAccessSchema> & { id: string; local?: boolean };
 type AccountRow = {
   id: string;
   owner_id: string;
@@ -172,7 +108,7 @@ function headers(
   path: Extract<AccessPath, { kind: 'http' | 'mcp' }>,
   token: string,
 ): Record<string, string> {
-  return path.auth === 'x-api-key' ? { 'X-API-Key': token } : { Authorization: `Bearer ${token}` };
+  return appRequestHeaders(path, token);
 }
 
 function credentialVariants(token: string) {
@@ -238,23 +174,10 @@ function redact(
 }
 
 function target(path: Extract<AccessPath, { kind: 'http' }>, relative: string) {
-  if (!relative || relative.length > 2048 || relative.startsWith('//') || relative.includes('\\'))
-    throw error('Use a path in the saved API address.');
   try {
-    const base = new URL(path.endpoint);
-    const url = new URL(
-      relative.startsWith('/') ? relative.slice(1) : relative,
-      base.href.endsWith('/') ? base : `${base.href}/`,
-    );
-    if (/%(?:2e|2f|5c|25)/i.test(url.pathname) || /%(?:2e|2f|5c|25)/i.test(base.pathname))
-      throw new Error();
-    const saved = posix.normalize(decodeURIComponent(base.pathname));
-    const requested = posix.normalize(decodeURIComponent(url.pathname));
-    const prefix = saved.endsWith('/') ? saved : `${saved}/`;
-    if (url.origin !== base.origin || !requested.startsWith(prefix)) throw new Error();
-    return url.href;
-  } catch {
-    throw error('The request must stay in the saved API address.');
+    return appRequestUrl(path.endpoint, relative);
+  } catch (cause) {
+    throw error(cause instanceof Error ? cause.message : String(cause));
   }
 }
 
@@ -276,7 +199,14 @@ export async function createDiscoveredConnections(
       environment: Record<string, string>,
       timeoutSeconds?: number,
       signal?: AbortSignal,
-    ) => Promise<{ exitCode: number; output: string }>;
+    ) => Promise<ConnectedCliResult>;
+    verifyCli?: (
+      cli: ConnectedCli,
+      args: string[],
+      environment: Record<string, string>,
+      timeoutSeconds: number,
+      signal?: AbortSignal,
+    ) => Promise<ConnectedCliResult>;
     resumeConnection?: (turnId: string, service: string) => Promise<boolean>;
     local?: (origin: string) => { transport: DiscoveredTransport; oauth: DiscoveredOAuth };
     refresh?: () => void;
@@ -306,16 +236,20 @@ export async function createDiscoveredConnections(
       captureConnection(options.analytics, connection(path), status, failureReason);
     const path = failure?.path ?? row.paths[0];
     if (status === 'failed')
-      logFailure('connection_setup_failed', failure?.error, {
-        method: path?.kind,
-        transport: path?.kind === 'mcp' ? 'streamable-http' : undefined,
-        authMode: path?.auth,
-        step: failure?.step,
-        status: [Object(failure?.error).status, Object(failure?.error).code].find(
-          (value) => Number.isInteger(value) && value >= 400 && value < 600,
-        ),
-        reason: failureReason,
-      });
+      logFailure(
+        'connection_setup_failed',
+        { name: 'ConnectionSetupError' },
+        {
+          method: path?.kind,
+          transport: path?.kind === 'mcp' ? 'streamable-http' : undefined,
+          authMode: path?.auth,
+          step: failure?.step,
+          status: [Object(failure?.error).status, Object(failure?.error).code].find(
+            (value) => Number.isInteger(value) && value >= 400 && value < 600,
+          ),
+          reason: failureReason,
+        },
+      );
   }
   await pool.query(`
     CREATE TABLE IF NOT EXISTS discovered_connections (
@@ -416,14 +350,21 @@ export async function createDiscoveredConnections(
     localOrigin?: string,
   ) {
     const parsed = proposalSchema.parse(input);
+    const reviewed = apps.get(parsed.service);
+    if (
+      reviewed &&
+      !reviewed.instancePath &&
+      !isDeepStrictEqual(parsed.paths, [appAccessSchema.parse(appAccessPath(reviewed))])
+    )
+      throw error('Use the reviewed connection definition for this app.', 409);
     let name = parsed.name;
     if (parsed.paths.some((path) => path.auth === 'oauth')) {
-      if (parsed.paths.length !== 1 || parsed.paths[0].kind !== 'mcp')
-        throw error('OAuth needs one MCP access path.');
+      if (parsed.paths.length !== 1 || parsed.paths[0].kind === 'cli')
+        throw error('OAuth needs one app access path.');
     }
     if (
       parsed.paths.some(
-        (path) => path.kind === 'mcp' && path.clientIdRequired && path.auth !== 'oauth',
+        (path) => path.kind !== 'cli' && path.clientIdRequired && path.auth !== 'oauth',
       )
     )
       throw error('A client ID needs an OAuth access path.');
@@ -661,18 +602,16 @@ export async function createDiscoveredConnections(
   }
   function official(service: string, connectionId?: string) {
     const server = apps.get(service);
-    if (!server?.endpoint) throw error('This service is unavailable.', 404);
+    if (!server) throw error('This service is unavailable.', 404);
+    if (server.kind === 'cli' && !options.verifyCli)
+      throw error(
+        'This app cannot check its connection because connected command tools are unavailable.',
+        503,
+      );
     return {
       service,
       name: server.name,
-      paths: [
-        {
-          kind: 'mcp',
-          endpoint: server.endpoint,
-          auth: server.auth,
-          ...(server.scope ? { scope: server.scope } : {}),
-        },
-      ],
+      paths: [appAccessPath(server)],
       ...(connectionId ? { connectionId } : {}),
     };
   }
@@ -706,9 +645,10 @@ export async function createDiscoveredConnections(
       return addressProposal(service, undefined, connectionId, returnTo);
     const { id, name } = await create(official(service, connectionId), undefined, returnTo);
     const server = apps.get(service)!;
+    const access = appAccessPath(server);
     return {
       name,
-      ...(server.auth === 'oauth'
+      ...(server.auth === 'oauth' && !('clientIdRequired' in access && access.clientIdRequired)
         ? await beginOAuth(id, { returnTo })
         : { url: `/apps?connect=${id}` }),
     };
@@ -805,10 +745,29 @@ export async function createDiscoveredConnections(
       : false;
     return { ok: true, continued: Boolean(continued) };
   }
+  async function verifyHttp(path: Extract<AccessPath, { kind: 'http' }>, token: string) {
+    if (!path.testPath) throw error('The API path needs a read test.');
+    const response = await via(path).transport.http(
+      target(path, path.testPath),
+      headers(path, token),
+      path.testMethod ?? 'GET',
+      path.testBody,
+    );
+    if (response.status < 200 || response.status >= 300)
+      throw Object.assign(
+        new Error(
+          `The service answered ${response.status}: ${JSON.stringify('body' in response ? response.body : null).slice(0, 4000)}`,
+        ),
+        { status: response.status },
+      );
+  }
   async function complete(id: string, input: unknown) {
     const { token: entered, accountName } = z
       .object({
-        token: z.union([z.string().trim().min(8), z.record(envName, z.string().trim().min(8))]),
+        token: z.union([
+          z.string().min(1).max(8192),
+          z.record(envName, z.string().min(1).max(8192)),
+        ]),
         accountName: z.string().trim().min(1).max(200),
       })
       .strict()
@@ -838,28 +797,54 @@ export async function createDiscoveredConnections(
           );
           if (!tools.length) throw new Error('The server listed no tools.');
         } else if (path.kind === 'http') {
-          if (!path.testPath) throw error('The API path needs a read test.');
-          const response = await via(path).transport.http(
-            target(path, path.testPath),
-            headers(path, token),
-            'GET',
+          await verifyHttp(path, token);
+        } else if (path.testArgv) {
+          if (!options.verifyCli) throw error('The app connection check is unavailable.', 503);
+          const environment =
+            path.env.length > 1
+              ? z.record(envName, z.string()).parse(JSON.parse(token))
+              : { [path.env[0]]: token };
+          const result = await options.verifyCli(
+            { id: path.id, command: path.command, source: path.source },
+            path.testArgv,
+            environment,
+            path.testTimeoutSeconds ?? 30,
           );
-          if (response.status < 200 || response.status >= 300)
-            throw Object.assign(new Error(), { status: response.status });
+          if (result.exitCode !== 0)
+            throw new Error(
+              `The app read check exited with status ${result.exitCode}: ${result.output.slice(0, 4000)}`,
+            );
+          const output = result.stdout ?? result.output;
+          if (!output.trim()) throw new Error('The app read check returned no data.');
+          if (path.testFormat !== 'text') {
+            try {
+              JSON.parse(output);
+            } catch {
+              throw new Error('The app read check did not return valid JSON.');
+            }
+          }
         }
       } catch (cause) {
+        const status = [Object(cause).status, Object(cause).code].find(
+          (value) => Number.isInteger(value) && value >= 400 && value < 600,
+        );
         track(pending, 'failed', 'verification_failed', {
           step: path.kind === 'mcp' ? 'list_tools' : 'read_test',
           error: cause,
           path,
         });
-        const status = [Object(cause).status, Object(cause).code].find(
-          (value) => Number.isInteger(value) && value >= 400 && value < 600,
+        const values = typeof entered === 'string' ? [entered] : Object.values(entered);
+        const reason =
+          cause instanceof Error && cause.message
+            ? cause.message
+            : status
+              ? `The service answered ${status}.`
+              : 'The service did not confirm access.';
+        const safe = [token, ...values].reduce(
+          (value, secret) => String(redact(value, secret)),
+          reason,
         );
-        throw error(
-          `The ${path.kind.toUpperCase()} access path could not be verified${status ? `: the service answered ${status}` : ''}.`,
-          409,
-        );
+        throw error(`The connection could not be verified: ${safe}`, 409);
       }
     }
     try {
@@ -903,7 +888,7 @@ export async function createDiscoveredConnections(
         )
           throw error('This sign-in changed. Use the newest window or try again.', 409);
         const path = pending.paths[0];
-        if (path?.kind !== 'mcp' || path.auth !== 'oauth')
+        if (!path || path.kind === 'cli' || path.auth !== 'oauth')
           throw error('This connection uses a token.');
         if (pending.oauth_status === 'connected')
           throw error('This app is already connected.', 409);
@@ -942,6 +927,7 @@ export async function createDiscoveredConnections(
             state,
             path.scope,
             selectedClientId,
+            path.kind === 'http' ? path.oauth : undefined,
           );
         } catch (cause) {
           authorizationFailed = true;
@@ -1052,7 +1038,7 @@ export async function createDiscoveredConnections(
         },
       });
     const path = pending.paths[0];
-    if (path?.kind !== 'mcp' || path.auth !== 'oauth')
+    if (!path || path.kind === 'cli' || path.auth !== 'oauth')
       return failed('failed', 'invalid_configuration');
     let failureReason: 'authorization_failed' | 'verification_failed' | 'unknown' =
       'authorization_failed';
@@ -1075,8 +1061,11 @@ export async function createDiscoveredConnections(
       const token = connected.tokens?.access_token;
       if (!token) throw new Error('The service returned no access token.');
       failureReason = 'verification_failed';
-      step = 'list_tools';
-      if (!(await via(path).transport.listTools(path.endpoint, headers(path, token))).tools.length)
+      step = path.kind === 'http' ? 'read_test' : 'list_tools';
+      if (path.kind === 'http') await verifyHttp(path, token);
+      else if (
+        !(await via(path).transport.listTools(path.endpoint, headers(path, token))).tools.length
+      )
         throw new Error('The server listed no tools.');
       failureReason = 'unknown';
       step = 'save';
@@ -1271,6 +1260,15 @@ export async function createDiscoveredConnections(
     );
     const row = rows.rows[0];
     if (!row) throw error('This service is unavailable.', 404);
+    const reviewed = apps.get(service);
+    if (reviewed && !reviewed.instancePath) {
+      const { id, name } = await create(
+        official(service, row.reconnect_required && !newAccount ? row.id : undefined),
+        undefined,
+        returnTo,
+      );
+      return { name, url: `/apps?connect=${id}` };
+    }
     const localOrigin = row.paths.flatMap((path) =>
       path.kind !== 'cli' && path.local ? [new URL(path.endpoint).origin] : [],
     )[0];
@@ -1288,6 +1286,13 @@ export async function createDiscoveredConnections(
               auth: path.auth,
               env: path.env,
               source: path.source,
+              ...(path.testArgv
+                ? {
+                    testArgv: path.testArgv,
+                    testTimeoutSeconds: path.testTimeoutSeconds,
+                    testFormat: path.testFormat,
+                  }
+                : {}),
             };
           }
           return {
@@ -1295,6 +1300,14 @@ export async function createDiscoveredConnections(
             endpoint: path.endpoint,
             auth: path.auth,
             ...(path.testPath ? { testPath: path.testPath } : {}),
+            ...(path.kind === 'http'
+              ? {
+                  apiKeyHeader: path.apiKeyHeader,
+                  testMethod: path.testMethod,
+                  testBody: path.testBody,
+                  oauth: path.oauth,
+                }
+              : {}),
             ...(path.scope ? { scope: path.scope } : {}),
             ...(path.clientIdRequired ? { clientIdRequired: path.clientIdRequired } : {}),
           };
@@ -1332,6 +1345,17 @@ export async function createDiscoveredConnections(
                 id: path.id,
                 kind: path.kind,
                 endpoint: path.kind === 'cli' ? path.command : path.endpoint,
+                ...(path.kind === 'http'
+                  ? {
+                      readCheck: {
+                        method: path.testMethod ?? 'GET',
+                        path: path.testPath,
+                        ...(path.testBody !== undefined ? { body: path.testBody } : {}),
+                      },
+                    }
+                  : path.testArgv
+                    ? { readCheck: { argv: path.testArgv } }
+                    : {}),
               };
             try {
               const { tools: available, instructions } = await catalog(row, path, signal);
@@ -1366,7 +1390,14 @@ export async function createDiscoveredConnections(
             }
           }),
         );
-        return { connectionId: row.id, service: row.service, accountName: row.account_name, paths };
+        const app = apps.get(row.service);
+        return {
+          connectionId: row.id,
+          service: row.service,
+          accountName: row.account_name,
+          ...(app ? { description: app.description, documentation: app.contract.source } : {}),
+          paths,
+        };
       }),
     );
     return { accounts };
@@ -1517,6 +1548,10 @@ export async function createDiscoveredConnections(
               call.input,
               signal,
             );
+          if (call.kind === 'cli') {
+            const { stdout: _stdout, stderr: _stderr, ...value } = result as ConnectedCliResult;
+            return hide(value);
+          }
           return hide(result);
         },
         signal,
@@ -1628,11 +1663,25 @@ export async function createDiscoveredConnections(
       return reply.header('Cache-Control', 'no-store').send({
         service: row.service,
         name: row.name,
+        catalogApp: Boolean(
+          apps.get(row.service) &&
+          (address ||
+            row.paths.every((path) => {
+              const app = apps.get(row.service)!;
+              if (app.instancePath) return path.kind === 'mcp';
+              const { id: _id, local: _local, ...saved } = path;
+              return isDeepStrictEqual(saved, appAccessPath(app));
+            })),
+        ),
+        credentialLabels:
+          apps.get(row.service)?.kind === 'cli'
+            ? (apps.get(row.service) as Extract<BundledApp, { kind: 'cli' }>).environment
+            : undefined,
         ...(address ? { needsAddress: true, localAddress } : {}),
         oauthStatus: row.oauth_status === 'completing' ? 'pending' : row.oauth_status,
         authorizationUrl,
         attempt,
-        callbackUrl: row.paths.some((path) => path.kind === 'mcp' && path.clientIdRequired)
+        callbackUrl: row.paths.some((path) => path.kind !== 'cli' && path.clientIdRequired)
           ? callbackUrl()
           : undefined,
         setupUrl: row.setup_url,
@@ -1645,12 +1694,20 @@ export async function createDiscoveredConnections(
                 auth: path.auth,
                 env: path.env,
                 source: path.source,
+                ...(path.testArgv ? { testArgv: path.testArgv } : {}),
               }
             : {
                 kind: path.kind,
                 endpoint: path.endpoint,
                 auth: path.auth,
                 ...(path.testPath ? { testPath: path.testPath } : {}),
+                ...(path.kind === 'http'
+                  ? {
+                      apiKeyHeader: path.apiKeyHeader,
+                      testMethod: path.testMethod,
+                      testBody: path.testBody,
+                    }
+                  : {}),
                 ...(path.scope ? { scope: path.scope } : {}),
                 ...(path.clientIdRequired ? { clientIdRequired: path.clientIdRequired } : {}),
               },
