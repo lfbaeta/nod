@@ -1257,17 +1257,26 @@ async function initializeApplication(
     trash: adapters.trash,
     available: Boolean(adapters.trash),
   });
-  const preparationPaused = async () => {
+  const preparationBlocked = async () => {
+    if ((await ledger.preparationLimit()).reached)
+      return 'the monthly preparation allowance is reached';
+    const unpriced = adapters.models?.unpricedPreparationModel();
+    if (unpriced) return `${unpriced} has no price, so the preparation allowance cannot bound it`;
+  };
+  const preparationPause = async () => {
     const prefs = await speechPreferences.get();
-    return prefs.proactivePaused || isQuietTime(prefs) || (await ledger.preparationLimit()).reached;
+    if (prefs.proactivePaused) return 'automatic preparation is paused';
+    if (isQuietTime(prefs)) return 'it is quiet hours';
+    return preparationBlocked();
   };
   const integrations = await createIntegrations(pool, {
     localFiles,
     mailCheck: async (...args) => {
-      if (await preparationPaused()) return args[0].map(() => undefined);
+      const pause = await preparationPause();
+      if (pause) return args[0].map(() => `background email checks wait because ${pause}`);
       return ledger.withPreparation(randomUUID(), () => mailCheck(...args));
     },
-    paused: preparationPaused,
+    paused: async () => Boolean(await preparationPause()),
     analytics: captureAnalytics,
     analyticsConsent,
     admission,
@@ -1977,7 +1986,7 @@ async function initializeApplication(
     curator: adapters.classificationCurator && ledger.curator(adapters.classificationCurator),
     analytics: captureAnalytics,
     modelAvailable: async () =>
-      !(await ledger.preparationLimit()).reached &&
+      !(await preparationBlocked()) &&
       (adapters.models
         ? await adapters.models.automaticRequestsAllowed({ kind: 'background' }, true)
         : adapters.model.configured),
