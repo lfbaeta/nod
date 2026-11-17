@@ -958,7 +958,9 @@ export function ModelSettings({ onDirtyChange }: { onDirtyChange?(dirty: boolean
                 </Button>
               </div>
               <details className="model-details" open={flow.signIn.manual}>
-                <summary>Browser didn’t return to Nod?</summary>
+                <summary>
+                  {flow.signIn.manual ? 'Paste the address' : 'Browser didn’t return to Nod?'}
+                </summary>
                 <form
                   onSubmit={(event) => {
                     event.preventDefault();
