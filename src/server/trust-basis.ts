@@ -79,10 +79,14 @@ export function trustDecision(words: TrustWords) {
   };
 }
 
+const identifier = /[@/\\]|[\p{L}\p{N}][.:][\p{L}\p{N}]/u;
+
 const plain = (text: string) =>
   text
     .normalize('NFKD')
-    .replace(/(\p{L})[̀-ͯ]+/gu, '$1')
+    .split(/(\s+)/)
+    .map((word) => (identifier.test(word) ? word : word.replace(/(\p{L})[̀-ͯ]+/gu, '$1')))
+    .join('')
     .normalize('NFC')
     .toLowerCase()
     .replace(/[“”«»„]/g, '"')

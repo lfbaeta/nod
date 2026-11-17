@@ -978,6 +978,23 @@ test('trust decisions select only owner evidence and keep reply evidence separat
     ['send it if x = 1', undefined],
   ] as const)
     assert.equal(trustBasis({ run: true, because }, conditional)?.kind, kind, because);
+  const recipient = withOwnerIds(
+    {
+      userMessages: [
+        {
+          at: '2026-11-03T09:00:00Z',
+          text: 'manda o relatorio para lena@example.test e publica em docs.example.test/relatorio',
+        },
+      ],
+    },
+    ['owner-message'],
+  );
+  for (const [because, kind] of [
+    ['manda o relatório para lena@example.test', 'message'],
+    ['manda o relatorio para lena@exämple.test', undefined],
+    ['publica em docs.exämple.test/relatorio', undefined],
+  ] as const)
+    assert.equal(trustBasis({ run: true, because }, recipient)?.kind, kind, because);
   assert.equal(
     trustDecision(scheduled).question.choices.some(({ value }) =>
       String(value).startsWith('message:'),
