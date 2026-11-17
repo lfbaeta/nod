@@ -137,7 +137,7 @@ If setup still fails, select **Show startup log** and [send feedback](#send-feed
 
 ### Port 1455 is already in use
 
-ChatGPT sign-in receives its callback on port 1455. Another Nod app or another sign-in is using it. Close it, then try again.
+ChatGPT sign-in receives its callback on port 1455. Another program, such as another Nod app or sign-in, is using it. Close it, then try again.
 
 ### ChatGPT sign-in asks you to paste an address
 

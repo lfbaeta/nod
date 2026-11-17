@@ -576,7 +576,7 @@ export function createPiModelBackend(options: { fetch?: typeof fetch } = {}): Mo
         server.on('error', () => controller.abort());
       } catch (error) {
         await close();
-        if (Object(error).code === 'EADDRINUSE') {
+        if (!signal.aborted && Object(error).code === 'EADDRINUSE') {
           signal.removeEventListener('abort', abort);
           throw new ModelAuthError(
             'Port 1455 is already in use. Close the other Nod app or another sign-in, then try again.',
