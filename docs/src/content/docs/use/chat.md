@@ -261,11 +261,17 @@ Links stay inline in the reply. Hover over a link, or focus it with the keyboard
 
 Nod answers each request in the app you sent it from. A message from Telegram gets its reply on Telegram. Everything also appears in the chat in Nod's own app. See [Telegram and WhatsApp](/use/channels/).
 
-## Send feedback
+## Report a bug
 
-Select **Send feedback** at the top of the chat, choose **Bug**, **Idea** or **Other**, and describe what happened. The dialog names the recipient: the Nod team at n8n by default, or your server operator's configured collector.
+Select **Report bug** at the top of the chat and describe what happened. The dialog opens on **Bug**; choose **Idea** or **Other** for other feedback. The dialog names the recipient: the Nod team at n8n by default, or your server operator's configured collector.
 
-After first-time setup, a short invitation points to **Send feedback**. Dismiss it with its close button or press Escape while the invitation or feedback button is focused; it stays dismissed on that device.
+After first-time setup, a short invitation points to **Report bug**. Dismiss it with its close button or press Escape while the invitation or **Report bug** is focused; it stays dismissed on that device.
+
+When something in Nod itself fails, or you tell Nod that something in Nod isn't working, Nod drafts a bug report once with a short summary of what happened. In the app, the draft appears in chat as a card with the summary, **Include diagnostic report**, **Review** and **Send report**. One click on **Send report** sends it to the same recipient as the dialog. Nod skips this for errors from outside services, such as a missing connection, credits, an app outage or a website's own error, and in background checks.
+
+A request, task or schedule run that stops on an unexpected error outside the model connection ends with the same card, with a short fixed summary. The error itself goes in the diagnostic report, not the summary. A model connection failure links to **Settings > Models** instead.
+
+In Telegram and WhatsApp, the draft arrives as text. Reply "send" to share the summary, without a diagnostic report, since you can't review one there. To add the report, send the same draft from its card in Nod on your computer. Nod sends it only when your reply clearly asks for that, and otherwise asks you to confirm first. Nothing is sent until you click **Send report** or reply to send it.
 
 **Include diagnostic report** starts selected for every feedback category until you change it. It adds recent messages, tool inputs and results, errors, and app activity to help fix problems and improve Nod. Known secrets and recognized personal details are masked, but redaction can miss information.
 

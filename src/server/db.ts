@@ -118,6 +118,11 @@ export async function initializeDatabase() {
       hidden_at timestamptz
     );
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS reply_quote text;
+    CREATE TABLE IF NOT EXISTS feedback_drafts (
+      id uuid PRIMARY KEY, owner_id text NOT NULL, thread_id uuid NOT NULL,
+      summary text NOT NULL, created_at timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS feedback_drafts_thread ON feedback_drafts(owner_id,thread_id,created_at);
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS display_text text;
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS audio_caption text;
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS suggestions jsonb;

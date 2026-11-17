@@ -30,6 +30,7 @@ import { formattingLocale, localeRegion, timeZoneRegion } from '../shared/date-l
 import type { UsageReport } from './usage-report.ts';
 import { afterCommit, transaction } from './transaction.ts';
 import { analyticsModel, snapshotAnalytics, type CaptureAnalytics } from './analytics.ts';
+import { analyticsMemoryOperation } from './analytics-events.ts';
 import { captureSettingChanges, type SettingActor } from './analytics-settings.ts';
 
 export const spendingLimitReached = 'This month’s spending limit is reached.';
@@ -236,11 +237,16 @@ function modelUsed(
     (charged > 0 || usage.pricing === 'reported');
   const planPriced = estimated !== null && estimated > 0;
   const spent = apiPriced ? charged : planPriced ? estimated : null;
+  const memoryOperation =
+    usage.category === 'memory'
+      ? analyticsMemoryOperation.safeParse(usage.operation).data
+      : undefined;
   return {
     event: 'model_used',
     properties: {
       ...analyticsModel(usage.provider, usage.model),
       purpose: usage.category,
+      ...(memoryOperation ? { memory_operation: memoryOperation } : {}),
       request_kind:
         usage.category !== 'agent'
           ? usage.category

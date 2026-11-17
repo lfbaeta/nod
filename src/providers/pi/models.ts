@@ -1421,6 +1421,7 @@ export async function createPiModelRuntime(
           await settleBudget?.(piUsageMetrics(message.usage).costUsd ?? null);
           requestFacts.set(message, {
             requestPhase: phase,
+            requestKind: cacheWarm ? 'cache_warm' : 'regular',
           });
         }
         events.push(event);

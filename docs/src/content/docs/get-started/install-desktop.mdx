@@ -208,7 +208,7 @@ If a setup error shows **Details**, select it to read more information.
 | Problem                                                 | Try this                                                                                                                                                                                                                                            |
 | ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | macOS blocks the first launch                           | Install the newest release. On a managed Mac, ask your IT team to allow Nod.                                                                                                                                                                        |
-| Setup stops with an error                               | Select **Try again**. If it fails again, send the error with **Send feedback…** from the menu bar or tray icon.                                                                                                                                     |
+| Setup stops with an error                               | Select **Try again**, or **Report bug** to restart Nod and open a report once it's back. If Nod can't restart, select **Show startup log**. When connected to a server, select **Reconnect to server**.                                             |
 | Nod asks for a runtime file                             | Select **Choose runtime file** and pick the `nod-Runtime-…` file from the same release.                                                                                                                                                             |
 | Windows can't download the runtime                      | Put `nod-Runtime-win32-x64.tar.gz` from the same release next to `nod-Setup-x64.exe` and run the installer again.                                                                                                                                   |
 | Windows downloads the same update again after a restart | Nod 0.6.2 and earlier can't install updates on Windows. Quit Nod from the tray icon, then download and run the [newest Windows installer](https://github.com/n8n-io/nod/releases/latest/download/nod-Setup-x64.exe) once. Your data stays in place. |
@@ -230,7 +230,7 @@ After a failed update, the ShipIt update job can stay loaded. A new copy of Nod 
 
 3. Download the newest DMG from the [releases page](https://github.com/n8n-io/nod/releases). Replace the copy in **Applications**, then open it.
 
-These commands remove only the update job and its cache. They keep your profile, conversations, saved keys and private computer. If Nod still does not open, [send feedback](/deploy/troubleshooting/#send-feedback-with-a-diagnostic-report).
+These commands remove only the update job and its cache. They keep your profile, conversations, saved keys and private computer. If Nod still does not open, [report a bug](/deploy/troubleshooting/#report-a-bug-with-a-diagnostic-report).
 
 :::caution
 Don't delete the profile or the private computer to fix a problem. You'd lose your conversations, workspace and saved keys.

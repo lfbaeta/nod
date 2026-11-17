@@ -41,6 +41,7 @@ import { MessageLinkTooltip } from './message-link-tooltip';
 import { Tooltip } from './tooltip';
 import type { ImagePreview } from './attachment-images';
 import { MessagePresentation } from './message-presentation';
+import { BugReportCard } from './bug-report-card';
 import { formatFullDateTime, formatTime, useDateFormat } from '../lib/date-format';
 import { copyContent, selectedText } from '../lib/clipboard';
 
@@ -795,9 +796,17 @@ export function MessageBubble({
               {message.role === 'assistant' &&
                 !streaming &&
                 message.presentation &&
-                message.presentation.type !== 'apps' && (
+                message.presentation.type !== 'apps' &&
+                (message.presentation.type === 'bug-report' ? (
+                  <BugReportCard
+                    key={message.presentation.draftId}
+                    draftId={message.presentation.draftId}
+                    title={message.presentation.title}
+                    summary={message.presentation.summary}
+                  />
+                ) : (
                   <MessagePresentation value={message.presentation} messageId={message.id} />
-                )}
+                ))}
               {message.role === 'assistant' && message.attachments.length > 0 && (
                 <MessageAttachments
                   attachments={message.attachments.filter(

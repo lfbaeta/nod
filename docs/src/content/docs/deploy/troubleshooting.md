@@ -7,7 +7,7 @@ sidebar:
 
 This page lists common problems, why they happen and how to fix them. Headings match the error message where Nod shows one.
 
-If your problem isn't here, [send feedback with a diagnostic report](#send-feedback-with-a-diagnostic-report).
+If your problem isn't here, [report a bug with a diagnostic report](#report-a-bug-with-a-diagnostic-report).
 
 ## Install from source
 
@@ -99,11 +99,11 @@ On Windows, the message reads "Nod needs more free disk space to prepare its pri
 
 ### Setup fails or stops partway
 
-Retry first. Do not delete the profile, VM, database, or runtime cache by hand to fix it. If it still fails, [send feedback](#send-feedback-with-a-diagnostic-report). If the chat cannot open, select **Show startup log** on the error screen. Send that log with a screenshot of the error. When a setup command fails, the message includes the last lines of its output.
+Retry first. Do not delete the profile, VM, database, or runtime cache by hand to fix it. If it still fails, [report a bug](#report-a-bug-with-a-diagnostic-report). If the chat cannot open, select **Show startup log** on the error screen. Send that log with a screenshot of the error. When a setup command fails, the message includes the last lines of its output.
 
 On Mac and Linux, Nod records new first setups and marks them complete after the computer passes its startup checks. If a recorded setup fails or is interrupted, the next attempt replaces the unfinished computer. A failed replacement reports its own error and stops the attempt. Computers that completed setup are kept. Missing configuration for an existing computer also stops setup and keeps its files.
 
-An interrupted Mac setup from an older version can lack that record. If retry still fails, keep its files and [send feedback with the startup log](#send-feedback-with-a-diagnostic-report).
+An interrupted Mac setup from an older version can lack that record. If retry still fails, keep its files and [report a bug with the startup log](#report-a-bug-with-a-diagnostic-report).
 
 If the background service does not respond within two minutes, the startup log records the elapsed wait and the last health check failure. It also records whether the service reported its port. An unexpected service exit has a separate log entry.
 
@@ -131,7 +131,7 @@ Ubuntu kernels `7.0.0-42` and `7.0.0-43` can block signals inside containers. Th
 
 Install a Nod build with the container profile repair, then quit and reopen Nod. The repair keeps AppArmor active and preserves the database volume. It also prevents further automatic kernel changes and VM restarts. A restart alone does not repair the old profile. Do not delete the VM or database to fix this failure.
 
-If setup still fails, select **Show startup log** and [send feedback](#send-feedback-with-a-diagnostic-report). This error alone does not show whether the database files are damaged.
+If setup still fails, select **Show startup log** and [report a bug](#report-a-bug-with-a-diagnostic-report). This error alone does not show whether the database files are damaged.
 
 ## Models and apps
 
@@ -143,11 +143,11 @@ ChatGPT sign-in receives its callback on port 1455. Another Nod app or another s
 
 Return to **Apps** and select **Connect** again. Keep the sign-in page and any window it opens until authorization finishes. A copied, expired or already used link cannot finish a connection. If the system's encrypted storage is locked, unlock it and restart Nod.
 
-If the connection service refuses the request, the sign-in page names its reason and HTTP status, such as `public_budget_exceeded` and `HTTP 429`. If the connection service is unavailable or reports a limit, try again later. If the problem persists, [send feedback with a diagnostic report](/deploy/troubleshooting/#send-feedback-with-a-diagnostic-report).
+If the connection service refuses the request, the sign-in page names its reason and HTTP status, such as `public_budget_exceeded` and `HTTP 429`. If the connection service is unavailable or reports a limit, try again later. If the problem persists, [report a bug with a diagnostic report](/deploy/troubleshooting/#report-a-bug-with-a-diagnostic-report).
 
 ### An app tool fails with HTTP 403
 
-If an app tool error shows `HTTP 403` and a UTC time, [send feedback with a diagnostic report](/deploy/troubleshooting/#send-feedback-with-a-diagnostic-report). Include that time and any Cloudflare Ray ID in your feedback text. The displayed `0x` is a formatting prefix; support removes it before searching Cloudflare.
+If an app tool error shows `HTTP 403` and a UTC time, [report a bug with a diagnostic report](/deploy/troubleshooting/#report-a-bug-with-a-diagnostic-report). Include that time and any Cloudflare Ray ID in your feedback text. The displayed `0x` is a formatting prefix; support removes it before searching Cloudflare.
 
 ### App sign-in opens an unreachable address on a remote server
 
@@ -194,11 +194,13 @@ Ask Nod to check the result in the app or website before you try again. See [One
 
 ## Get help
 
-### Send feedback with a diagnostic report
+### Report a bug with a diagnostic report
 
-Select **Send feedback** in the chat. In the desktop app, it's also in the menu bar menu. The dialog names the recipient before you send: the Nod team at n8n by default, or your operator's configured collector.
+Select **Report bug** in the chat. When something in Nod itself fails, Nod also drafts a bug report in chat that you send with **Send report**, or by replying "send" in Telegram or WhatsApp. See [Report a bug](/use/chat/#report-a-bug). In the desktop app, **Report bug…** is also in the menu bar menu. The dialog names the recipient before you send: the Nod team at n8n by default, or your operator's configured collector.
 
-If the workspace crashes, use **Send feedback** on the error screen before **Reload Nod** to include the captured error.
+If the workspace crashes, use **Report bug** on the error screen before **Reload Nod** to include the captured error.
+
+In the desktop app, if Nod's background service or its window stops, Nod shows its error screen. Select **Report bug** there: Nod restarts and opens the report as soon as it's back, with the crash in the diagnostic report. If Nod can't restart, select **Show startup log** and send it with a screenshot of the error.
 
 Choose a feedback category and describe what happened. Include what you expected, what actually happened, and the steps that trigger the problem. **Include diagnostic report** starts selected for every category until you change it. Nod remembers your choice for your account on this device after sending or discarding a draft.
 
@@ -233,7 +235,7 @@ Database activity covers the latest 24 hours for your account across its convers
 
 The runtime journal uses three rotating files of at most 1 MiB each in Nod's private data folder. Data is redacted before it is written and again when it is exported. Failures have their own journal with the same limits, so tool activity can't push them out. Reports include up to 200 runtime log entries from the latest 24 hours. Identical failures are merged into one entry with a count and the age of the first one, and a report includes up to 150 merged failures. A failure that repeats within 10 minutes is counted and written with the next one, so its count can lag by that long. A tool result longer than 6,000 characters keeps its start and end. An entry larger than 64 KiB is replaced with an omission marker. Expired records are removed on startup, report preparation, subsequent journal writes, and a one-minute cleanup timer. Files can remain while Nod is stopped. Dropped entries and unavailable journal data are identified in the report.
 
-The separate app activity buffer holds up to 100 recent entries for 30 minutes in the current runtime and app window. The app window also keeps up to 10 recent error messages and stacks for 30 minutes. These buffers don't depend on usage analytics being enabled. Closing the app window or restarting the runtime clears that source's buffer. Dropped or expired activity entries aren't marked. Activity categories contain no raw request URLs or response bodies. App error messages and stacks reach the runtime for redaction when a report is prepared and aren't written to its journal. After an account change, error capture pauses until the app window reloads, and the report marks that source unavailable.
+The separate app activity buffer holds up to 100 recent entries for 30 minutes in the current runtime and app window. The app window also keeps up to 10 recent error messages and stacks for 30 minutes. These buffers don't depend on usage analytics being enabled. Closing the app window or restarting the runtime clears that source's buffer. Dropped or expired activity entries aren't marked. A bug report sent by replying in Telegram or WhatsApp carries only its summary, without a diagnostic report. Activity categories contain no raw request URLs or response bodies. App error messages and stacks reach the runtime for redaction when a report is prepared and aren't written to its journal. After an account change, error capture pauses until the app window reloads, and the report marks that source unavailable.
 
 The redactor omits individual strings longer than 32,000 characters before scanning them. Database reads separately omit message and error text larger than 64 KiB. When content is included, absent message text and turn errors have no field; a content-limit marker means a stored value exceeded that read limit. App error messages and stacks each have an 8,192-character capture limit. Structured values also have depth, entry-count, and size limits. These limits can remove details from long messages and tool results.
 

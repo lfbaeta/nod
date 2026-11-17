@@ -35,6 +35,8 @@ The bounded task classifier is the only analytics model inference. It assigns a 
 
 Server events captured within a turn carry `run_id`, `work_type`, and `owner_requested` for model, tool, service, source-read, and committed-output measurements. Resumes retain the origin's execution mode. `task_type` is a separate inferred purpose. Join these server events by analytics ID and `run_id`. UI presentation and artifact events don't carry `run_id` and can't be joined this way. Never send private turn or message IDs.
 
+For `model_used` with purpose `memory`, the ledger adds `memory_operation` only from the fixed `analyticsMemoryOperation` list in [`src/server/analytics-events.ts`](https://github.com/n8n-io/nod/blob/main/src/server/analytics-events.ts). The schema rejects this field on other purposes. Do not send a raw operation string. Keep missing operations visible in queries. This field separates recall selection from saving and other memory work without collecting private text. Compare operation, outcome, and duration together; cancellation alone does not establish a failed owner request.
+
 Wrap autonomous memory maintenance, onboarding preparation, and writing-style learning with `withSystemWork`. These operations carry `work_type=background`, `owner_requested=false`, and a bounded `system_activity`, without creating a run. An existing turn context takes precedence. Model usage without either context carries `work_type=unclassified`; keep it visible in cost reporting rather than guessing its origin from model purpose.
 
 ### Task classification

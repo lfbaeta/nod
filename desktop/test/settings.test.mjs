@@ -1940,6 +1940,18 @@ test('native startup recovery keeps current status and serializes retry, prerequ
           .querySelector('[role="alert"]')
           ?.textContent.includes('Synthetic retry failed'),
       );
+      await settle(() => button('Report bug') && !button('Report bug').disabled);
+      button('Report bug').click();
+      await settle(() => calls.length === 2);
+      assert.deepEqual(JSON.parse(JSON.stringify(calls[1])), [
+        'prepare',
+        { retry: true, report: true },
+      ]);
+      await settle(() =>
+        page.window.document
+          .querySelector('[role="alert"]')
+          ?.textContent.includes('Synthetic retry failed'),
+      );
       publish({ phase: 'preparing', runtime: { phase: 'downloading', progress: 0.42 } });
       await settle(() => page.window.document.querySelector('progress')?.value === 0.42);
       assert.equal(page.window.document.querySelector('[role="alert"]'), null);
@@ -1963,10 +1975,10 @@ test('native startup recovery keeps current status and serializes retry, prerequ
           !button('Choose runtime file').disabled &&
           page.window.document.querySelector('[role="alert"]'),
       );
-      assert.equal(calls.filter(([name]) => name === 'prepare').length, 1);
+      assert.equal(calls.filter(([name]) => name === 'prepare').length, 2);
       assert.ok(page.window.document.querySelector('[role="alert"]'));
       button('Choose runtime file').click();
-      await settle(() => calls.filter(([name]) => name === 'prepare').length === 2);
+      await settle(() => calls.filter(([name]) => name === 'prepare').length === 3);
       assert.deepEqual(calls.at(-1), ['prepare', undefined]);
       await settle(() => !page.window.document.querySelector('[role="alert"]'));
     });
