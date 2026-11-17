@@ -80,6 +80,7 @@ export function Onboarding({
 }) {
   useBrowserTimeZone();
   const desktop = desktopRuntimeAvailable();
+  const privacy = usageShared || (traces !== undefined && Boolean(onTraces));
   const models = usePageData<ModelsResponse>('/api/models');
   const [position, setPosition] = useState<{
     step: SetupStep;
@@ -108,7 +109,9 @@ export function Onboarding({
           (onboardingSteps.includes(savedStep as OnboardingStep) ||
             (desktop && savedStep === 'preferences')) &&
           savedStep !== 'welcome'
-        ? (savedStep as SetupStep)
+        ? savedStep === 'privacy' && !privacy
+          ? 'join'
+          : (savedStep as SetupStep)
         : welcomed
           ? 'email'
           : 'welcome';
@@ -135,6 +138,9 @@ export function Onboarding({
   const [error, setError] = useState('');
   const [missing, setMissing] = useState<'brain' | 'email' | null>(null);
   const [skipModelStep, setSkipModelStep] = useState<boolean | null>(null);
+  const steps = onboardingSteps.filter(
+    (item) => (item !== 'brain' || skipModelStep !== true) && (item !== 'privacy' || privacy),
+  );
   const [mining, setMining] = useState(false);
   const emailSkipped = useRef(false);
   const started = useRef(false);
@@ -208,7 +214,9 @@ export function Onboarding({
           setPosition({ step: 'brain', arrived: 'forward' });
         if (ready)
           setPosition((position) =>
-            position.step === 'brain' ? { step: 'privacy', arrived: 'forward' } : position,
+            position.step === 'brain'
+              ? { step: privacy ? 'privacy' : 'join', arrived: 'forward' }
+              : position,
           );
       })
       .catch(() => {
@@ -347,8 +355,9 @@ export function Onboarding({
   }
 
   function go(offset: 1 | -1) {
-    let next = onboardingSteps[index + offset];
-    if (next === 'brain' && skipModelStep === true) next = onboardingSteps[index + offset * 2];
+    let at = index + offset;
+    while (onboardingSteps[at] && !steps.includes(onboardingSteps[at])) at += offset;
+    const next = onboardingSteps[at];
     if (next) {
       setError('');
       setCompletionFailed(false);
@@ -449,7 +458,6 @@ export function Onboarding({
     </div>
   );
 
-  const steps = onboardingSteps.filter((item) => item !== 'brain' || skipModelStep !== true);
   if (step === 'preferences')
     return <DesktopPreferencesSetup notice={recovery} onReady={next} steps={steps} />;
 
