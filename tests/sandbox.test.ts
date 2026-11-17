@@ -423,12 +423,16 @@ test('connected CLIs run only their sealed install with a clean environment', as
     });
     await writeFile(join(prefix, '.installed'), '');
     const launches: string[][] = [];
-    const run = (args: string[], selected?: typeof cli) =>
+    const run = (
+      args: string[],
+      selected?: typeof cli,
+      fields: Record<string, string> = { FIXTURE_TOKEN: 'synthetic-connected-token' },
+    ) =>
       runWorkspaceCommand({
         container: 'nod-workspace-fixture',
         threadId: 'fixture',
         args,
-        environment: { FIXTURE_TOKEN: 'synthetic-connected-token' },
+        environment: fields,
         cli: selected,
         spawn: (_command, dockerArgs, options) => {
           launches.push(dockerArgs);
@@ -479,6 +483,29 @@ test('connected CLIs run only their sealed install with a clean environment', as
       '/var/tmp',
     ]);
     assert.deepEqual(launches[0]!.slice(7, 9), ['/usr/bin/python3', '-I']);
+    const fields = {
+      FIXTURE_USERNAME: 'synthetic-user',
+      FIXTURE_USER: 'synthetic-user',
+      FIXTURE_EMAIL: 'synthetic@example.test',
+      FIXTURE_URL: 'https://synthetic.example.test',
+      FIXTURE_ID: '42',
+    };
+    const labeled = await run(['status'], cli, fields);
+    assert.equal(labeled.exitCode, 0, labeled.stderr.toString());
+    for (const [key, value] of Object.entries(fields))
+      assert(labeled.stdout.toString().split('\n').includes(`${key}=${value}`));
+    for (const key of [
+      'LD_PRELOAD',
+      'NODE_OPTIONS',
+      'PATH',
+      'PYTHONPATH',
+      `${'X'.repeat(65)}_TOKEN`,
+    ]) {
+      await assert.rejects(
+        run(['status'], cli, { [key]: 'synthetic-value' }),
+        WorkspaceCommandError,
+      );
+    }
     await assert.rejects(run(['fixturecli']), WorkspaceCommandError);
     const other = join(home, `nod-cli-${randomUUID()}`);
     await mkdir(other);

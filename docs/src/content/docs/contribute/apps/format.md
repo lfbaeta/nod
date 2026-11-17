@@ -2,7 +2,7 @@
 title: App format reference
 description: The supported Agent Plugins fields, Nod extension, and mandatory contract fixture.
 sidebar:
-  order: 5
+  order: 6
 ---
 
 Every shipped app must pass the Agent Plugins schemas and Nod's app profile.
@@ -16,7 +16,17 @@ Every shipped app must pass the Agent Plugins schemas and Nod's app profile.
 | [Agent Skills](https://agentskills.io/specification)                           | Optional instructions and reference files                         |
 | [Semantic Versioning](https://semver.org/)                                     | App definition versions                                           |
 
-Nod adds display fields, private setup choices, required fixtures, and approval rules. A plugin for another client can use features outside this profile. Check this reference before copying a Codex or Claude plugin.
+Nod adds display fields, typed connection bindings, private setup choices, required fixtures, and approval rules. Version one includes MCP, API, and CLI bindings. The app card, Connect flow, and public page use one app model. A plugin for another client can use features outside this profile. Check this reference before copying a Codex or Claude plugin.
+
+The API and CLI bindings use these standards and conventions:
+
+- [JSON Schema 2020-12](https://json-schema.org/draft/2020-12) for strict editor and runtime contracts.
+- [HTTP semantics, RFC 9110](https://www.rfc-editor.org/rfc/rfc9110.html) for API methods and status codes.
+- [Bearer tokens, RFC 6750](https://www.rfc-editor.org/rfc/rfc6750) and [OpenAPI security schemes](https://spec.openapis.org/oas/v3.2.1.html#security-scheme-object) for HTTP authentication terms and headers.
+- [OAuth security practice, RFC 9700](https://www.rfc-editor.org/rfc/rfc9700.html), S256 PKCE, and [RFC 8414 metadata](https://www.rfc-editor.org/rfc/rfc8414.html) for browser sign-in.
+- Separate argument vectors, stdout, stderr, and exit status for CLIs. The [Command Line Interface Guidelines](https://clig.dev/) describe these conventions.
+
+HTTP and CLI bindings are Nod extension fields. They are not additional features of the Agent Plugins standard. Nod uses its existing API transport and sealed CLI runner.
 
 ## Folder and package identity
 
@@ -53,7 +63,7 @@ The [app schema](https://nod.n8n.io/docs/schemas/apps/v1/app.schema.json) and [f
 | `prompts`      | Two to four concrete example requests                                |
 | `requirements` | One to eight account, plan, scope, or version requirements           |
 | `limitations`  | One to eight statements of unsupported or restricted behavior        |
-| `connection`   | Required MCP connection definition                                   |
+| `connection`   | Required typed MCP, HTTP API, or CLI connection definition           |
 
 Unknown fields and unsupported connection combinations fail validation. Other client extension namespaces keep their own meaning. A profile version change requires an explicit migration.
 
@@ -99,6 +109,18 @@ The path contains slash-separated letters, digits, underscores, and hyphens. Nod
 
 Nod applies its address policy outside the manifest. Only n8n has the existing local-address exception and fixed localhost probe. Tokens go only to the saved address.
 
+## HTTP API and CLI bindings
+
+Use `type: "http"` with a public HTTPS `url`. Select one authentication method: `oauth2`, `bearer`, or `x-api-key`. Only API-key connections accept `apiKeyHeader`. Only OAuth connections accept `scopes`, `oauth`, and `clientIdRequired`.
+
+Use `type: "cli"` with `command`, a pinned `source`, `authentication: ["env"]`, and an `environment` label map. The map contains one to 16 fields. Names have at most 64 characters. The CLI fixture supplies the read check and its timeout.
+
+API and CLI folders omit `mcp.json`. Unknown fields, extra transports, app-folder install scripts or hooks, static secrets, control headers, and mismatched read fixtures fail the required checks. The sealed installer can run package install scripts from the declared CLI source before it adds credentials.
+
+Fixed server addresses and CLI download addresses must use public HTTPS on port 80 or 443. OAuth endpoints use port 443. Owner-supplied n8n instance addresses follow the separate instance policy.
+
+See the complete [API and CLI examples](/contribute/apps/api-and-cli/).
+
 ## Required contract fixture
 
 Every folder includes `io.n8n.nod/contract.json`:
@@ -126,7 +148,9 @@ Use a documented read tool. `input` must match its schema. `output` must contain
 
 The tool name must have one to 100 characters and must not start with `replace_`. The description must have one to 2,000 characters. Set `inputSchema.type` to `object`. The framework validates it as JSON Schema 2020-12. It then checks the sample input against every declared constraint, including patterns.
 
-The fixture exercises Nod's MCP transport. It does not prove the external server still offers that tool. Provider acceptance remains a separate review requirement.
+This is the MCP fixture. Set `type: "mcp"` in new fixtures. Older v1 MCP fixtures without `type` remain valid. API fixtures use `type: "http"` and a `request`. CLI fixtures use `type: "cli"`, `argv`, `format`, and `timeoutSeconds`. See [API and CLI examples](/contribute/apps/api-and-cli/).
+
+The fixture must match the connection type. The loader also validates the normalized setup with the runtime access-path schema. Offline checks do not prove external availability. Provider acceptance remains required.
 
 ## Optional skills
 

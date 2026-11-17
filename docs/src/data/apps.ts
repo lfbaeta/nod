@@ -41,7 +41,7 @@ export const apps = Object.entries(manifests)
       requirements: details.requirements,
       limitations: details.limitations,
       authentication: details.connection.authentication,
-      instance: 'endpoint' in details.connection,
+      instance: details.connection.type === 'mcp' && 'endpoint' in details.connection,
       source: contract.source,
       icon: details.icon ? icons[directory + details.icon.replace(/^\.\//, '')] : undefined,
     };

@@ -2,7 +2,7 @@
 title: Test the app
 description: Required automated checks, synthetic fixtures, and separate provider acceptance for every app.
 sidebar:
-  order: 6
+  order: 7
 ---
 
 Every app must include a contract fixture and pass the shared offline test framework.
@@ -39,7 +39,7 @@ The command runs from `pnpm check` and always runs in the required CI workflow. 
 | Permission and rate failures     | A failed call that is sent more than once                                                            |
 | Stop before dispatch             | A cancelled call that reaches the provider                                                           |
 
-The shared integration suite covers private setup, OAuth completion, account ownership, revoked access, credential removal, and Trust. Contributors must extend it when a new setup behavior requires a new branch.
+The shared integration suite covers the common Apps and Connect flow for MCP, API, and CLI apps. It checks private setup, OAuth completion, read verification, reconnect, account ownership, revoked access, credential removal, and Trust. API cases include custom authentication headers and GraphQL reads. CLI cases include multiple credential fields, short IDs, JSON and text reads, and failed verification. OAuth API cases use the real client with synthetic endpoints to check PKCE, registration, client IDs, token refresh, and issuer mismatch. Contributors must extend it when a new setup behavior requires a new branch.
 
 ## Keep the fixture useful
 
@@ -47,7 +47,7 @@ Use the provider's documented tool name, required input fields, and realistic re
 
 Do not add a test that asserts only that the manifest equals itself. Test requests, saved account bindings, failure handling, or another observable connection contract.
 
-The framework supplies the fake MCP responses. It runs the real Nod transport and MCP client against them. No automated test may contact a live model, connected account, or real recipient.
+The framework runs the real Nod HTTP or MCP transport against synthetic responses. CLI checks run a controlled child process with separate arguments, environment, stdout, stderr, and exit status. Offline checks never install or run a contributor’s real CLI package. No automated test may contact a live model, connected account, or real recipient.
 
 ## Run wider checks when needed
 
@@ -64,9 +64,9 @@ Review the app page at desktop and mobile widths. Open its `social.png` image an
 
 ## Provider acceptance is separate
 
-Offline tests cannot establish whether an external server is available or its OAuth application is configured correctly.
+Offline tests cannot establish whether an external service is available, its OAuth application is configured correctly, or a published CLI installs and works.
 
-Before approval, record a separate provider acceptance check with a disposable account and synthetic content. Check sign-in, a known read, reconnect, and disconnect. Check every advertised authentication method. Confirm denied access produces a useful reason.
+Before approval, record a separate provider acceptance check with a disposable account and synthetic content. Check sign-in, a known read, reconnect, and disconnect. Check every advertised authentication method. For a CLI, install the exact declared source in the sealed runtime and run its read check. Confirm the package supports Linux and the documented output format. Confirm denied access produces a useful reason.
 
 For write support, use a reversible synthetic record in that disposable account. Verify the result and clean it up. Do not contact real recipients. Keep this work outside automated tests and obtain the account operator's authorization.
 

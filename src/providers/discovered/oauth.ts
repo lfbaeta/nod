@@ -76,11 +76,26 @@ export function createDiscoveredOAuth(
   }
 
   return {
-    async begin(endpoint, redirectUri, state, scope, clientId) {
+    async begin(endpoint, redirectUri, state, scope, clientId, metadata) {
       const saved: DiscoveredOAuthState = {
         redirectUri,
         ...(scope ? { scope } : {}),
-        ...(clientId ? { clientInformation: { client_id: clientId } } : {}),
+        ...(clientId
+          ? {
+              clientInformation: {
+                client_id: clientId,
+                ...(metadata ? { issuer: metadata.issuer } : {}),
+              },
+            }
+          : {}),
+        ...(metadata
+          ? {
+              discovery: {
+                authorizationServerUrl: metadata.issuer,
+                authorizationServerMetadata: metadata,
+              },
+            }
+          : {}),
       };
       const result = await run(endpoint, saved, { state }, AbortSignal.timeout(30_000));
       if (result.result !== 'REDIRECT' || !result.url)
