@@ -63,6 +63,8 @@ When an action has one matching input form, a rejected call names its missing or
 
 Nod applies provider settings when it opens a model connection. Groq Qwen uses the system message role. OpenRouter MiMo V2.6 Flash uses tools without optional strict sampling, so tools with different sampling settings can share a request. A tool that requires strict sampling still refuses a model that cannot supply it. OpenRouter's free route keeps reasoning enabled because a routed model can require it. Its picker does not offer Off; a saved Off choice uses the lowest supported effort. Ollama models with on or off thinking use boolean controls instead of a named effort. OpenCode helper calls get a separate session ID for each helper request, shared by that request's model retries.
 
+Some OpenAI-compatible models, such as Mistral reasoning models, stream the answer as a list of content parts. Nod reads the text parts as the answer and leaves out reasoning parts.
+
 After a model list refresh or a connection is saved again, an unsupported saved effort changes to a supported effort for the same model. Nod chooses the first listed effort that is Off, Minimal, Low or Medium. If none is listed, it uses the first listed effort. A supported choice stays unchanged.
 
 If Ollama does not report its thinking controls, Nod uses the server's default instead of sending an effort value.
@@ -132,7 +134,7 @@ For every context size, Nod saves large direct tool results under `.nod/outputs/
 
 Each model request uses at most the output limit of its target model and half its context window. Below 65,536 tokens, output is limited to a quarter of the window. Text requests from an audio model use the limit of its text companion. A smaller requested output limit stays unchanged. Pi receives that same output limit, so a normal output cutoff does not trigger context recovery.
 
-The provider makes the final context check. Provider account limits, such as tokens per minute, are separate from context limits. An explicit token-rate failure stops compaction for that request and keeps the provider reason.
+The provider makes the final context check. Provider account limits, such as tokens per minute, are separate from context limits. A small patch to Pi's overflow detector excludes quota codes, token-rate limits, and HTTP 401, 402, 403, 404, 408, 409, 410, 429 and 5xx responses before it checks token wording. Pi then uses its normal retry policy. An explicit token-rate failure stops compaction for that request and keeps the provider reason.
 
 Nod runs Pi's native summary routine with the selected model at its lowest supported effort. Pi sets the summary request's output allowance. If the provider reports a context overflow or summary output reaches its limit, Nod saves the full source in the workspace. A bounded checkpoint keeps the file reference, the current owner instruction and Pi's selected tail. An incomplete model summary is never used as a checkpoint. Each summary request keeps its own usage record, including a request that ends at its output limit. An abort never saves a checkpoint.
 

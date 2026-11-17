@@ -138,6 +138,10 @@ Routine activity stays in the live line. Time passing alone does not trigger ano
 
 Work ends with an answer, a question, or a short message saying what stopped it. A schedule, or a task Nod started on its own, also tells you by name when it fails. When you only share context, such as a routine, Nod can save it without replying.
 
+In the web and desktop apps, if Nod cannot recover from a context error, a small banner offers **Restart chat**. Select it, then send your request again. Nod starts with fresh model context. Your messages, files, saved memory, connections and independent tasks stay. Earlier messages remain available through chat search. Restart does not repeat the failed request or any action it started.
+
+The banner appears only after automatic recovery fails and the chat has stopped. It is hidden when you start another chat request. Connection, access and quota errors keep their specific error and recovery steps.
+
 In the sidebar, the Chat item shows a moving dot while Nod works and a solid dot when it's waiting for you.
 
 ### In Telegram and WhatsApp
