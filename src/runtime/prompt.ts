@@ -130,7 +130,7 @@ ${untrustedBlock(
 }
 
 function connectedAppsContext(context: RuntimeContext, compact = false) {
-  return `${compact ? 'Connected apps (last-known access, not permission; use manage_apps list for accounts):' : 'Last-known app availability, not verified access or permission. Check manage_apps list for account details or unknown state before offering setup.'}
+  return `${compact ? 'Connected apps (last-known access, not permission). Read and act on them with apps; SEARCH_TOOLS finds actions and accounts:' : 'Last-known app availability, not verified access or permission. Check manage_apps list for account details or unknown state before offering setup.'}
 ${untrustedBlock(
   'connected app availability',
   context.connectedApps
