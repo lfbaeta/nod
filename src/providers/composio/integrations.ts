@@ -619,14 +619,21 @@ export function createComposioProvider(options: {
       },
       async offers(action, signal) {
         actionToolkit(action);
-        const response = await client.getClient().toolRouter.session.executeMeta(
-          value.sessionId,
-          {
-            slug: 'COMPOSIO_GET_TOOL_SCHEMAS',
-            arguments: { tool_slugs: [action], include: ['input_schema'] },
-          },
-          { signal },
-        );
+        const response = await client
+          .getClient()
+          .toolRouter.session.executeMeta(
+            value.sessionId,
+            {
+              slug: 'COMPOSIO_GET_TOOL_SCHEMAS',
+              arguments: { tool_slugs: [action], include: ['input_schema'] },
+            },
+            { signal, maxRetries: 0 },
+          )
+          .catch((error: unknown) => {
+            if (error instanceof APIError && error.status === 404) return undefined;
+            throw error;
+          });
+        if (!response) return false;
         signal?.throwIfAborted();
         const missing = z.object({ not_found: z.array(z.string()).optional() });
         const answer = z
