@@ -6,7 +6,12 @@ import pg from 'pg';
 import type { Job } from 'pg-boss';
 import { z } from 'zod';
 import type { InboundMessage, MessagingTransport } from '../src/ports/messaging.ts';
-import type { Schedule, ScheduleHistory, TaskDetail } from '../src/shared/contracts.ts';
+import type {
+  Schedule,
+  ScheduleHistory,
+  ScheduleRun,
+  TaskDetail,
+} from '../src/shared/contracts.ts';
 import {
   captureOwnerInstructions,
   mergeOwnerInstructions,
@@ -268,7 +273,7 @@ test(
           assert.deepEqual(await saved(schedule.id), {
             ...schedule,
             lastRun: run,
-            activeRun: { turnId: run!.turnId, status: 'queued' },
+            activeRun: { turnId: run!.turnId, status: 'queued', questionMessageId: null },
           });
           assert.equal((await jobFor(schedule.id)).id, job.id);
           assert.equal((await runNow(schedule)).statusCode, 409);
@@ -1020,6 +1025,20 @@ test(
         async () => {
           const before = clock;
           const schedule = await create({ cron: '*/15 * * * *' });
+          const active = async () => {
+            const response = await request('GET', '/api/schedules');
+            assert.equal(response.statusCode, 200, response.body);
+            return response.json<Schedule[]>().find((item) => item.id === schedule.id)!.activeRun;
+          };
+          const question = async (turnId: string, text: string) => {
+            const id = randomUUID();
+            await db.pool.query(
+              `INSERT INTO messages(id,owner_id,thread_id,turn_id,role,text)
+               SELECT $1,owner_id,thread_id,id,'assistant',$3 FROM turns WHERE id=$2`,
+              [id, turnId, text],
+            );
+            return id;
+          };
           const fire = async () => {
             const job = await jobFor(schedule.id);
             clock = new Date(job.data.scheduledFor);
@@ -1027,6 +1046,8 @@ test(
             return (await runs(schedule.id)).map((run) => run.turnId);
           };
           const [first] = await fire();
+          await question(first!, 'Checking the synthetic account report.');
+          const firstQuestion = await question(first!, 'May I use the synthetic saved login?');
           assert.deepEqual(await fire(), [first]);
           assert.equal((await runNow(schedule)).statusCode, 409);
           for (const status of ['running', 'waiting']) {
@@ -1036,19 +1057,55 @@ test(
             ]);
             assert.deepEqual(await fire(), [first]);
             assert.equal((await runNow(schedule)).statusCode, 409);
-            assert.equal((await saved(schedule.id)).activeRun?.status, status);
+            assert.deepEqual(await active(), {
+              turnId: first,
+              status,
+              questionMessageId: status === 'waiting' ? firstQuestion : null,
+            });
           }
-          const resumed = randomUUID();
-          await db.pool.query(
-            `INSERT INTO turns(id,owner_id,thread_id,source,prompt,session_id,parent_turn_id,background,status,started_at)
-             SELECT $1,owner_id,thread_id,'resume','Synthetic answer.',id,id,true,'queued',now() FROM turns WHERE id=$2`,
-            [resumed, first],
-          );
+          const resumed = await thread.enqueueTurn('Synthetic answer.', {
+            source: 'resume',
+            sessionId: first!,
+            parentTurnId: first!,
+            background: true,
+          });
+          const resumedQuestion = await question(resumed, 'Enter the synthetic verification code.');
           for (const status of ['queued', 'running', 'waiting'] as const) {
-            await db.pool.query('UPDATE turns SET status=$2 WHERE id=$1', [resumed, status]);
-            assert.deepEqual((await saved(schedule.id)).activeRun, { turnId: resumed, status });
+            await db.pool.query(
+              `UPDATE turns SET status=$2,started_at=CASE WHEN $2='queued' THEN NULL ELSE now() END WHERE id=$1`,
+              [resumed, status],
+            );
+            assert.deepEqual(await active(), {
+              turnId: resumed,
+              status,
+              questionMessageId: status === 'waiting' ? resumedQuestion : null,
+            });
             assert.equal((await runNow(schedule)).statusCode, 409);
           }
+          const archivedThread = randomUUID();
+          await db.pool.query('INSERT INTO threads(id,owner_id,archived_at) VALUES($1,$2,now())', [
+            archivedThread,
+            ownerId,
+          ]);
+          for (const [owner, threadId, hidden, text] of [
+            ['another-owner', null, false, 'Foreign question'],
+            [ownerId, archivedThread, false, 'Question from another conversation'],
+            [ownerId, null, true, 'Hidden question'],
+            [ownerId, null, false, ''],
+          ] as const)
+            await db.pool.query(
+              `INSERT INTO messages(id,owner_id,thread_id,turn_id,role,text,hidden_at,created_at)
+               SELECT $1,$3,COALESCE($4::uuid,thread_id),id,'assistant',$6,
+                 CASE WHEN $5 THEN now() END,now()+interval '1 second' FROM turns WHERE id=$2`,
+              [randomUUID(), resumed, owner, threadId, hidden, text],
+            );
+          assert.equal((await active())?.questionMessageId, resumedQuestion);
+          await db.pool.query('UPDATE messages SET hidden_at=now() WHERE id=$1', [resumedQuestion]);
+          assert.deepEqual(await active(), {
+            turnId: resumed,
+            status: 'waiting',
+            questionMessageId: null,
+          });
           await db.pool.query("UPDATE turns SET status='succeeded' WHERE id=$1", [resumed]);
           assert.equal((await saved(schedule.id)).activeRun, null);
           assert.equal((await fire()).length, 2);
@@ -2133,4 +2190,192 @@ test('scheduled controls reconcile pause and delete after a client timeout', asy
   assert.equal(title.value, 'My unsaved title');
   assert.ok(dom.window.document.querySelector('.schedule-editor-dialog'));
   assert.deepEqual(mutations, ['PATCH', 'DELETE', 'PATCH', 'DELETE', 'DELETE', 'PATCH', 'DELETE']);
+});
+
+test('waiting scheduled runs open their pending question without starting another run (LAB-1215)', async (t) => {
+  const { JSDOM } = await import('jsdom');
+  const dom = new JSDOM('<!doctype html><div id="root"></div>', {
+    url: 'https://nod.example.test/tasks',
+    pretendToBeVisual: true,
+  });
+  const globals = {
+    window: dom.window,
+    document: dom.window.document,
+    navigator: dom.window.navigator,
+    HTMLElement: dom.window.HTMLElement,
+    Element: dom.window.Element,
+    Node: dom.window.Node,
+    Event: dom.window.Event,
+    CustomEvent: dom.window.CustomEvent,
+    MutationObserver: dom.window.MutationObserver,
+    getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
+    IS_REACT_ACT_ENVIRONMENT: true,
+  };
+  const originals = new Map(
+    Object.keys(globals).map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]),
+  );
+  for (const [key, value] of Object.entries(globals))
+    Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
+  const { act, createElement } = await import('react');
+  const { createRoot } = await import('react-dom/client');
+  const { pageDataCache } = await import('../src/web/lib/page-data-cache.ts');
+  const { Scheduled } = await import('../src/web/pages/tasks.tsx');
+  const root = createRoot(dom.window.document.getElementById('root')!);
+  t.after(async () => {
+    await act(async () => root.unmount());
+    pageDataCache.clear();
+    dom.window.close();
+    for (const [key, value] of originals)
+      if (value) Object.defineProperty(globalThis, key, value);
+      else Reflect.deleteProperty(globalThis, key);
+  });
+  pageDataCache.clear();
+  const completed: ScheduleRun = {
+    id: randomUUID(),
+    scheduleId: randomUUID(),
+    title: 'Synthetic account report',
+    turnId: randomUUID(),
+    scheduledFor: '2035-10-25T09:00:00.000Z',
+    timeZone: 'UTC',
+    createdAt: '2035-10-25T09:00:00.000Z',
+    status: 'succeeded',
+    error: null,
+    observation: null,
+    messageId: randomUUID(),
+    messagePreview: 'Synthetic report ready.',
+    messageText: 'Synthetic report ready.',
+  };
+  const queued: ScheduleRun = {
+    ...completed,
+    id: randomUUID(),
+    turnId: randomUUID(),
+    scheduledFor: '2035-10-26T09:00:00.000Z',
+    createdAt: '2035-10-26T09:00:00.000Z',
+    status: 'queued',
+    messageId: null,
+    messagePreview: null,
+    messageText: null,
+  };
+  let schedule: Schedule = {
+    id: completed.scheduleId,
+    title: completed.title,
+    prompt: 'Read the report at https://reports.example.test and summarize it in Nod.',
+    kind: 'recurring',
+    cron: '0 9 * * *',
+    runAt: null,
+    timeZone: 'UTC',
+    enabled: true,
+    revision: 1,
+    nextRun: '2035-10-27T09:00:00.000Z',
+    lastRun: completed,
+    activeRun: null,
+    baselineObservation: null,
+    watch: null,
+    monthlyUsd: null,
+    model: null,
+  };
+  const historyPath = `/api/schedule-runs?scheduleId=${schedule.id}&limit=10`;
+  let history: ScheduleHistory = { runs: [completed], nextCursor: null };
+  const mutations: string[] = [];
+  t.mock.method(globalThis, 'fetch', async (input: RequestInfo | URL, options?: RequestInit) => {
+    const path = String(input);
+    const method = options?.method ?? 'GET';
+    if (method !== 'GET') {
+      mutations.push(`${method} ${path}`);
+      assert.equal(method, 'POST');
+      assert.equal(path, `/api/schedules/${schedule.id}/run`);
+      schedule = {
+        ...schedule,
+        lastRun: queued,
+        activeRun: { turnId: queued.turnId, status: 'queued', questionMessageId: null },
+      };
+      history = { runs: [queued, completed], nextCursor: null };
+      return Response.json({ turnId: queued.turnId, activeRun: schedule.activeRun });
+    }
+    if (path === '/api/schedules') return Response.json([schedule]);
+    if (path === '/api/tasks') return Response.json([]);
+    assert.equal(path, historyPath);
+    return Response.json(history);
+  });
+  const asked: string[] = [];
+  const focused: unknown[] = [];
+  dom.window.addEventListener('nod:focus-message', (event) =>
+    focused.push((event as CustomEvent).detail),
+  );
+  await act(async () =>
+    root.render(createElement(Scheduled, { onAsk: (text) => asked.push(text) })),
+  );
+  const runNow = dom.window.document.querySelector<HTMLButtonElement>(
+    `button[aria-label="Run now for ${schedule.title}"]`,
+  );
+  assert.ok(runNow);
+  await act(async () => runNow.click());
+  const expectedMutations = [`POST /api/schedules/${schedule.id}/run`];
+  assert.deepEqual(mutations, expectedMutations);
+
+  const questionId = randomUUID();
+  const question = 'May I use your saved login for reports.example.test for this report?';
+  const waiting: ScheduleRun = {
+    ...queued,
+    status: 'waiting',
+    messageId: questionId,
+    messagePreview: question,
+    messageText: question,
+  };
+  schedule = {
+    ...schedule,
+    lastRun: waiting,
+    activeRun: { turnId: waiting.turnId, status: 'waiting', questionMessageId: questionId },
+  };
+  history = { runs: [waiting, completed], nextCursor: null };
+  await act(async () => {
+    await pageDataCache.refresh('/api/schedules', true);
+    await pageDataCache.refresh(historyPath, true);
+  });
+  const needsInput = dom.window.document.querySelector<HTMLButtonElement>(
+    `button[aria-label="Needs your input for ${schedule.title}"]`,
+  );
+  assert.ok(needsInput);
+  await act(async () => needsInput.click());
+  assert.deepEqual(
+    mutations,
+    expectedMutations,
+    'Opening the question must not start another run.',
+  );
+  assert.deepEqual(asked, [], 'Opening the question must not post a new chat request.');
+  assert.deepEqual(
+    focused,
+    [{ messageId: questionId }],
+    'Needs your input must open the waiting run’s existing question in Chat.',
+  );
+
+  const resumedQuestionId = randomUUID();
+  schedule = {
+    ...schedule,
+    activeRun: { turnId: randomUUID(), status: 'waiting', questionMessageId: resumedQuestionId },
+  };
+  await act(async () => pageDataCache.refresh('/api/schedules', true));
+  const resumedInput = dom.window.document.querySelector<HTMLButtonElement>(
+    `button[aria-label="Needs your input for ${schedule.title}"]`,
+  );
+  assert.ok(resumedInput);
+  await act(async () => resumedInput.click());
+  assert.deepEqual(focused, [{ messageId: questionId }, { messageId: resumedQuestionId }]);
+
+  for (const status of ['queued', 'running', 'waiting'] as const) {
+    schedule = {
+      ...schedule,
+      activeRun: { turnId: schedule.activeRun!.turnId, status, questionMessageId: null },
+    };
+    await act(async () => pageDataCache.refresh('/api/schedules', true));
+    const button = dom.window.document.querySelector<HTMLButtonElement>(
+      `button[aria-label$=" for ${schedule.title}"][aria-live="polite"]`,
+    );
+    assert.ok(button);
+    assert.equal(button.disabled, true);
+    await act(async () => button.click());
+  }
+  assert.deepEqual(mutations, expectedMutations);
+  assert.deepEqual(asked, []);
+  assert.deepEqual(focused, [{ messageId: questionId }, { messageId: resumedQuestionId }]);
 });

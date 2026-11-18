@@ -47,6 +47,8 @@ export function ScheduleRow({
     !schedule.enabled &&
     schedule.lastRun &&
     Boolean(schedule.runAt && Date.parse(schedule.runAt) <= Date.now());
+  const questionMessageId =
+    schedule.activeRun?.status === 'waiting' ? schedule.activeRun.questionMessageId : null;
   const runLabel = starting
     ? 'Starting…'
     : schedule.activeRun
@@ -144,11 +146,24 @@ export function ScheduleRow({
             <Button
               variant="outline"
               size="sm"
-              disabled={starting || Boolean(schedule.activeRun) || change.busy || change.uncertain}
+              disabled={
+                starting ||
+                Boolean(schedule.activeRun && !questionMessageId) ||
+                change.busy ||
+                change.uncertain
+              }
               aria-label={`${runLabel} for ${schedule.title}`}
               aria-busy={starting}
               aria-live="polite"
-              onClick={() => void runNow()}
+              onClick={() => {
+                if (questionMessageId)
+                  window.dispatchEvent(
+                    new CustomEvent('nod:focus-message', {
+                      detail: { messageId: questionMessageId },
+                    }),
+                  );
+                else void runNow();
+              }}
             >
               {starting ? (
                 <LoaderCircle size={16} className="spin" aria-hidden="true" />

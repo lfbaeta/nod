@@ -35,6 +35,7 @@ const formatted = ['delete', 'emphasis', 'inlineCode', 'link', 'strong'];
 let verdicts = new Map<string, boolean>();
 let previousVerdicts = verdicts;
 const entity = /&#x([0-9a-f]+);/iy;
+const linkedTails = new Map<string, string>();
 
 function literal(value: string): PhrasingContent[] {
   if (!value.startsWith('/') && safeMessageLink(value, window.location.origin))
@@ -266,7 +267,8 @@ function nearFormatting(value: string, before: boolean, after: boolean) {
 }
 
 function keepsFormatting(children: PhrasingContent[], heading?: Heading) {
-  if (!children.some((child) => child.type === 'html' && /[*_~`]/.test(child.value))) return true;
+  if (!children.some((child) => child.type === 'html' && /[*_~`]|<!/.test(child.value)))
+    return true;
   const large = children.reduce(
     (size, child) => size + (isPlain(child) ? child.value.length : 0),
     0,
@@ -340,6 +342,34 @@ function parsesBack(checked: PhrasingContent[], heading?: Heading) {
   return !expected.size;
 }
 
+function closeAutolink(value: string) {
+  const tail = value.match(/\S*$/)![0];
+  if (tail.length > 2000 || !/:\/\/|www\.|@/i.test(tail)) return value;
+  if (!linkedTails.has(tail)) {
+    if (linkedTails.size > 5000) linkedTails.clear();
+    linkedTails.set(tail, linkTail(tail));
+  }
+  return value.slice(0, value.length - tail.length) + linkedTails.get(tail);
+}
+
+function linkTail(tail: string) {
+  const paragraph = markdown.parse(tail).children[0];
+  const link =
+    paragraph?.type === 'paragraph'
+      ? paragraph.children.findLast((child) => child.type === 'link')
+      : undefined;
+  const [from, to] = [link?.position?.start.offset, link?.position?.end.offset];
+  if (link?.type !== 'link' || from === undefined || link.children[0]?.type !== 'text') return tail;
+  const text = link.children[0].value;
+  if (tail.slice(from, to) !== text) return tail;
+  return (
+    tail.slice(0, from) +
+    (tail.slice(0, from).match(/\\*$/)![0].length % 2 ? '\\' : '') +
+    phrasingMarkdown([{ type: 'link', url: link.url, children: [{ type: 'text', value: text }] }]) +
+    tail.slice(from + text.length)
+  );
+}
+
 function serializeComposerMarkdown(document: ProseMirrorNode, display = false) {
   const content: JSONContent[] = document.toJSON().content ?? [];
   const tree: Root = { type: 'root', children: blocks(content, display) };
@@ -351,6 +381,7 @@ function serializeComposerMarkdown(document: ProseMirrorNode, display = false) {
     const children = node.children as PhrasingContent[];
     children.forEach((child, index) => {
       if (child.type !== 'html' || !children[index + 1]) return;
+      if (children[index + 1].type !== 'html') child.value = closeAutolink(child.value);
       if (children[index + 1].type === 'link')
         child.value = child.value.replace(
           /(?<!\\)((?:\\\\)*)(!+)$/,
@@ -361,7 +392,7 @@ function serializeComposerMarkdown(document: ProseMirrorNode, display = false) {
     if (!keepsFormatting(children, node.type === 'heading' ? node : undefined))
       for (const child of children)
         if (child.type === 'html')
-          child.value = child.value.replace(/(?<!\\)((?:\\\\)*)([*_~`])/g, '$1\\$2');
+          child.value = child.value.replace(/(?<!\\)((?:\\\\)*)([*_~`]|<(?=!))/g, '$1\\$2');
   });
   const last = content.at(-1);
   const trailingBreak = last?.type === 'paragraph' && last.content?.at(-1)?.type === 'hardBreak';

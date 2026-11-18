@@ -114,7 +114,18 @@ Section "nod"
     Abort
   directory_marked:
   WriteUninstaller "$INSTDIR\Uninstall.exe"
+  RMDir /r "$INSTDIR\previous-resources"
+  IfFileExists "$INSTDIR\resources\*.*" 0 resources_moved
+    ClearErrors
+    Rename "$INSTDIR\resources" "$INSTDIR\previous-resources"
+    IfErrors 0 resources_moved
+      MessageBox MB_ICONSTOP "Nod could not replace the files of its previous version. Close any program that has files open in the Nod folder, then run this installer again." /SD IDOK
+      SetErrorLevel 1
+      Abort
+  resources_moved:
   File /r "${APP_DIR}\*"
+  Rename "$INSTDIR\previous-resources\engine\windows-runtime\guest.tar.gz" "$INSTDIR\resources\engine\windows-runtime\guest.tar.gz"
+  RMDir /r "$INSTDIR\previous-resources"
   IfFileExists "$EXEDIR\nod-Runtime-win32-x64.tar.gz" 0 runtime_copied
     ClearErrors
     CopyFiles /SILENT "$EXEDIR\nod-Runtime-win32-x64.tar.gz" "$INSTDIR\resources\engine\windows-runtime\guest.tar.gz"

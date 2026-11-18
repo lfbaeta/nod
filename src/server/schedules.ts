@@ -344,10 +344,15 @@ export function createSchedules(dependencies: ScheduleDependencies) {
 
   async function activeRun(client: Pick<Pool, 'query'>, scheduleId: string) {
     const { rows } = await client.query<NonNullable<Schedule['activeRun']>>(
-      `SELECT u.id AS "turnId",u.status FROM schedule_runs r
+      `SELECT u.id AS "turnId",u.status,
+          (SELECT m.id FROM messages m WHERE u.status='waiting'
+            AND m.owner_id=u.owner_id AND m.thread_id=u.thread_id AND m.turn_id=u.id
+            AND m.role='assistant' AND m.text<>'' AND m.hidden_at IS NULL AND ${activeThreadSql('m')}
+            ORDER BY m.created_at DESC,m.id DESC LIMIT 1) AS "questionMessageId"
+          FROM schedule_runs r
          JOIN turns u ON u.owner_id=r.owner_id AND u.session_id=r.turn_id
          WHERE r.owner_id=$1 AND r.schedule_id=$2 AND (u.status IN ('queued','running')
-           OR (${waitingTurnSql('u')})) LIMIT 1`,
+           OR (${waitingTurnSql('u')})) ORDER BY u.created_at DESC,u.id DESC LIMIT 1`,
       [ownerId, scheduleId],
     );
     return rows[0] ?? null;

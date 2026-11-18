@@ -17,7 +17,7 @@ Nod follows your latest clear message's language, spoken or typed, including que
 
 Type in the message box and press Enter. Press Shift+Enter for a new line.
 
-Pasted text stays literal. Nod uses the clipboard's plain text even when the source also offers formatting. Line breaks, indentation and Markdown-looking characters such as `*priority*`, `# call` and `<u>text</u>` stay as written in the composer, the sent message and Nod's request. The one exception is formatting you add with the toolbar. If plain text in the same paragraph would change it, such as a `!` before a link or a `*` that pairs with italic text, the sent message adds backslashes: before that `!`, or before every `*`, `_`, `~` and backtick in the paragraph's plain text. An unsent pasted draft keeps them after a reload.
+Pasted text stays literal. Nod uses the clipboard's plain text even when the source also offers formatting. Line breaks, indentation and Markdown-looking characters such as `*priority*`, `# call` and `<u>text</u>` stay as written in the composer, the sent message and Nod's request. The one exception is formatting you add with the toolbar. If plain text in the same paragraph would change it, such as a `!` before a link or a `*` that pairs with italic text, the sent message adds backslashes: before that `!`, or before every `*`, `_`, `~` and backtick in the paragraph's plain text. A web or email address typed directly against formatting is sent as a link, such as `<https://example.com>`. An unsent pasted draft keeps them after a reload.
 
 Messages can contain up to 100,000 characters. Some emoji and symbols count as two characters toward this limit. If your text is longer, the composer keeps your draft and asks you to shorten it or attach the content as a file.
 

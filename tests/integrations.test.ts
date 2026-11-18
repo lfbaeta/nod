@@ -1016,7 +1016,12 @@ test('app skills cannot shadow core guides or load without a trusted root', asyn
   assert.equal(library.read('community-guide').content, body);
   await mkdir(join(builtin, 'community-guide'));
   await writeFile(join(builtin, 'community-guide/SKILL.md'), body);
-  assert.throws(() => createSkillLibrary([builtin, apps], ['artifacts']), /metadata is invalid/);
+  assert.throws(
+    () => createSkillLibrary([builtin, apps], ['artifacts']),
+    (error: Error) =>
+      error.message.includes('community-guide') &&
+      ['builtin', 'apps'].every((root) => error.message.includes(join(root, 'community-guide'))),
+  );
 });
 
 test('published app schemas reject unsupported definitions with the runtime validators', async () => {
