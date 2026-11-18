@@ -1759,7 +1759,7 @@ test(
       );
 
       await t.test(
-        'only the prior task addressed by an unquoted retry keeps its request (LAB-1467)',
+        'an unquoted web retry keeps the request of the latest task even across channels (LAB-1467)',
         async (t) => {
           const website = 'https://calendar.example.test';
           const event = 'Studio planning';
@@ -1788,8 +1788,8 @@ test(
               : false;
           };
 
-          const startAttempt = async (text: string, message: string) => {
-            const submitted = await messages.submit(text);
+          const startAttempt = async (text: string, message: string, channel?: string) => {
+            const submitted = await messages.submit(text, [], { channel });
             const parent = await running(submitted.turnId);
             const task = await tasks.execute(
               parent,
@@ -1819,9 +1819,24 @@ test(
           await tasks.settle(decoy.worker, 'I read the calendar.');
           await finish(decoy.worker.turnId, 'succeeded');
 
+          const unseen = await messages.submit('Then try it again', [], {
+            channel: 'telegram:fixture',
+          });
+          const unseenRetry = await running(unseen.turnId);
+          await assert.rejects(
+            tasks.execute(
+              unseenRetry,
+              { action: 'reply', ids: [decoy.task.id], retry: true },
+              unseen.messageId,
+            ),
+            /That task is closed/,
+          );
+          await finish(unseenRetry.turnId, 'succeeded');
+
           const { task, worker: first } = await startAttempt(
             request,
             'I’ll create the calendar event.',
+            'telegram:fixture',
           );
           const beforeFirstClick = calls.length;
           await approvals.request(first, 'NOD_browser', create);
@@ -1857,6 +1872,7 @@ test(
           const retryRow = await row(retry.turnId);
           assert.equal(retryRow.session_id, task.id);
           assert.equal(retryRow.message_id, submitted.messageId);
+          assert.equal(retryRow.channel, 'web');
           t.after(async () => {
             await db.pool.query(
               "UPDATE approvals SET status='expired' WHERE turn_id=$1 AND status='pending'",

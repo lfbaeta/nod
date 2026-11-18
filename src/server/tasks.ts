@@ -27,7 +27,13 @@ import { snapshotAnalytics, type CaptureAnalytics } from './analytics.ts';
 import { createPreferencesStore, deliveryTime, isQuietTime } from './preferences.ts';
 import { personalSecret } from './memory-tree.ts';
 import { texts as codeTexts } from './chat-verification.ts';
-import { waitingTurnSql, withdrawnSql, workKindSql, workOriginSql } from './turn-chain.ts';
+import {
+  reactionReplySql,
+  waitingTurnSql,
+  withdrawnSql,
+  workKindSql,
+  workOriginSql,
+} from './turn-chain.ts';
 import { resemblesTaskAcknowledgement } from '../shared/task-ack.ts';
 import { bareConfirmationAnswer } from './owner-instructions.ts';
 
@@ -401,11 +407,12 @@ export function createTasks(options: {
                JOIN messages a ON a.owner_id=m.owner_id AND a.thread_id=m.thread_id
                LEFT JOIN turns r ON r.id=a.turn_id AND r.owner_id=a.owner_id
                WHERE m.id=$3 AND m.owner_id=$1 AND m.thread_id=$2 AND m.hidden_at IS NULL
-                 AND m.approval_answer IS NULL AND NOT ${withdrawnSql('m')}
+                 AND m.reply_to_message_id IS NULL AND m.approval_answer IS NULL AND NOT ${withdrawnSql('m')}
                  AND a.hidden_at IS NULL
                  AND a.created_at>m.created_at - interval '24 hours'
                  AND (a.created_at,a.id)<(m.created_at,m.id)
-                 AND m.reply_to_message_id IS NULL AND COALESCE(r.channel,a.delivered_channel,'web')=u.channel
+                 AND CASE WHEN u.channel='web' THEN NOT ${reactionReplySql('a')}
+                   ELSE COALESCE(r.channel,a.delivered_channel,'web')=u.channel END
                ORDER BY a.created_at DESC,a.id DESC LIMIT 1
              ) SELECT 1 FROM answered WHERE role='assistant' AND turn_id=$4 AND NOT ${withdrawnSql('answered')}
                AND NOT EXISTS (SELECT 1 FROM approvals p WHERE p.owner_id=$1 AND p.turn_id=$4
