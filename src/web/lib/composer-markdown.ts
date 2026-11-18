@@ -267,7 +267,8 @@ function nearFormatting(value: string, before: boolean, after: boolean) {
 }
 
 function keepsFormatting(children: PhrasingContent[], heading?: Heading) {
-  if (!children.some((child) => child.type === 'html' && /[*_~`]/.test(child.value))) return true;
+  if (!children.some((child) => child.type === 'html' && /[*_~`]|<!/.test(child.value)))
+    return true;
   const large = children.reduce(
     (size, child) => size + (isPlain(child) ? child.value.length : 0),
     0,
@@ -363,6 +364,7 @@ function linkTail(tail: string) {
   if (tail.slice(from, to) !== text) return tail;
   return (
     tail.slice(0, from) +
+    (tail.slice(0, from).match(/\\*$/)![0].length % 2 ? '\\' : '') +
     phrasingMarkdown([{ type: 'link', url: link.url, children: [{ type: 'text', value: text }] }]) +
     tail.slice(from + text.length)
   );
@@ -390,7 +392,7 @@ function serializeComposerMarkdown(document: ProseMirrorNode, display = false) {
     if (!keepsFormatting(children, node.type === 'heading' ? node : undefined))
       for (const child of children)
         if (child.type === 'html')
-          child.value = child.value.replace(/(?<!\\)((?:\\\\)*)([*_~`])/g, '$1\\$2');
+          child.value = child.value.replace(/(?<!\\)((?:\\\\)*)([*_~`]|<(?=!))/g, '$1\\$2');
   });
   const last = content.at(-1);
   const trailingBreak = last?.type === 'paragraph' && last.content?.at(-1)?.type === 'hardBreak';

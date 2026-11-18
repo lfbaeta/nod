@@ -4738,6 +4738,7 @@ test('composer preserves keyboard shortcuts, upload retries, previews and failed
           'a\\\u0060\u0060x\u0060\\\u0060b',
           '| a          |\n| ---------- |\n| b\\\\\\\\<br>c |',
           '&#x61;~~<u>x</u>~~&#x61;',
+          '\\<!a **Q1**',
         ]) {
           await act(async () => replaceText(draft));
           await submit();
@@ -4774,6 +4775,20 @@ test('composer preserves keyboard shortcuts, upload retries, previews and failed
             [['see ', undefined], [address, [href]], ['(x)', ['strike']]],
           );
         }
+        serializer.commands.setContent({
+          type: 'doc',
+          content: [{ type: 'paragraph', content: [
+            { type: 'text', text: 'see \\https://example.test' },
+            { type: 'text', text: '(x)', marks: [{ type: 'strike' }] },
+          ] }],
+        });
+        assert.deepEqual(
+          parseComposerMarkdown(composerMarkdown(serializer.state.doc)).content[0].content.map((node) => [
+            node.text,
+            node.marks?.map((mark) => mark.attrs?.href ?? mark.type),
+          ]),
+          [['see \\', undefined], ['https://example.test', ['https://example.test']], ['(x)', ['strike']]],
+        );
         await act(async () => replaceText('| label | value |\n| --- | --- |\n| first | second |'));
         await pasteAtEnd('table tr:last-child td:first-child p', 'A|B\\|C\nD');
         await submit();
