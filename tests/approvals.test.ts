@@ -324,6 +324,7 @@ test('browser wording keeps material command facts for steps other than clicks',
     { action: 'press', key: 'Enter', selector: '@e3' },
     { action: 'select', text: 'Synthetic company', selector: '@e3' },
     { action: 'type', text: 'Synthetic message\n', selector: '@e3' },
+    { action: 'drag', selector: '@e3', targetSelector: '@e4', tabId: 'synthetic-private-tab' },
     { action: 'evaluate', script: 'document.querySelector("form").requestSubmit()' },
   ]) {
     let calls = 0;
@@ -333,7 +334,12 @@ test('browser wording keeps material command facts for steps other than clicks',
       review: async (_instructions, input) => {
         calls++;
         const request = input as Record<string, any>;
-        const { selector: _selector, ...material } = command;
+        const {
+          selector: _selector,
+          targetSelector: _targetSelector,
+          tabId: _tabId,
+          ...material
+        } = command;
         assert.equal(request.data.args.step, command.action);
         assert.deepEqual(request.data.args.command, material);
         if (request.purpose === 'confirmation_review') return { valid: true };
