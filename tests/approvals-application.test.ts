@@ -4,6 +4,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import fs from 'node:fs/promises';
+import { createServer } from 'node:http';
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -214,6 +215,10 @@ test(
     let changeRulesOnDraftRead = false;
     let changedRulesDuringDraftRead = 0;
     let repeatAfterConfirm: FixtureCall | FixtureCall[] | undefined;
+    let questionAfterConfirm: string | undefined;
+    let repeatDecision: 'new' | 'same' = 'same';
+    let workflowUpdate: { workflowId: string; threshold: number } | undefined;
+    const repeatChecks: Record<string, unknown>[] = [];
     const prompts = new Map<string, string>();
     const runtimeCommands = new Map<string, AgentSessionOptions['runTool']>();
     const advertisedMcp = new Map<string, string>();
@@ -242,7 +247,7 @@ test(
     const fixtureCurator: MemoryCurator = {
       id: 'fixture',
       configured: true,
-      curate: async ({ task, input }, _signal, report) => {
+      curate: async ({ task, input, instructions }, _signal, report) => {
         if (task === 'review' && heldReview?.purpose === Object(input).purpose && heldReview) {
           const held = heldReview;
           held.entered(_signal);
@@ -262,6 +267,11 @@ test(
           ['confirmation', 'confirmation_review'].includes(String(input.purpose))
         )
           return confirmationModel(input as Record<string, unknown>);
+        if (task === 'review' && 'reply' in input && 'question' in input && 'args' in input) {
+          assert.match(instructions, /"probability"/);
+          repeatChecks.push(input);
+          return { repeatedAction: repeatDecision, probability: 1 };
+        }
         if ('purpose' in input && input.purpose === 'connection' && connectionLabels.length)
           return connectionLabels.shift();
         if ('purpose' in input && input.purpose === 'payment')
@@ -415,15 +425,28 @@ test(
                 ) {
                   const calls = repeatAfterConfirm;
                   repeatAfterConfirm = undefined;
-                  for (const call of Array.isArray(calls) ? calls : [calls])
+                  for (const call of Array.isArray(calls) ? calls : [calls]) {
+                    const name =
+                      call.tool === 'synthetic_mcp'
+                        ? options.tools.find((item) => item.name.endsWith('__execute_workflow'))!.name
+                        : (call.tool ?? 'apps');
                     results.set(
                       options.turnId,
-                      await tool(call.tool ?? 'apps').execute(
-                        call.tool === 'files' || call.tool === 'sign_in'
-                          ? { action: call.action, ...call.args }
-                          : call,
+                      await tool(name).execute(
+                        call.tool === 'synthetic_mcp'
+                          ? call.args
+                          : call.tool === 'files' || call.tool === 'sign_in'
+                            ? { action: call.action, ...call.args }
+                            : call,
                       ),
                     );
+                  }
+                  return;
+                }
+                if (questionAfterConfirm && text.includes('executed once by the trusted worker')) {
+                  const question = questionAfterConfirm;
+                  questionAfterConfirm = undefined;
+                  await tool('ask_user').execute({ question });
                   return;
                 }
                 const part = parts.get(
@@ -505,13 +528,26 @@ test(
                     return;
                   }
 
+                  if (plan.tool === 'synthetic_mcp' && workflowUpdate) {
+                    const update = workflowUpdate;
+                    workflowUpdate = undefined;
+                    await options.tools
+                      .find((item) => item.name.endsWith('__update_workflow'))!
+                      .execute(update);
+                  }
+                  const name =
+                    plan.tool === 'synthetic_mcp'
+                      ? options.tools.find((item) => item.name.endsWith('__execute_workflow'))!.name
+                      : (plan.tool ?? 'manage_personal_context');
                   const result = await activePlan.run(instruction, () =>
                     options.tools
-                      .find((tool) => tool.name === (plan.tool ?? 'manage_personal_context'))!
+                      .find((tool) => tool.name === name)!
                       .execute(
                         plan.tool?.startsWith('mcp__')
                           ? (plan.args.input as Record<string, unknown>)
-                          : plan.tool === 'send_message' || plan.tool === 'pay'
+                          : plan.tool === 'synthetic_mcp' ||
+                              plan.tool === 'send_message' ||
+                              plan.tool === 'pay'
                             ? plan.args
                             : plan.tool === 'read_source'
                               ? { input: plan.args }
@@ -5342,6 +5378,205 @@ test(
         );
       });
 
+      await t.test(
+        'an explicit MCP workflow repeat asks again and returns the new execution',
+        async () => {
+          const { McpServer } = await import('@modelcontextprotocol/sdk/server/mcp.js');
+          const { StreamableHTTPServerTransport } =
+            await import('@modelcontextprotocol/sdk/server/streamableHttp.js');
+          const { z } = await import('zod');
+          let threshold = 3;
+          const updates: number[] = [];
+          const executions: Array<{ executionId: string; threshold: number }> = [];
+          const server = createServer(async (request, response) => {
+            const mcp = new McpServer({ name: 'synthetic-workflow', version: '1' });
+            mcp.registerTool(
+              'update_workflow',
+              {
+                description: 'Set the threshold in the named synthetic workflow.',
+                inputSchema: { workflowId: z.string(), threshold: z.number() },
+              },
+              async (input) => {
+                assert.equal(input.workflowId, 'synthetic-workflow');
+                threshold = input.threshold;
+                updates.push(threshold);
+                return { content: [{ type: 'text', text: JSON.stringify({ threshold }) }] };
+              },
+            );
+            mcp.registerTool(
+              'execute_workflow',
+              {
+                description: 'Run the named synthetic workflow once.',
+                inputSchema: { workflowId: z.string() },
+              },
+              async ({ workflowId }) => {
+                assert.equal(workflowId, 'synthetic-workflow');
+                const result = { executionId: `synthetic-${executions.length + 1}`, threshold };
+                executions.push(result);
+                return { content: [{ type: 'text', text: JSON.stringify(result) }] };
+              },
+            );
+            const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+            response.on('close', () => void transport.close());
+            await mcp.connect(transport);
+            await transport.handleRequest(request, response);
+          });
+          await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+          let connectionId: string | undefined;
+          let connectionService: string | undefined;
+          try {
+            const endpoint = `http://127.0.0.1:${(server.address() as { port: number }).port}/mcp`;
+            const setup = await request('POST', '/api/apps/mcp', {
+              name: 'Synthetic workflow',
+              endpoint,
+              auth: 'bearer',
+            });
+            assert.equal(setup.statusCode, 200, setup.body);
+            const connected = await request(
+              'POST',
+              `/api/apps/discovery/${setup.json().id}/complete`,
+              { token: 'synthetic-mcp-token', accountName: 'Synthetic workspace' },
+            );
+            assert.equal(connected.statusCode, 200, connected.body);
+            const account = (
+              await pool.query(
+                'SELECT id,service FROM discovered_connections WHERE owner_id=$1 AND name=$2',
+                [ownerId, 'Synthetic workflow'],
+              )
+            ).rows[0];
+            connectionId = account.id;
+            connectionService = account.service;
+            const input = { workflowId: 'synthetic-workflow' };
+            const initial = await propose(
+              'execute_workflow',
+              input,
+              'synthetic_mcp',
+              'Run the synthetic workflow for the first time.',
+            );
+            const [first] = await approvalsFor(initial);
+            assert.equal(first.action, 'CONNECTED_MCP_CALL');
+            assert.equal(executions.length, 0);
+            const question =
+              'Which threshold should I use for a new run of the synthetic workflow?';
+            questionAfterConfirm = question;
+            const accepted = await request('POST', '/api/messages', {
+              text: 'Run workflow',
+              replyToMessageId: first.confirmation_message_id,
+              approvalAnswer: { approvalId: first.id, approved: true },
+            });
+            assert.equal(accepted.statusCode, 200, accepted.body);
+            await waitFor(accepted.json().turnId, 'waiting');
+            assert.deepEqual(executions, [{ executionId: 'synthetic-1', threshold: 3 }]);
+            const savedFirst = (await approvalsFor(initial))[0];
+            assert.equal(savedFirst.status, 'completed');
+            const savedQuestion = (
+              await pool.query(
+                "SELECT id FROM messages WHERE turn_id=$1 AND role='assistant' AND text=$2",
+                [accepted.json().turnId, question],
+              )
+            ).rows[0];
+            assert.ok(savedQuestion);
+            const reply = 'Set the threshold to 7 and run the synthetic workflow again.';
+            workflowUpdate = { workflowId: 'synthetic-workflow', threshold: 7 };
+            asked.add(reply);
+            plans.set(reply, { tool: 'synthetic_mcp', action: 'execute_workflow', args: input });
+            repeatDecision = 'new';
+            const repeated = await request('POST', '/api/messages', {
+              text: reply,
+              replyToMessageId: savedQuestion.id,
+            });
+            assert.equal(repeated.statusCode, 200, repeated.body);
+            await waitFor(repeated.json().turnId, 'waiting|succeeded');
+            const [second] = await approvalsFor(repeated.json().turnId);
+            assert.ok(second, 'A new explicit run must save a new confirmation.');
+            assert.equal(second.status, 'pending');
+            assert.equal(second.source_message_id, repeated.json().messageId);
+            assert.deepEqual(second.args, first.args);
+            assert.equal(executions.length, 1);
+            assert.deepEqual(updates, [7]);
+            assert.equal(threshold, 7);
+            assert.deepEqual(second.details.account, {
+              name: 'Synthetic workflow',
+              identity: 'Synthetic workspace',
+              method: 'mcp',
+              endpoint,
+            });
+            assert.deepEqual(repeatChecks.at(-1), {
+              action: 'CONNECTED_MCP_CALL',
+              args: first.args,
+              reply,
+              question,
+            });
+            assert.ok(ownerWords.includes(reply));
+            repeatAfterConfirm = { tool: 'synthetic_mcp', action: 'execute_workflow', args: input };
+            const answer = {
+              text: 'Run workflow',
+              replyToMessageId: second.confirmation_message_id,
+              clientMessageId: randomUUID(),
+              approvalAnswer: { approvalId: second.id, approved: true },
+            };
+            const approved = await request('POST', '/api/messages', answer);
+            assert.equal(approved.statusCode, 200, approved.body);
+            await waitFor(approved.json().turnId, 'succeeded');
+            assert.deepEqual(
+              (await request('POST', '/api/messages', answer)).json(),
+              approved.json(),
+            );
+            assert.deepEqual(executions, [
+              { executionId: 'synthetic-1', threshold: 3 },
+              { executionId: 'synthetic-2', threshold: 7 },
+            ]);
+            assert.match(JSON.stringify(results.get(approved.json().turnId)), /synthetic-2/);
+            assert.doesNotMatch(JSON.stringify(results.get(approved.json().turnId)), /synthetic-1/);
+            assert.deepEqual((await approvalsFor(initial))[0].result, savedFirst.result);
+            assert.match(
+              JSON.stringify((await approvalsFor(repeated.json().turnId))[0].result),
+              /synthetic-2/,
+            );
+            const ledger = (
+              await pool.query(
+                "SELECT basis FROM app_actions WHERE owner_id=$2 AND turn_id=ANY($1::uuid[]) AND action='CONNECTED_MCP_CALL'",
+                [[accepted.json().turnId, approved.json().turnId], ownerId],
+              )
+            ).rows;
+            assert.equal(ledger.length, 2);
+            assert.deepEqual(
+              ledger.map((row) => row.basis),
+              [{ kind: 'approved' }, { kind: 'approved' }],
+            );
+            const cards = await request(
+              'GET',
+              `/api/messages/around/${second.confirmation_message_id}`,
+            );
+            assert.equal(cards.statusCode, 200, cards.body);
+            assert.equal(
+              cards
+                .json()
+                .find((message: { id: string }) => message.id === second.confirmation_message_id)
+                .approval.state,
+              'done',
+            );
+          } finally {
+            questionAfterConfirm = undefined;
+            workflowUpdate = undefined;
+            repeatAfterConfirm = undefined;
+            repeatDecision = 'same';
+            if (connectionId)
+              assert.equal(
+                (
+                  await request(
+                    'POST',
+                    `/api/apps/${connectionService}/accounts/${connectionId}/disconnect`,
+                    {},
+                  )
+                ).statusCode,
+                200,
+              );
+            server.closeAllConnections();
+            await new Promise<void>((resolve) => server.close(() => resolve()));
+          }
+        },
+      );
       await t.test(
         'a connect whose sign-in label cannot be written leaves no attempt behind',
         async () => {

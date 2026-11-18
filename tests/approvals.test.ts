@@ -34,7 +34,11 @@ import {
   registerLocalAccess,
 } from '../src/server/access.ts';
 import { appConfirmation } from '../src/ports/agent.ts';
-import type { ApprovalDescription, ApprovalExecutionContext } from '../src/server/approvals.ts';
+import type {
+  ApprovalDescription,
+  ApprovalExecutionContext,
+  ApprovalRepeat,
+} from '../src/server/approvals.ts';
 import { serverNetwork } from '../src/server/network.ts';
 import { createErrorRedactor } from '../src/server/redaction.ts';
 import {
@@ -1575,6 +1579,17 @@ test(
     let rejectPreflight = false;
     let executionGate: Promise<void> | undefined;
     let executionResult: (() => unknown) | undefined;
+    let repeatedAction: 'new' | 'same' | 'uncertain' = 'same';
+    let duringRepeat: (
+      input: ApprovalRepeat,
+      signal?: AbortSignal,
+    ) => Promise<void> = async () => {};
+    const repeatedInputs: Array<{
+      action: string;
+      args: Record<string, unknown>;
+      reply: string;
+      question: string;
+    }> = [];
     let descriptionFailure = false;
     const defaultDescription = async () => 'Synthetic approval question.';
     let describe: (proposal: ApprovalDescription, signal?: AbortSignal) => Promise<string> =
@@ -1738,6 +1753,11 @@ test(
         },
         undefined,
         createErrorRedactor(['PRIVATE_APPROVAL_KEY_CANARY']),
+        async (input, signal) => {
+          repeatedInputs.push(input);
+          await duringRepeat(input, signal);
+          return repeatedAction;
+        },
       );
       const checked = (base: typeof approved): typeof approved => ({
         ...base,
@@ -4966,6 +4986,619 @@ test(
           }
         },
       );
+      const repeatFixture = async (reply = 'Run the synthetic workflow again.') => {
+        const action = 'SYNTHETIC_EXECUTE_WORKFLOW';
+        const args = { workflowId: `synthetic-${randomUUID()}` };
+        const first = await begin('Run the synthetic workflow.');
+        const firstId = await propose(first, action, args);
+        await finish(first.turnId);
+        const accepted = await confirm(firstId, true);
+        assert.ok(accepted && 'turnId' in accepted);
+        await execute(firstId);
+        const question = 'Should I run the synthetic workflow again?';
+        await thread.reply(accepted, question);
+        const questionId = (
+          await db.pool.query(
+            "SELECT id FROM messages WHERE turn_id=$1 AND role='assistant' ORDER BY created_at DESC,id DESC LIMIT 1",
+            [accepted.turnId],
+          )
+        ).rows[0].id;
+        await db.pool.query(
+          "UPDATE turns SET status='waiting',waiting_reason='question' WHERE id=$1",
+          [accepted.turnId],
+        );
+        const renewed = await messages.submit(reply, [], { replyToMessageId: questionId });
+        const turn = await running(renewed.turnId);
+        return { action, args, first, firstId, accepted, questionId, renewed, turn };
+      };
+      const finishRepeat = async (fixture: Awaited<ReturnType<typeof repeatFixture>>) => {
+        await db.pool.query(
+          "UPDATE turns SET status='succeeded',finished_at=now() WHERE id=ANY($1::uuid[])",
+          [[fixture.first.turnId, fixture.accepted.turnId, fixture.renewed.turnId]],
+        );
+        await db.pool.query(
+          "UPDATE approvals SET status='expired' WHERE turn_id=ANY($1::uuid[]) AND status<>'completed'",
+          [[fixture.first.turnId, fixture.accepted.turnId, fixture.renewed.turnId]],
+        );
+        repeatedAction = 'same';
+        duringRepeat = async () => {};
+      };
+      await t.test('an explicit workflow repeat gets a new once-only confirmation', async () => {
+        const action = 'SYNTHETIC_EXECUTE_WORKFLOW';
+        const args = { workflowId: `synthetic-${randomUUID()}` };
+        const before = calls.length;
+        let threshold = 3;
+        executionResult = () => ({ executionId: `synthetic-${calls.length - before}`, threshold });
+        repeatedAction = 'new';
+        try {
+          const first = await begin('Run the synthetic workflow.');
+          const firstId = await propose(first, action, args);
+          await finish(first.turnId);
+          const accepted = await confirm(firstId, true);
+          assert.ok(accepted && 'turnId' in accepted);
+          await execute(firstId);
+          assert.equal(calls.length, before + 1);
+          const original = { executionId: 'synthetic-1', threshold: 3 };
+          assert.deepEqual((await stored(firstId)).result, original);
+          const question = 'Which threshold should I use for a new run of the synthetic workflow?';
+          await thread.reply(accepted, question);
+          const questionId = (
+            await db.pool.query(
+              "SELECT id FROM messages WHERE turn_id=$1 AND role='assistant' ORDER BY created_at DESC,id DESC LIMIT 1",
+              [accepted.turnId],
+            )
+          ).rows[0].id;
+          await db.pool.query(
+            "UPDATE turns SET status='waiting',waiting_reason='question' WHERE id=$1",
+            [accepted.turnId],
+          );
+          const reply = 'Set the threshold to 7 and run the synthetic workflow again.';
+          const renewed = await messages.submit(reply, [], { replyToMessageId: questionId });
+          threshold = 7;
+          const admission: boolean[] = [];
+          const result = await approvals.request(await running(renewed.turnId), action, args, {
+            allowed: true,
+            admit: async (asks) => {
+              admission.push(asks);
+            },
+          });
+          assert.ok(result && typeof result === 'object' && appConfirmation in result);
+          const second = await proposal(renewed.turnId);
+          assert.equal(second.source_message_id, renewed.messageId);
+          assert.equal(second.status, 'pending');
+          assert.equal(calls.length, before + 1);
+          assert.ok(admission.includes(true));
+          assert.deepEqual(repeatedInputs.at(-1), { action, args, reply, question });
+          await finish(renewed.turnId);
+          const approvedAgain = await confirm(second.id, true);
+          assert.ok(approvedAgain && 'turnId' in approvedAgain);
+          await execute(second.id);
+          const fresh = { executionId: 'synthetic-2', threshold: 7 };
+          assert.deepEqual((await stored(second.id)).result, fresh);
+          assert.deepEqual((await stored(firstId)).result, original);
+          assert.equal(calls.length, before + 2);
+          const resumed = await running(approvedAgain.turnId);
+          assert.deepEqual(
+            await approvals.request(resumed, action, args, { allowed: true }),
+            fresh,
+          );
+          const restarted = await createApprovals(async () => {
+            assert.fail('A completed repeat must not run again.');
+          });
+          assert.deepEqual(
+            await restarted.request(resumed, action, args, { allowed: true }),
+            fresh,
+          );
+          const automatic = await running(
+            await thread.enqueueTurn('Check the synthetic workflow result.', {
+              source: 'resume',
+              parentTurnId: resumed.turnId,
+            }),
+          );
+          assert.deepEqual(
+            await restarted.request(automatic, action, args, { allowed: true }),
+            fresh,
+          );
+          await finish(automatic.turnId, 'succeeded');
+          assert.equal(calls.length, before + 2);
+          await finish(resumed.turnId, 'succeeded');
+        } finally {
+          executionResult = undefined;
+          repeatedAction = 'same';
+        }
+      });
+      await t.test('a repeated action keeps its new request after expiry and restart', async () => {
+        const fixture = await repeatFixture();
+        const before = calls.length;
+        repeatedAction = 'new';
+        try {
+          await approvals.request(fixture.turn, fixture.action, fixture.args, { allowed: true });
+          const second = await proposal(fixture.turn.turnId);
+          await db.pool.query("UPDATE approvals SET status='expired' WHERE id=$1", [second.id]);
+          const restarted = await createApprovals(
+            async () => {
+              assert.fail('An expired repeat must ask again.');
+            },
+            undefined,
+            undefined,
+            defaultDescription,
+          );
+          const result = await restarted.request(fixture.turn, fixture.action, fixture.args, {
+            allowed: true,
+          });
+          assert.ok(result && typeof result === 'object' && appConfirmation in result);
+          const pending = (
+            await db.pool.query("SELECT * FROM approvals WHERE turn_id=$1 AND status='pending'", [
+              fixture.turn.turnId,
+            ])
+          ).rows;
+          assert.equal(pending.length, 1);
+          assert.notEqual(pending[0].id, second.id);
+          assert.equal(pending[0].source_message_id, fixture.renewed.messageId);
+          assert.equal((await stored(fixture.firstId)).status, 'completed');
+          assert.equal(calls.length, before);
+        } finally {
+          await finishRepeat(fixture);
+        }
+      });
+      await t.test('a repeated action preserves every unresolved or refused fence', async () => {
+        for (const status of ['pending', 'confirmed', 'executing', 'declined', 'uncertain']) {
+          const fixture = await repeatFixture();
+          const before = calls.length;
+          const classified = repeatedInputs.length;
+          repeatedAction = 'new';
+          try {
+            await db.pool.query('UPDATE approvals SET status=$2 WHERE id=$1', [
+              fixture.firstId,
+              status,
+            ]);
+            await finish(fixture.first.turnId);
+            await assert.rejects(
+              approvals.request(fixture.turn, fixture.action, fixture.args, { allowed: true }),
+              /pending or uncertain outcome/,
+            );
+            assert.equal(repeatedInputs.length, classified);
+            assert.equal(await proposal(fixture.turn.turnId), undefined);
+            assert.equal(calls.length, before);
+          } finally {
+            await finishRepeat(fixture);
+          }
+        }
+      });
+      await t.test(
+        'repeat classification failure and ordinary replies retain the completed result',
+        async () => {
+          for (const decision of ['same', 'uncertain', 'failure'] as const) {
+            const fixture = await repeatFixture('Use the existing threshold.');
+            const before = calls.length;
+            repeatedAction = decision === 'failure' ? 'new' : decision;
+            duringRepeat = async () => {
+              if (decision === 'failure') throw new Error('Synthetic review outage.');
+            };
+            try {
+              assert.deepEqual(
+                await approvals.request(fixture.turn, fixture.action, fixture.args, {
+                  allowed: true,
+                }),
+                (await stored(fixture.firstId)).result,
+              );
+              assert.equal(await proposal(fixture.turn.turnId), undefined);
+              assert.equal(calls.length, before);
+            } finally {
+              await finishRepeat(fixture);
+            }
+          }
+        },
+      );
+      await t.test('a repeated action cannot ask when admission refuses a question', async () => {
+        const fixture = await repeatFixture();
+        const before = calls.length;
+        repeatedAction = 'new';
+        try {
+          await assert.rejects(
+            approvals.request(fixture.turn, fixture.action, fixture.args, {
+              allowed: true,
+              admit: async (asks) => {
+                if (asks) throw new Error('A subagent cannot ask the owner.');
+              },
+            }),
+            /subagent cannot ask/,
+          );
+          assert.equal(await proposal(fixture.turn.turnId), undefined);
+          assert.equal(calls.length, before);
+        } finally {
+          await finishRepeat(fixture);
+        }
+      });
+      await t.test(
+        'a repeated action rechecks Stop, withdrawal and changed evidence after classification',
+        async () => {
+          for (const change of [
+            'stop',
+            'signal',
+            'withdraw',
+            'parent withdrawal',
+            'reply',
+            'question',
+            'outcome',
+            'chat',
+          ] as const) {
+            const fixture = await repeatFixture();
+            const before = calls.length;
+            const controller = new AbortController();
+            repeatedAction = 'new';
+            duringRepeat = async () => {
+              if (change === 'stop') await finish(fixture.turn.turnId, 'cancelled');
+              if (change === 'signal') controller.abort(new Error('Synthetic Stop.'));
+              if (change === 'withdraw')
+                await db.pool.query('UPDATE turns SET withdrawn=true WHERE id=$1', [
+                  fixture.turn.turnId,
+                ]);
+              if (change === 'parent withdrawal')
+                await db.pool.query('UPDATE turns SET withdrawn=true WHERE id=$1', [
+                  fixture.accepted.turnId,
+                ]);
+              if (change === 'reply')
+                await db.pool.query("UPDATE messages SET text='Do not run it again.' WHERE id=$1", [
+                  fixture.renewed.messageId,
+                ]);
+              if (change === 'question')
+                await db.pool.query("UPDATE messages SET text='A changed question.' WHERE id=$1", [
+                  fixture.questionId,
+                ]);
+              if (change === 'outcome')
+                await db.pool.query("UPDATE approvals SET status='uncertain' WHERE id=$1", [
+                  fixture.firstId,
+                ]);
+              if (change === 'chat') {
+                const later = await thread.submitUserMessage(
+                  'Do not run the synthetic workflow again.',
+                );
+                await finish(later.turnId, 'succeeded');
+              }
+            };
+            try {
+              await assert.rejects(
+                approvals.request(fixture.turn, fixture.action, fixture.args, {
+                  allowed: true,
+                  signal: controller.signal,
+                }),
+              );
+              assert.equal(await proposal(fixture.turn.turnId), undefined);
+              assert.equal(calls.length, before);
+            } finally {
+              await finishRepeat(fixture);
+            }
+          }
+        },
+      );
+      await t.test('concurrent repeated actions save only one new confirmation', async () => {
+        const fixture = await repeatFixture();
+        const before = calls.length;
+        repeatedAction = 'new';
+        let arrived = 0;
+        let release!: () => void;
+        const ready = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        duringRepeat = async () => {
+          if (++arrived === 2) release();
+          await ready;
+        };
+        try {
+          const results = await Promise.allSettled([
+            approvals.request(fixture.turn, fixture.action, fixture.args, { allowed: true }),
+            approvals.request(fixture.turn, fixture.action, fixture.args, { allowed: true }),
+          ]);
+          assert.equal(results.filter((result) => result.status === 'fulfilled').length, 1);
+          assert.equal(
+            (
+              await db.pool.query("SELECT 1 FROM approvals WHERE turn_id=$1 AND status='pending'", [
+                fixture.turn.turnId,
+              ])
+            ).rowCount,
+            1,
+          );
+          assert.equal(calls.length, before);
+        } finally {
+          await finishRepeat(fixture);
+        }
+      });
+      await t.test(
+        'a repeated action cannot use an older reply after a newer owner message',
+        async () => {
+          const fixture = await repeatFixture();
+          const before = calls.length;
+          const classified = repeatedInputs.length;
+          repeatedAction = 'new';
+          try {
+            const later = await thread.submitUserMessage(
+              'Do not run it again. Explain the first result only.',
+            );
+            await finish(later.turnId, 'succeeded');
+            assert.deepEqual(
+              await approvals.request(fixture.turn, fixture.action, fixture.args, {
+                allowed: true,
+                expectedChatRevision: later.messageId,
+              }),
+              (await stored(fixture.firstId)).result,
+            );
+            assert.equal(repeatedInputs.length, classified);
+            assert.equal(await proposal(fixture.turn.turnId), undefined);
+            assert.equal(calls.length, before);
+          } finally {
+            await finishRepeat(fixture);
+          }
+        },
+      );
+      await t.test(
+        'a repeated action uses only the latest ordinary reply and exact target',
+        async () => {
+          const fixture = await repeatFixture();
+          const before = calls.length;
+          try {
+            const question = 'Should I explain the synthetic result?';
+            await thread.reply(fixture.turn, question);
+            await db.pool.query(
+              "UPDATE turns SET status='waiting',waiting_reason='question' WHERE id=$1",
+              [fixture.turn.turnId],
+            );
+            const questionId = (
+              await db.pool.query(
+                "SELECT id FROM messages WHERE turn_id=$1 AND role='assistant' ORDER BY created_at DESC,id DESC LIMIT 1",
+                [fixture.turn.turnId],
+              )
+            ).rows[0].id;
+            const latest = await messages.submit('Explain that result.', [], {
+              replyToMessageId: questionId,
+            });
+            const turn = await running(latest.turnId);
+            repeatedAction = 'same';
+            assert.deepEqual(
+              await approvals.request(turn, fixture.action, fixture.args, { allowed: true }),
+              (await stored(fixture.firstId)).result,
+            );
+            assert.equal(repeatedInputs.at(-1)?.reply, 'Explain that result.');
+            assert.equal(repeatedInputs.at(-1)?.question, question);
+            assert.deepEqual(repeatedInputs.at(-1)?.args, fixture.args);
+            assert.equal(await proposal(turn.turnId), undefined);
+            assert.equal(calls.length, before);
+            await finish(turn.turnId, 'succeeded');
+          } finally {
+            await finishRepeat(fixture);
+          }
+        },
+      );
+      await t.test(
+        'a workflow repeat cannot renew an email in the same authority chain',
+        async () => {
+          const first = await begin('Run the synthetic workflow and email its report.');
+          const action = 'SYNTHETIC_EXECUTE_WORKFLOW';
+          const args = { workflowId: `synthetic-${randomUUID()}` };
+          const emailArgs = {
+            recipient_email: 'synthetic@example.test',
+            subject: `Synthetic ${randomUUID()}`,
+            body: 'Synthetic report.',
+          };
+          const workflow = await propose(first, action, args);
+          await finish(first.turnId);
+          const firstAnswer = await confirm(workflow, true);
+          assert.ok(firstAnswer && 'turnId' in firstAnswer);
+          await execute(workflow);
+          const email = await propose(
+            await running(firstAnswer.turnId),
+            'GMAIL_SEND_EMAIL',
+            emailArgs,
+          );
+          await finish(firstAnswer.turnId);
+          const emailAnswer = await confirm(email, true);
+          assert.ok(emailAnswer && 'turnId' in emailAnswer);
+          await execute(email);
+          await thread.reply(emailAnswer, 'Which synthetic workflow should I run again?');
+          await db.pool.query(
+            "UPDATE turns SET status='waiting',waiting_reason='question' WHERE id=$1",
+            [emailAnswer.turnId],
+          );
+          const question = (
+            await db.pool.query(
+              "SELECT id FROM messages WHERE turn_id=$1 AND role='assistant' ORDER BY created_at DESC,id DESC LIMIT 1",
+              [emailAnswer.turnId],
+            )
+          ).rows[0].id;
+          const latest = await messages.submit(
+            'Run the synthetic workflow again. Do not send another email.',
+            [],
+            { replyToMessageId: question },
+          );
+          const turn = await running(latest.turnId);
+          const before = calls.length;
+          duringRepeat = async (input) => {
+            repeatedAction = input.action === action ? 'new' : 'same';
+          };
+          try {
+            assert.deepEqual(
+              await approvals.request(turn, 'GMAIL_SEND_EMAIL', emailArgs, { allowed: true }),
+              (await stored(email)).result,
+            );
+            assert.equal(await proposal(turn.turnId), undefined);
+            const result = await approvals.request(turn, action, args, { allowed: true });
+            assert.ok(result && typeof result === 'object' && appConfirmation in result);
+            assert.equal((await proposal(turn.turnId)).source_message_id, latest.messageId);
+            assert.equal(calls.length, before);
+          } finally {
+            duringRepeat = async () => {};
+            repeatedAction = 'same';
+            await db.pool.query(
+              "UPDATE turns SET status='succeeded',finished_at=now() WHERE id=ANY($1::uuid[])",
+              [[first.turnId, firstAnswer.turnId, emailAnswer.turnId, latest.turnId]],
+            );
+          }
+        },
+      );
+      await t.test(
+        'a repeated action refuses a missing request instead of returning the old result',
+        async () => {
+          const fixture = await repeatFixture();
+          const before = calls.length;
+          repeatedAction = 'new';
+          try {
+            await approvals.request(fixture.turn, fixture.action, fixture.args, { allowed: true });
+            const second = await proposal(fixture.turn.turnId);
+            await db.pool.query("UPDATE approvals SET status='expired' WHERE id=$1", [second.id]);
+            await db.pool.query('DELETE FROM messages WHERE id=$1', [fixture.renewed.messageId]);
+            assert.equal((await stored(second.id)).source_message_id, null);
+            await assert.rejects(
+              approvals.request(fixture.turn, fixture.action, fixture.args, { allowed: true }),
+              /no longer available/,
+            );
+            assert.equal(calls.length, before);
+          } finally {
+            await finishRepeat(fixture);
+          }
+        },
+      );
+      await t.test('a repeated action cannot pass a second unresolved matching row', async () => {
+        for (const status of ['pending', 'confirmed', 'executing', 'declined', 'uncertain']) {
+          const fixture = await repeatFixture();
+          const before = calls.length;
+          const duplicate = 'ffffffff-ffff-ffff-ffff-ffffffffffff';
+          repeatedAction = 'new';
+          try {
+            await db.pool.query(
+              'INSERT INTO approvals(id,owner_id,thread_id,turn_id,action,args,status,source_message_id,confirmation_message_id) SELECT $2,owner_id,thread_id,turn_id,action,args,$3,source_message_id,confirmation_message_id FROM approvals WHERE id=$1',
+              [fixture.firstId, duplicate, status],
+            );
+            await assert.rejects(
+              approvals.request(fixture.turn, fixture.action, fixture.args, { allowed: true }),
+              /pending or uncertain outcome/,
+            );
+            assert.equal(await proposal(fixture.turn.turnId), undefined);
+            assert.equal(calls.length, before);
+          } finally {
+            await db.pool.query('DELETE FROM approvals WHERE id=$1', [duplicate]);
+            await finishRepeat(fixture);
+          }
+        }
+      });
+      await t.test(
+        'a repeated action prepares one confirmation snapshot outside the turn lock',
+        async () => {
+          const fixture = await repeatFixture();
+          repeatedAction = 'new';
+          const details = { reason: 'Synthetic reason.' };
+          let prepared = 0;
+          describe = async (proposal) => {
+            assert.deepEqual(proposal.details, {
+              reason: 'Synthetic reason.',
+              account: { identity: 'Synthetic account' },
+            });
+            return defaultDescription();
+          };
+          try {
+            await approvals.request(fixture.turn, fixture.action, fixture.args, {
+              allowed: true,
+              details,
+              prepareConfirmation: async () => {
+                await db.pool.query('UPDATE turns SET prompt=prompt WHERE id=$1', [
+                  fixture.turn.turnId,
+                ]);
+                details.reason = 'A later mutation.';
+                prepared++;
+                return { account: { identity: 'Synthetic account' } };
+              },
+            });
+            assert.equal(prepared, 1);
+            assert.deepEqual((await proposal(fixture.turn.turnId)).details, {
+              reason: 'Synthetic reason.',
+              account: { identity: 'Synthetic account' },
+            });
+          } finally {
+            describe = defaultDescription;
+            await finishRepeat(fixture);
+          }
+        },
+      );
+      await t.test(
+        'a repeated action keeps task evidence separate from later main chat',
+        async () => {
+          for (const change of [
+            'main chat',
+            'task reply',
+            'task revision',
+            'task state',
+          ] as const) {
+            const fixture = await repeatFixture();
+            const taskId = randomUUID();
+            const sessionId = randomUUID();
+            const before = calls.length;
+            await db.pool.query(
+              "INSERT INTO tasks(id,owner_id,turn_id,title,done_when,now_text,session_id) VALUES($1,$2,$3,'Synthetic task','Done','Working',$4)",
+              [taskId, ownerId, fixture.turn.turnId, sessionId],
+            );
+            await db.pool.query(
+              'UPDATE turns SET task_id=$1,session_id=$2,background=true WHERE id=ANY($3::uuid[])',
+              [taskId, sessionId, [fixture.accepted.turnId, fixture.turn.turnId]],
+            );
+            repeatedAction = 'new';
+            duringRepeat = async () => {
+              if (change === 'main chat') {
+                const unrelated = await thread.submitUserMessage(
+                  'Explain a separate synthetic topic.',
+                );
+                await finish(unrelated.turnId, 'succeeded');
+              }
+              if (change === 'task reply')
+                await db.pool.query(
+                  "INSERT INTO messages(id,owner_id,thread_id,turn_id,role,text) VALUES($1,$2,$3,$4,'user','Do not run the task again.')",
+                  [randomUUID(), ownerId, fixture.turn.threadId, fixture.turn.turnId],
+                );
+              if (change === 'task revision')
+                await db.pool.query('UPDATE tasks SET revision=revision+1 WHERE id=$1', [taskId]);
+              if (change === 'task state')
+                await db.pool.query("UPDATE tasks SET state='cancelled' WHERE id=$1", [taskId]);
+            };
+            try {
+              const request = approvals.request(fixture.turn, fixture.action, fixture.args, {
+                allowed: true,
+              });
+              if (change === 'main chat') {
+                const result = await request;
+                assert.ok(result && typeof result === 'object' && appConfirmation in result);
+                assert.equal(
+                  (await proposal(fixture.turn.turnId)).source_message_id,
+                  fixture.renewed.messageId,
+                );
+              } else {
+                await assert.rejects(request, /repeat request changed/);
+                assert.equal(await proposal(fixture.turn.turnId), undefined);
+              }
+              assert.equal(calls.length, before);
+            } finally {
+              await db.pool.query('UPDATE turns SET task_id=NULL WHERE task_id=$1', [taskId]);
+              await db.pool.query('DELETE FROM tasks WHERE id=$1', [taskId]);
+              await finishRepeat(fixture);
+            }
+          }
+        },
+      );
+      await t.test('a withdrawn repeated action cannot fall back to the first result', async () => {
+        const fixture = await repeatFixture();
+        const before = calls.length;
+        repeatedAction = 'new';
+        try {
+          await approvals.request(fixture.turn, fixture.action, fixture.args, { allowed: true });
+          const second = await proposal(fixture.turn.turnId);
+          await db.pool.query("UPDATE approvals SET status='expired' WHERE id=$1", [second.id]);
+          await db.pool.query('UPDATE turns SET withdrawn=true WHERE id=$1', [fixture.turn.turnId]);
+          await assert.rejects(
+            approvals.request(fixture.turn, fixture.action, fixture.args, { allowed: true }),
+            /no longer available/,
+          );
+          assert.equal(calls.length, before);
+        } finally {
+          await finishRepeat(fixture);
+        }
+      });
       await t.test(
         'approval clicks bind the card, action, and client retry to the same approval',
         async () => {

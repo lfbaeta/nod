@@ -61,6 +61,13 @@ export interface ApprovalPresentation {
   action: string;
 }
 
+export interface ApprovalRepeat {
+  action: string;
+  args: Record<string, unknown>;
+  reply: string;
+  question: string;
+}
+
 export interface ChatConfirmationInput {
   text: string;
   displayText?: string;
@@ -288,6 +295,10 @@ export async function createApprovals(
   ) => Promise<string | ApprovalPresentation>,
   analytics?: CaptureAnalytics,
   redact: (text: string) => string = createErrorRedactor([]),
+  classifyRepeat?: (
+    input: ApprovalRepeat,
+    signal?: AbortSignal,
+  ) => Promise<'new' | 'same' | 'uncertain'>,
 ) {
   const failureReason = (error: unknown) =>
     Array.from(
@@ -335,6 +346,7 @@ export async function createApprovals(
       allowed?: boolean;
       run?: () => Promise<unknown>;
       details?: Record<string, unknown>;
+      prepareConfirmation?: () => Promise<Record<string, unknown>>;
       signal?: AbortSignal;
       sourceMessageId?: string | null;
       admit?: (asks: boolean) => Promise<void>;
@@ -355,9 +367,11 @@ export async function createApprovals(
     if (!encoded) throw new Error('The action has no arguments to save.');
     const snapshot = JSON.parse(encoded) as Record<string, unknown>;
     const fileObservation = action === 'LOCAL_FILES_READ' || action === 'LOCAL_FILES_IMPORT';
-    const details = options.details ? JSON.stringify(options.details) : undefined;
+    let details = options.details ? JSON.stringify(options.details) : undefined;
     turn = { ...turn };
     const allowed = options.allowed === true;
+    let needsConfirmation = !allowed;
+    let renewal: { id: string; key: string; messageId: string } | undefined;
     const expectedRevision = options.expectedRevision;
     options.signal?.throwIfAborted();
     await options.admit?.(!allowed);
@@ -408,6 +422,115 @@ export async function createApprovals(
         authorMessageId = author.id;
       }
       if (background) await lockKey(client, `approvals:${ownerId}:${turn.threadId}`);
+      const repeatCandidate = async (previous: { id: string }) => {
+        if (
+          background ||
+          steering ||
+          current.source !== 'user' ||
+          !current.message_id ||
+          !current.parent_turn_id
+        )
+          return undefined;
+        const reply = (
+          await client.query<{ id: string; text: string; question_id: string; question: string }>(
+            `SELECT m.id,m.text,q.id AS question_id,q.text AS question FROM messages m
+             JOIN turns p ON p.id=$4 AND p.owner_id=m.owner_id AND p.thread_id=m.thread_id AND p.waiting_reason='question'
+             JOIN messages q ON q.turn_id=p.id AND q.owner_id=p.owner_id AND q.thread_id=p.thread_id AND q.role='assistant' AND q.hidden_at IS NULL AND NOT ${withdrawnSql('q')}
+             WHERE m.id=$1 AND m.owner_id=$2 AND m.thread_id=$3 AND m.turn_id=$5 AND m.role='user'
+               AND m.approval_answer IS NULL AND m.hidden_at IS NULL AND NOT ${withdrawnSql('m')}
+               AND (m.reply_to_message_id IS NULL OR m.reply_to_message_id=q.id)
+               AND q.id=(SELECT latest.id FROM messages latest WHERE latest.turn_id=p.id AND latest.owner_id=p.owner_id AND latest.role='assistant' ORDER BY latest.created_at DESC,latest.id DESC LIMIT 1)
+               AND NOT EXISTS (SELECT 1 FROM approvals a WHERE a.confirmation_message_id=q.id AND a.owner_id=$2)`,
+            [current.message_id, ownerId, turn.threadId, current.parent_turn_id, current.id],
+          )
+        ).rows[0];
+        if (!reply) return undefined;
+        const revision = current.task_id
+          ? (
+              await client.query<{
+                revision: number;
+                state: string;
+                turn_id: string;
+                message_id: string;
+              }>(
+                `SELECT t.revision,t.state,t.turn_id,(SELECT m.id FROM messages m JOIN turns u ON u.owner_id=m.owner_id AND (u.id=m.turn_id OR u.message_id=m.id)
+                   WHERE m.owner_id=t.owner_id AND m.thread_id=$3 AND u.task_id=t.id AND u.source IN ('user','task')
+                     AND m.role='user' AND m.approval_answer IS NULL AND m.hidden_at IS NULL AND NOT ${withdrawnSql('m')}
+                   ORDER BY m.created_at DESC,m.id DESC LIMIT 1) AS message_id
+                 FROM tasks t WHERE t.id=$1 AND t.owner_id=$2`,
+                [current.task_id, ownerId, turn.threadId],
+              )
+            ).rows[0]
+          : await ownerChatRevision(client, ownerId, turn.threadId);
+        if (
+          current.task_id
+            ? !revision ||
+              typeof revision === 'string' ||
+              revision.state !== 'open' ||
+              revision.turn_id !== current.id ||
+              revision.message_id !== reply.id
+            : revision !== reply.id
+        )
+          return undefined;
+        return {
+          id: previous.id,
+          messageId: reply.id,
+          key: JSON.stringify([previous.id, current.id, current.parent_turn_id, reply, revision]),
+          input: { action, args: snapshot, reply: reply.text, question: reply.question },
+        };
+      };
+      if (renewal) {
+        const previous = (
+          await client.query<{ id: string }>(
+            "SELECT id FROM approvals WHERE id=$1 AND owner_id=$2 AND thread_id=$3 AND action=$4 AND args=$5::jsonb AND status='completed'",
+            [renewal.id, ownerId, turn.threadId, action, snapshot],
+          )
+        ).rows[0];
+        const candidate = previous && (await repeatCandidate(previous));
+        if (!candidate || candidate.key !== renewal.key)
+          throw conflict(
+            'The repeat request changed while it was being checked. This action did not run.',
+          );
+        if (
+          (
+            await client.query(
+              `SELECT 1 FROM approvals a JOIN approvals original ON original.id=$1 AND original.owner_id=a.owner_id AND original.thread_id=a.thread_id
+               WHERE a.owner_id=$2 AND a.source_message_id=original.source_message_id AND a.action=original.action AND a.args=original.args
+                 AND a.status NOT IN ('completed','expired') LIMIT 1`,
+              [renewal.id, ownerId],
+            )
+          ).rowCount
+        )
+          throw conflict('This exact action already has a pending or uncertain outcome.');
+      }
+      let repeatedScope = false;
+      if (!background && !steering) {
+        const messageIds = chain
+          .filter((item) => item.source === 'user' && item.message_id)
+          .map((item) => item.message_id as string);
+        const scope = (
+          await client.query<{ source_message_id: string | null }>(
+            `SELECT source_message_id FROM approvals WHERE thread_id=$1 AND owner_id=$2
+               AND (source_message_id=ANY($3::uuid[]) OR (source_message_id IS NULL AND turn_id=ANY($6::uuid[]))) AND action=$4 AND args=$5::jsonb
+             ORDER BY array_position($3::uuid[],source_message_id) NULLS FIRST,id LIMIT 1`,
+            [turn.threadId, ownerId, messageIds, action, snapshot, chain.map((item) => item.id)],
+          )
+        ).rows[0];
+        if (scope && scope.source_message_id !== authorMessageId) {
+          if (
+            !(
+              await client.query(
+                `SELECT 1 FROM messages m WHERE id=$1 AND owner_id=$2 AND thread_id=$3 AND role='user'
+                 AND approval_answer IS NULL AND hidden_at IS NULL AND NOT ${withdrawnSql('m')}`,
+                [scope.source_message_id, ownerId, turn.threadId],
+              )
+            ).rowCount
+          )
+            throw conflict('The request for this repeated action is no longer available.');
+          authorMessageId = scope.source_message_id;
+          repeatedScope = true;
+        }
+      }
       const previousAction = async () =>
         (background
           ? await client.query(
@@ -438,15 +561,23 @@ export async function createApprovals(
         previous = fileObservation ? await previousAction() : undefined;
       }
       if (previous) {
-        if (previous.status === 'completed') {
+        if (previous.status !== 'completed')
+          throw conflict('This exact action already has a pending or uncertain outcome.');
+        if (renewal && previous.id === renewal.id) {
+          authorMessageId = renewal.messageId;
+          repeatedScope = true;
+        } else {
+          const candidate =
+            previous.source_message_id !== current.message_id
+              ? await repeatCandidate(previous)
+              : undefined;
           if (fileObservation) await preflight?.(action, snapshot, expectedRevision, client);
-          return { cached: true as const, result: previous.result };
+          return { cached: true as const, result: previous.result, repeat: candidate };
         }
-        throw conflict('This exact action already has a pending or uncertain outcome.');
       }
       await preflight?.(action, snapshot, expectedRevision, client);
       if (
-        !allowed &&
+        (needsConfirmation || repeatedScope) &&
         (
           await client.query(
             "SELECT 1 FROM approvals WHERE turn_id=$1 AND owner_id=$2 AND status='pending'",
@@ -486,44 +617,71 @@ export async function createApprovals(
       return {
         authorMessageId,
         source: current.source,
+        repeatedScope,
         ...(describing ? { work: await workOf(client, current.task_id, schedule) } : {}),
       };
     };
     let question: string | undefined;
     let title: string | undefined;
-    if (!allowed) {
-      const existing = await withTurnLock(turn.turnId, (client) => inspect(client, true));
+    {
+      let existing = await withTurnLock(turn.turnId, (client) => inspect(client, true));
+      if ('repeat' in existing && existing.repeat && classifyRepeat) {
+        const candidate = existing.repeat;
+        const decision = await classifyRepeat(
+          structuredClone(candidate.input),
+          options.signal,
+        ).catch(() => 'uncertain' as const);
+        options.signal?.throwIfAborted();
+        if (decision === 'new') {
+          renewal = candidate;
+          needsConfirmation = true;
+          await options.admit?.(true);
+          existing = await withTurnLock(turn.turnId, (client) => inspect(client, true));
+        }
+      }
       if ('cached' in existing) {
         if (existing.cached) return existing.result;
         return { [appConfirmation]: existing.question as string };
       }
-      if (!describe) throw new Error('The confirmation formatter is unavailable.');
-      const presentation = await describe(
-        {
-          turn: { ...turn },
-          action,
-          args: JSON.parse(encoded),
-          ...(details || (replacesInstruction && instructionChange)
-            ? {
-                details: {
-                  ...(details ? JSON.parse(details) : {}),
-                  ...(replacesInstruction && instructionChange
-                    ? { scheduleDefinition: instructionChange.after }
-                    : {}),
-                },
-              }
-            : {}),
-          ...(existing.work ? { work: existing.work } : {}),
-        },
-        options.signal,
-      );
-      question = typeof presentation === 'string' ? presentation : presentation.question;
-      title = typeof presentation === 'string' ? undefined : presentation.action;
-      options.signal?.throwIfAborted();
-      if (typeof question !== 'string' || !question.trim())
-        throw new Error('The confirmation formatter did not produce a valid question.');
-      if (title !== undefined && (!title.trim() || title.length > 64 || /[\r\n]/.test(title)))
-        throw new Error('The confirmation model did not produce a valid action label.');
+      if (existing.repeatedScope && !needsConfirmation) {
+        needsConfirmation = true;
+        await options.admit?.(true);
+      }
+      if (needsConfirmation) {
+        if (options.prepareConfirmation)
+          details = JSON.stringify({
+            ...(details ? JSON.parse(details) : {}),
+            ...(await options.prepareConfirmation()),
+          });
+        options.signal?.throwIfAborted();
+        if (!describe) throw new Error('The confirmation formatter is unavailable.');
+        const presentation = await describe(
+          {
+            turn: { ...turn },
+            action,
+            args: JSON.parse(encoded),
+            ...(details || (replacesInstruction && instructionChange)
+              ? {
+                  details: {
+                    ...(details ? JSON.parse(details) : {}),
+                    ...(replacesInstruction && instructionChange
+                      ? { scheduleDefinition: instructionChange.after }
+                      : {}),
+                  },
+                }
+              : {}),
+            ...(existing.work ? { work: existing.work } : {}),
+          },
+          options.signal,
+        );
+        question = typeof presentation === 'string' ? presentation : presentation.question;
+        title = typeof presentation === 'string' ? undefined : presentation.action;
+        options.signal?.throwIfAborted();
+        if (typeof question !== 'string' || !question.trim())
+          throw new Error('The confirmation formatter did not produce a valid question.');
+        if (title !== undefined && (!title.trim() || title.length > 64 || /[\r\n]/.test(title)))
+          throw new Error('The confirmation model did not produce a valid action label.');
+      }
     }
     const saveProposal = async (client: PoolClient) => {
       if (
@@ -539,6 +697,8 @@ export async function createApprovals(
       if (instructionChange) await validateInstructionChange(client, ownerId, instructionChange);
       const inspected = await inspect(client);
       if ('cached' in inspected) return inspected;
+      if (inspected.repeatedScope && !question)
+        throw conflict('This repeated action needs a new confirmation. This action did not run.');
       await options.validate?.(client);
       options.signal?.throwIfAborted();
       if (!question) return { cached: false as const, authorMessageId: inspected.authorMessageId };

@@ -1114,6 +1114,88 @@ test('retired confirmation replies require high confidence to start a new reques
   }
 });
 
+test('repeated actions require an action-specific decision with high confidence', async () => {
+  let output: unknown;
+  const input = {
+    action: 'CONNECTED_MCP_CALL',
+    args: { tool: 'execute_workflow', input: { workflowId: 'synthetic-workflow' } },
+    reply: 'Set the threshold to 7 and run the synthetic workflow again.',
+    question: 'Which threshold should I use?',
+  };
+  const controller = new AbortController();
+  let receivedSignal: AbortSignal | undefined;
+  const trust = createTrust({
+    pool: {} as never,
+    ownerId: 'synthetic-owner',
+    review: async (instructions, received, signal, question) => {
+      assert.deepEqual(received, input);
+      assert.match(instructions, /never permits execution/);
+      assert.equal(question?.name, 'repeatedAction');
+      assert.deepEqual(
+        question?.choices.map(({ value }) => value),
+        ['new', 'same'],
+      );
+      receivedSignal = signal;
+      return output;
+    },
+  });
+  for (const [answer, expected] of [
+    [{ repeatedAction: 'new', probability: 0.98 }, 'uncertain'],
+    [{ repeatedAction: 'new', probability: '0.995' }, 'uncertain'],
+    [{ repeatedAction: 'new', probability: Number.NaN }, 'uncertain'],
+    [{ repeatedAction: 'new', probability: Number.POSITIVE_INFINITY }, 'uncertain'],
+    [{ repeatedAction: 'new', probability: 1.1 }, 'uncertain'],
+    [{ repeatedAction: 'new' }, 'uncertain'],
+    [{ repeatedAction: 'wrong', probability: 1 }, 'uncertain'],
+    [{ repeatedAction: 'new', probability: 0.995 }, 'new'],
+    [{ repeatedAction: 'same', probability: 0.995 }, 'same'],
+  ] as const) {
+    output = answer;
+    assert.equal(await trust.classifyRepeatedAction(input, controller.signal), expected);
+  }
+  assert.ok(receivedSignal);
+  assert.notEqual(receivedSignal, controller.signal);
+  assert.equal(receivedSignal.aborted, false);
+  controller.abort();
+  assert.equal(receivedSignal.aborted, true);
+});
+
+test('repeated action decisions keep their confidence threshold and refuse a late stopped answer', async () => {
+  const input = {
+    action: 'CONNECTED_MCP_CALL',
+    args: { tool: 'execute_workflow' },
+    reply: 'Run it again.',
+    question: 'Another run?',
+  };
+  const controller = new AbortController();
+  const stopped = createTrust({
+    pool: {} as never,
+    ownerId: 'synthetic-owner',
+    review: async () => {
+      controller.abort(new Error('Synthetic Stop.'));
+      return { repeatedAction: 'new', probability: 1 };
+    },
+  });
+  await assert.rejects(stopped.classifyRepeatedAction(input, controller.signal), /Synthetic Stop/);
+  const decisions = createTrust({
+    pool: {} as never,
+    ownerId: 'synthetic-owner',
+    review: async () => {
+      assert.fail('A selected decision provider must not fall back.');
+    },
+    decisions: {
+      check: async ({ input: received, question }, signal) => {
+        assert.deepEqual(received, input);
+        assert.equal(question.name, 'repeatedAction');
+        assert.equal(question.minProbability, 0.99);
+        assert.ok(signal);
+        return { repeatedAction: 'new', probability: 0.995 };
+      },
+    },
+  });
+  assert.equal(await decisions.classifyRepeatedAction(input), 'new');
+});
+
 test('native decision probabilities validate the wire type and retain refusal and cache costs', async (t) => {
   for (const provider of ['openai', 'typesafe', 'openrouter'] as const)
     await t.test(provider, async () => {

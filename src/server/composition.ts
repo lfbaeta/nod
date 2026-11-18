@@ -1768,6 +1768,7 @@ async function initializeApplication(
     communication.describe,
     captureAnalytics,
     createErrorRedactor(secrets),
+    (input, signal) => ledger.forOwner(() => trust.classifyRepeatedAction(input, signal)),
   );
   retireScheduleConfirmations = approvals.retireScheduleConfirmations;
   let channels: Awaited<ReturnType<typeof createChannels>> | undefined;
@@ -2024,7 +2025,7 @@ async function initializeApplication(
       if (question) {
         const values = question.choices.map(({ value }) => JSON.stringify(value)).join(', ');
         instructions +=
-          question.name === 'retiredReply'
+          question.name === 'retiredReply' || question.name === 'repeatedAction'
             ? `\nReply with only JSON containing exactly two properties: ${JSON.stringify(question.name)} set to one of ${values}, and "probability" set to a number from 0 to 1 expressing confidence in that label.`
             : `\nReply with only JSON with one property, ${JSON.stringify(question.name)}. Its value must be one of: ${values}.`;
       }
@@ -2365,6 +2366,62 @@ async function initializeApplication(
       browserStep: async (turn, request, signal) => {
         const args = browserStepArgs(request);
         const verdict = await trust.check(turn, 'NOD_browser', args, signal);
+        const prepareConfirmation = async () => {
+          const control = request.page.controls?.[0];
+          const namedControl =
+            control?.name.trim() && !['RootWebArea', 'WebArea', 'document'].includes(control.role);
+          const form = request.page.submits;
+          const knownForm = typeof form === 'object' && form.method.trim() && form.to.trim();
+          const enter =
+            (request.step.action === 'press' && isEnterKey(request.step.key)) ||
+            (request.step.action === 'type' && /[\r\n]/.test(request.step.text ?? ''));
+          if (
+            !namedControl &&
+            ((request.step.action === 'click' &&
+              (request.step.x !== undefined ||
+                request.step.y !== undefined ||
+                request.step.points !== undefined ||
+                !knownForm)) ||
+              (enter && !knownForm))
+          ) {
+            const action =
+              request.step.action === 'click'
+                ? 'click'
+                : request.step.action === 'type'
+                  ? 'typed line break'
+                  : 'Enter press';
+            throw new Error(
+              `The ${action} target is not identified. Inspect a fresh snapshot or screenshot and choose the actual control. Do not ask the owner to approve an unidentified ${action}.`,
+            );
+          }
+          const visible =
+            turn.browserId &&
+            (await computer
+              .act(
+                turn.browserId,
+                {
+                  action: 'evaluate',
+                  script: 'document.body.innerText',
+                  readOnly: true,
+                  expectOrigin: request.page.origin,
+                  expectUrl: request.page.url,
+                },
+                signal,
+              )
+              .then(
+                (page) => {
+                  try {
+                    return JSON.parse(page.text.slice(page.text.indexOf('\n') + 1)) as unknown;
+                  } catch {
+                    return undefined;
+                  }
+                },
+                () => undefined,
+              ));
+          return typeof visible === 'string' && visible.trim()
+            ? { pageText: publicText(visible.slice(0, 20_000)) }
+            : {};
+        };
         if (!verdict.confirm) {
           if (verdict.basis.kind === 'read') return 'run';
           const basis = verdict.basis;
@@ -2375,6 +2432,10 @@ async function initializeApplication(
           if (!verdict.chatRevision) return allowed;
           const handoff = await approvals.request(turn, 'NOD_browser', args, {
             allowed: true,
+            prepareConfirmation,
+            admit: async (asks) => {
+              if (asks && request.subagent) throw new Error('A subagent cannot ask the owner.');
+            },
             expectedChatRevision: verdict.chatRevision,
             signal,
             run: async () => 'run',
@@ -2385,67 +2446,12 @@ async function initializeApplication(
               ? handoff
               : { result: handoff };
         }
-        const control = request.page.controls?.[0];
-        const namedControl =
-          control?.name.trim() && !['RootWebArea', 'WebArea', 'document'].includes(control.role);
-        const form = request.page.submits;
-        const knownForm = typeof form === 'object' && form.method.trim() && form.to.trim();
-        const enter =
-          (request.step.action === 'press' && isEnterKey(request.step.key)) ||
-          (request.step.action === 'type' && /[\r\n]/.test(request.step.text ?? ''));
-        if (
-          !namedControl &&
-          ((request.step.action === 'click' &&
-            (request.step.x !== undefined ||
-              request.step.y !== undefined ||
-              request.step.points !== undefined ||
-              !knownForm)) ||
-            (enter && !knownForm))
-        ) {
-          const action =
-            request.step.action === 'click'
-              ? 'click'
-              : request.step.action === 'type'
-                ? 'typed line break'
-                : 'Enter press';
-          throw new Error(
-            `The ${action} target is not identified. Inspect a fresh snapshot or screenshot and choose the actual control. Do not ask the owner to approve an unidentified ${action}.`,
-          );
-        }
         if (request.subagent) return 'refused';
-        const visible =
-          turn.browserId &&
-          (await computer
-            .act(
-              turn.browserId,
-              {
-                action: 'evaluate',
-                script: 'document.body.innerText',
-                readOnly: true,
-                expectOrigin: request.page.origin,
-                expectUrl: request.page.url,
-              },
-              signal,
-            )
-            .then(
-              (page) => {
-                try {
-                  return JSON.parse(page.text.slice(page.text.indexOf('\n') + 1)) as unknown;
-                } catch {
-                  return undefined;
-                }
-              },
-              () => undefined,
-            ));
         const result = await approvals.request(turn, 'NOD_browser', args, {
           signal,
           expectedChatRevision: verdict.chatRevision,
-          details: {
-            reason: verdict.reason,
-            ...(typeof visible === 'string' && visible.trim()
-              ? { pageText: publicText(visible.slice(0, 20_000)) }
-              : {}),
-          },
+          details: { reason: verdict.reason },
+          prepareConfirmation,
         });
         return result && typeof result === 'object' && appConfirmation in result
           ? result
@@ -2819,114 +2825,132 @@ async function initializeApplication(
         const verdict = await trust.check(turn, action, resolved ?? args, options.signal);
         await options.admit?.(verdict.confirm);
         const prepared = resolved ?? (await prepare());
-        const connected =
-          http ??
-          (verdict.confirm && action === 'CONNECTED_MCP_CALL'
-            ? await discovered.approvalDetails(action, prepared, options.signal)
-            : undefined);
-        const account =
-          !connected && verdict.confirm && typeof prepared.connectionId === 'string'
-            ? (await integrations.list(ownerId, { refresh: false })).find(
-                (item) => item.connectionId === prepared.connectionId,
-              )
-            : undefined;
-        const path = account?.accessPaths?.find((item) => item.id === prepared.pathId);
-        let target:
-          | ReturnType<typeof gmailMessageTarget>
-          | {
-              draftId: string;
-              subject?: string;
-              from?: string;
-              to?: string;
-              cc?: string;
-              bcc?: string;
-            };
+        let connected = http;
         let deleteBinding: string | undefined;
-        let verifiedDraftMessageId: string | undefined;
-        const deletingDraft = action === 'GMAIL_DELETE_DRAFT';
-        if (verdict.confirm && (action === 'GMAIL_DELETE_MESSAGE' || deletingDraft)) {
-          const itemId = deletingDraft ? prepared.draft_id : prepared.message_id;
-          const item = deletingDraft ? 'draft' : 'message';
-          const connectionId = prepared.connectionId;
-          if (typeof itemId !== 'string' || !itemId.trim() || typeof connectionId !== 'string')
-            throw new Error(`Nod cannot identify the Gmail ${item} proposed for deletion.`);
-          deleteBinding = await integrations.binding(connectionId);
-          if (!deleteBinding)
-            throw new Error('The selected Gmail account is no longer available for deletion.');
-          let boundAccountId: unknown;
-          try {
-            boundAccountId = JSON.parse(deleteBinding)[0];
-          } catch {}
-          if (!account?.accountId || account.accountId !== boundAccountId)
-            throw new Error('The selected Gmail account changed before deletion was proposed.');
-          const readAction = deletingDraft
-            ? 'GMAIL_GET_DRAFT'
-            : 'GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID';
-          const metadataArgs = {
-            connectionId,
-            format: 'metadata',
-            ...(deletingDraft ? { draft_id: itemId } : { message_id: itemId }),
-            ...(typeof prepared.user_id === 'string' ? { user_id: prepared.user_id } : {}),
-          };
-          const readVerdict = await trust.check(turn, readAction, metadataArgs, options.signal);
-          if (readVerdict.confirm)
-            throw new Error(
-              readVerdict.reason === 'rule'
-                ? `Your rules require confirmation before reading this Gmail ${item}, so Nod did not identify it or propose deletion. Allow this read in your rules before asking to delete it.`
-                : deletingDraft
-                  ? 'Nod could not authorize the Gmail draft read needed to identify this draft, so it did not propose deletion.'
-                  : 'Nod could not authorize the Gmail metadata read needed to identify this message, so it did not propose deletion.',
-            );
-          let observed: unknown;
-          try {
-            observed = await integrations.execute(
-              ownerId,
-              readAction,
-              metadataArgs,
-              turn,
-              options.signal,
-              deleteBinding,
-              readWork,
-            );
-          } catch (error) {
-            options.signal?.throwIfAborted();
-            throw new Error(
-              `The Gmail ${deletingDraft ? 'draft' : 'metadata'} read failed: ${safeIntegrationFailure(error)} Nod did not ask for approval or delete the ${item}.`,
-            );
-          }
-          await ledger.action(turn.turnId, readAction, readVerdict.basis);
-          if (deletingDraft) {
-            const draft = gmailDraftTarget(observed, itemId);
-            if (draft) {
-              const { messageId, ...visible } = draft;
-              verifiedDraftMessageId = messageId;
-              target = visible;
+        const prepareConfirmation = async () => {
+          connected ??=
+            action === 'CONNECTED_MCP_CALL'
+              ? await discovered.approvalDetails(action, prepared, options.signal)
+              : undefined;
+          const account =
+            !connected && typeof prepared.connectionId === 'string'
+              ? (await integrations.list(ownerId, { refresh: false })).find(
+                  (item) => item.connectionId === prepared.connectionId,
+                )
+              : undefined;
+          const path = account?.accessPaths?.find((item) => item.id === prepared.pathId);
+          let target:
+            | ReturnType<typeof gmailMessageTarget>
+            | {
+                draftId: string;
+                subject?: string;
+                from?: string;
+                to?: string;
+                cc?: string;
+                bcc?: string;
+              };
+          let verifiedDraftMessageId: string | undefined;
+          const deletingDraft = action === 'GMAIL_DELETE_DRAFT';
+          if (action === 'GMAIL_DELETE_MESSAGE' || deletingDraft) {
+            const itemId = deletingDraft ? prepared.draft_id : prepared.message_id;
+            const item = deletingDraft ? 'draft' : 'message';
+            const connectionId = prepared.connectionId;
+            if (typeof itemId !== 'string' || !itemId.trim() || typeof connectionId !== 'string')
+              throw new Error(`Nod cannot identify the Gmail ${item} proposed for deletion.`);
+            deleteBinding = await integrations.binding(connectionId);
+            if (!deleteBinding)
+              throw new Error('The selected Gmail account is no longer available for deletion.');
+            let boundAccountId: unknown;
+            try {
+              boundAccountId = JSON.parse(deleteBinding)[0];
+            } catch {}
+            if (!account?.accountId || account.accountId !== boundAccountId)
+              throw new Error('The selected Gmail account changed before deletion was proposed.');
+            const readAction = deletingDraft
+              ? 'GMAIL_GET_DRAFT'
+              : 'GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID';
+            const metadataArgs = {
+              connectionId,
+              format: 'metadata',
+              ...(deletingDraft ? { draft_id: itemId } : { message_id: itemId }),
+              ...(typeof prepared.user_id === 'string' ? { user_id: prepared.user_id } : {}),
+            };
+            const readVerdict = await trust.check(turn, readAction, metadataArgs, options.signal);
+            if (readVerdict.confirm)
+              throw new Error(
+                readVerdict.reason === 'rule'
+                  ? `Your rules require confirmation before reading this Gmail ${item}, so Nod did not identify it or propose deletion. Allow this read in your rules before asking to delete it.`
+                  : deletingDraft
+                    ? 'Nod could not authorize the Gmail draft read needed to identify this draft, so it did not propose deletion.'
+                    : 'Nod could not authorize the Gmail metadata read needed to identify this message, so it did not propose deletion.',
+              );
+            let observed: unknown;
+            try {
+              observed = await integrations.execute(
+                ownerId,
+                readAction,
+                metadataArgs,
+                turn,
+                options.signal,
+                deleteBinding,
+                readWork,
+              );
+            } catch (error) {
+              options.signal?.throwIfAborted();
+              throw new Error(
+                `The Gmail ${deletingDraft ? 'draft' : 'metadata'} read failed: ${safeIntegrationFailure(error)} Nod did not ask for approval or delete the ${item}.`,
+              );
             }
-          } else target = gmailMessageTarget(observed, itemId);
-          if (!target)
-            throw new Error(
-              `Nod cannot verify which Gmail ${item} this would delete, so it did not ask for approval or delete it.`,
-            );
-        }
+            await ledger.action(turn.turnId, readAction, readVerdict.basis);
+            if (deletingDraft) {
+              const draft = gmailDraftTarget(observed, itemId);
+              if (draft) {
+                const { messageId, ...visible } = draft;
+                verifiedDraftMessageId = messageId;
+                target = visible;
+              }
+            } else target = gmailMessageTarget(observed, itemId);
+            if (!target)
+              throw new Error(
+                `Nod cannot verify which Gmail ${item} this would delete, so it did not ask for approval or delete it.`,
+              );
+          }
+          return {
+            ...(verdict.confirm ? { reason: verdict.reason } : {}),
+            ...(account
+              ? {
+                  account: {
+                    name: account.name,
+                    identity: account.accountEmail ?? account.accountName,
+                    ...(path ? { method: path.kind, endpoint: path.endpoint } : {}),
+                  },
+                }
+              : {}),
+            ...(connected ?? {}),
+            ...(target ? { target } : {}),
+            ...(deleteBinding ? { verifiedBinding: deleteBinding } : {}),
+            ...(verifiedDraftMessageId ? { verifiedDraftMessageId } : {}),
+          };
+        };
         const result = await approvals.request(turn, action, prepared, {
           allowed: !verdict.confirm,
+          admit: options.admit,
           expectedChatRevision:
             verdict.confirm || verdict.basis.kind !== 'read' ? verdict.chatRevision : undefined,
           signal: options.signal,
-          validate: connected
-            ? async (client) => {
-                if (
-                  (await discovered.binding(String(prepared.connectionId), client)) !==
-                  connected.verifiedBinding
-                )
-                  throw Object.assign(
-                    new Error(
-                      `This connected account changed before ${verdict.confirm ? 'confirmation' : 'execution'}.`,
-                    ),
-                    { notRun: true },
-                  );
-              }
-            : undefined,
+          validate: async (client) => {
+            if (
+              connected &&
+              (await discovered.binding(String(prepared.connectionId), client)) !==
+                connected.verifiedBinding
+            )
+              throw Object.assign(
+                new Error(
+                  `This connected account changed before ${verdict.confirm ? 'confirmation' : 'execution'}.`,
+                ),
+                { notRun: true },
+              );
+          },
           run: async () => {
             const result = await integrations.execute(
               ownerId,
@@ -2945,22 +2969,8 @@ async function initializeApplication(
             );
             return result;
           },
-          details: {
-            ...(verdict.confirm ? { reason: verdict.reason } : {}),
-            ...(account
-              ? {
-                  account: {
-                    name: account.name,
-                    identity: account.accountEmail ?? account.accountName,
-                    ...(path ? { method: path.kind, endpoint: path.endpoint } : {}),
-                  },
-                }
-              : {}),
-            ...(connected ?? {}),
-            ...(target ? { target } : {}),
-            ...(deleteBinding ? { verifiedBinding: deleteBinding } : {}),
-            ...(verifiedDraftMessageId ? { verifiedDraftMessageId } : {}),
-          },
+          details: verdict.confirm ? { reason: verdict.reason } : {},
+          prepareConfirmation,
         });
         return result;
       },
