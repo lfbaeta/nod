@@ -86,9 +86,13 @@ async function waitFor(predicate) {
   assert.fail('The isolated updater did not reach its expected state.');
 }
 
-async function start() {
+async function start({ hold = false } = {}) {
   await rm(stop, { force: true });
-  child = spawn(executable, [], { env: environment, stdio: 'ignore', windowsHide: true });
+  child = spawn(executable, [], {
+    env: { ...environment, NOD_UPDATE_FIXTURE_HOLD: hold ? '1' : '0' },
+    stdio: 'ignore',
+    windowsHide: true,
+  });
   await new Promise((resolve, reject) => {
     child.once('spawn', resolve);
     child.once('error', reject);
@@ -100,12 +104,13 @@ async function start() {
   });
 }
 
-async function replace(directory) {
+async function replace(directory, relaunch = true) {
   const { command, args, env } = windowsInstallCommand({
     directory,
     appPath: executable,
     pid: child.pid,
     systemRoot: process.env.SYSTEMROOT,
+    relaunch,
   });
   const operation = run(command, args, { env: { ...environment, ...env }, timeout: 180_000 });
   const result = operation.then(
@@ -211,7 +216,7 @@ app.whenReady().then(async () => {
   for (const name of ['settings.json', 'profile.json', 'vault', 'identity-checkpoint', 'integration-identity/' + hash(owner) + '.encrypted', 'integration-identity/' + hash(owner) + '.public']) files[name] = hash(await readFile(join(profile, name)));
   await record('ready', { files, keyHash: hash(key), preferences: saved, publicKey: identity.publicKey, managedOwner: identity.userId,
     identityProof: sign(null, Buffer.from(${JSON.stringify(challenge)} + ':' + app.getVersion()), identity.key).toString('base64url') });
-  if (app.getVersion() === '1.0.1') { await record('stopped'); app.exit(0); }
+  if (app.getVersion() === '1.0.1' && process.env.NOD_UPDATE_FIXTURE_HOLD !== '1') { await record('stopped'); app.exit(0); }
   else {
     let stopping = false;
     setInterval(async () => {
@@ -414,20 +419,14 @@ app.whenReady().then(async () => {
   assert.deepEqual(updated.preferences, first.preferences);
   verifyIdentity(updated);
   receipt.stage = 'installing on quit without relaunch';
+  const runningUpdated = await start({ hold: true });
+  assert.equal(runningUpdated.version, '1.0.1');
+  verifyIdentity(runningUpdated);
   const readyBeforeQuitInstall = (await recorded()).filter(
     (entry) => entry.event === 'ready',
   ).length;
-  const quitInstall = windowsInstallCommand({
-    directory: dirname(installers['1.0.1']),
-    appPath: executable,
-    pid: updated.pid,
-    systemRoot: process.env.SYSTEMROOT,
-    relaunch: false,
-  });
-  await run(quitInstall.command, quitInstall.args, {
-    env: { ...environment, ...quitInstall.env },
-    timeout: 180_000,
-  });
+  const quitInstall = await replace(dirname(installers['1.0.1']), false);
+  assert.equal(quitInstall.ok, true, quitInstall.error?.message);
   await delay(500);
   assert.equal(
     (await recorded()).filter((entry) => entry.event === 'ready').length,

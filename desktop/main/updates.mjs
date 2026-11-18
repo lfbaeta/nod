@@ -551,8 +551,9 @@ export function startDesktopUpdateChecks({
   };
   powerMonitor.on('resume', resume);
   if (defer) {
-    due = Date.now() + retry;
-    timer = setTimeout(run, retry);
+    const delay = 15 * 60_000;
+    due = Date.now() + delay;
+    timer = setTimeout(run, delay);
     timer.unref?.();
   } else void run();
   return () => {

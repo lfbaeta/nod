@@ -7419,7 +7419,7 @@ test('automatic update checks retry failures sooner and return to the normal int
   }
 });
 
-test('a start during a Mac update install leaves the staged update alone until one retry interval passes', async (t) => {
+test('a start during a Mac update install waits fifteen minutes even with a shorter failure retry', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
   const powerMonitor = new EventEmitter();
   let calls = 0;
@@ -7436,7 +7436,7 @@ test('a start during a Mac update install leaves the staged update alone until o
   const settle = () => new Promise((resolve) => setImmediate(resolve));
   await settle();
   powerMonitor.emit('resume');
-  t.mock.timers.tick(4);
+  t.mock.timers.tick(15 * 60_000 - 1);
   await settle();
   assert.equal(calls, 0);
   t.mock.timers.tick(1);
