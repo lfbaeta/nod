@@ -50,19 +50,23 @@ export default scenario({
     };
   },
   async play(session) {
-    await session.say('What is my latest email from tonight?');
+    await session.say('What is my latest email?');
   },
   expect() {
     return [
       check(
         'read-gmail',
-        (run) => run.tools.some((call) => call.name === 'apps' && !call.isError),
+        (run) =>
+          run.tools.some(
+            (call) =>
+              call.name === 'apps' && !call.isError && /^GMAIL_/.test(String(call.input?.action)),
+          ),
         {
           aspect: 'process',
         },
       ),
       check('named-the-newest-email', (run) => ({
-        pass: run.said.includes(newest),
+        pass: /harbour lights/i.test(run.said),
         evidence: run.said.slice(0, 400),
       })),
     ];
