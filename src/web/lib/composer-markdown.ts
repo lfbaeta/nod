@@ -32,6 +32,9 @@ const markdown = unified()
   });
 const linkify = new LinkifyIt({ fuzzyLink: true });
 const formatted = ['delete', 'emphasis', 'inlineCode', 'link', 'strong'];
+let verdicts = new Map<string, boolean>();
+let previousVerdicts = verdicts;
+const entity = /&#x([0-9a-f]+);/iy;
 
 function literal(value: string): PhrasingContent[] {
   if (!value.startsWith('/') && safeMessageLink(value, window.location.origin))
@@ -242,13 +245,18 @@ function isFormatted(node: { type: string; value?: unknown }) {
   return formatted.includes(node.type) || (node.type === 'html' && node.value === '<u>');
 }
 
+function isPlain(child: PhrasingContent): child is Html {
+  return child.type === 'html' && !isFormatted(child);
+}
+
 function nearFormatting(value: string, before: boolean, after: boolean) {
   const lines = value.split('\n');
   return lines
     .flatMap((line, number) => {
       const first = number === 0 && before;
       const last = number === lines.length - 1 && after;
-      if (/^ {0,3}(```|~~~|<)/.test(line) || (first && last && line.length <= 2000)) return [line];
+      if (!line.trim() || /^ {0,3}(```|~~~|<)/.test(line) || (first && last && line.length <= 2000))
+        return [line];
       if (first && last) return [`${line.slice(0, 1000)} ${line.slice(-1000)}`];
       if (first) return [line.slice(0, 1000)];
       if (last) return [line.slice(-1000)];
@@ -259,13 +267,14 @@ function nearFormatting(value: string, before: boolean, after: boolean) {
 
 function keepsFormatting(children: PhrasingContent[], heading?: Heading) {
   if (!children.some((child) => child.type === 'html' && /[*_~`]/.test(child.value))) return true;
-  const plain = (child: PhrasingContent): child is Html =>
-    child.type === 'html' && !isFormatted(child);
-  const large = children.reduce((size, child) => size + (plain(child) ? child.value.length : 0), 0);
+  const large = children.reduce(
+    (size, child) => size + (isPlain(child) ? child.value.length : 0),
+    0,
+  );
   const checked =
     large > 5000
       ? children.map((child, index) =>
-          plain(child)
+          isPlain(child)
             ? {
                 ...child,
                 value: nearFormatting(child.value, index > 0, index < children.length - 1),
@@ -273,23 +282,46 @@ function keepsFormatting(children: PhrasingContent[], heading?: Heading) {
             : child,
         )
       : children;
-  const parts = checked.map((child) => (plain(child) ? child.value : phrasingMarkdown([child])));
-  const prefix = heading ? `${'#'.repeat(heading.depth)} ` : '';
+  const key = `${heading?.depth ?? 0}${JSON.stringify(checked)}`;
+  const verdict = verdicts.get(key) ?? previousVerdicts.get(key) ?? parsesBack(checked, heading);
+  verdicts.set(key, verdict);
+  return verdict;
+}
+
+function parsesBack(checked: PhrasingContent[], heading?: Heading) {
+  const parts = checked.map((child, index) => {
+    const [previous, next] = [checked[index - 1], checked[index + 1]];
+    if (isPlain(child)) return child.value;
+    if (isFormatted(child) || previous?.type !== 'html' || next?.type !== 'html')
+      return phrasingMarkdown([child]);
+    return phrasingMarkdown([previous, child, next]).slice(
+      previous.value.length,
+      -next.value.length,
+    );
+  });
   const source = markdown.stringify({
     type: 'root',
     children: [{ ...(heading ?? { type: 'paragraph' }), children: checked } as Heading | Paragraph],
   });
+  const prefix = heading && source.startsWith('#') ? `${'#'.repeat(heading.depth)} ` : '';
   const joined = prefix + parts.join('');
   const offsets: number[] = [];
   let at = 0;
-  for (const unit of joined.split('')) {
-    offsets.push(at);
-    if (source[at] === unit) at++;
-    else {
-      const entity = source.slice(at).match(/^&#x([0-9a-f]+);/i);
-      if (!entity || String.fromCodePoint(parseInt(entity[1], 16)) !== unit) return false;
-      at += entity[0].length;
+  for (const char of joined) {
+    if (char === '\\' && !source.startsWith(char, at)) {
+      offsets.push(at);
+      continue;
     }
+    if (char !== '\\' && source[at] === '\\' && source.startsWith(char, at + 1)) at++;
+    offsets.push(at, ...(char.length > 1 ? [at + 1] : []));
+    if (source.startsWith(char, at)) {
+      at += char.length;
+      continue;
+    }
+    entity.lastIndex = at;
+    const match = entity.exec(source);
+    if (!match || String.fromCodePoint(parseInt(match[1], 16)) !== char) return false;
+    at += match[0].length;
   }
   offsets.push(at);
   const expected = new Set<string>();
@@ -310,6 +342,7 @@ function keepsFormatting(children: PhrasingContent[], heading?: Heading) {
 function serializeComposerMarkdown(document: ProseMirrorNode, display = false) {
   const content: JSONContent[] = document.toJSON().content ?? [];
   const tree: Root = { type: 'root', children: blocks(content, display) };
+  if (!display) [previousVerdicts, verdicts] = [verdicts, new Map()];
   const escape = (run: string) => run.replace(/./g, '\\$&');
   visit(tree, (node) => {
     if (display || !('children' in node) || !node.children.some((child) => child.type === 'html'))

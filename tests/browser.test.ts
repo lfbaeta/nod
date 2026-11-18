@@ -4731,6 +4731,7 @@ test('composer preserves keyboard shortcuts, upload retries, previews and failed
           'a\\***x**\\*b',
           '\\*\\**x*',
           '\\*!\\**x*',
+          '\\~a\nb *x*\\~',
           '\\*Y\\* \\**Y*\\*',
           'y'.repeat(5000) + '\n\\\u0060a \u0060x\u0060',
           '\\\u0060a \u0060x\u0060',
@@ -4741,10 +4742,14 @@ test('composer preserves keyboard shortcuts, upload retries, previews and failed
           await submit();
           assert.deepEqual(parseComposerMarkdown(sends.at(-1).text), parseComposerMarkdown(draft));
         }
-        const fenceHeading = '# \u0060\u0060\u0060a *x* *';
-        await act(async () => replaceText(fenceHeading));
-        await submit();
-        assert.equal(sends.at(-1).text.trimEnd(), fenceHeading);
+        for (const [draft, sent] of [
+          ['# \u0060\u0060\u0060a *x* *', '# \u0060\u0060\u0060a *x* *'],
+          ['**Note:**&#x73;ee_it', '**Note:**&#x73;ee_it'],
+        ]) {
+          await act(async () => replaceText(draft));
+          await submit();
+          assert.equal(sends.at(-1).text.trimEnd(), sent);
+        }
         await act(async () => replaceText('| label | value |\n| --- | --- |\n| first | second |'));
         await pasteAtEnd('table tr:last-child td:first-child p', 'A|B\\|C\nD');
         await submit();
