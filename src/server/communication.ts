@@ -256,7 +256,8 @@ export function createCommunication(options: {
     }
     if (proposal.action === 'NOD_browser') {
       delete args.target;
-      if (args.command && typeof args.command === 'object' && !Array.isArray(args.command)) {
+      if (args.step === 'click') delete args.command;
+      else if (args.command && typeof args.command === 'object' && !Array.isArray(args.command)) {
         const command = { ...(args.command as Record<string, unknown>) };
         delete command.selector;
         delete command.targetSelector;

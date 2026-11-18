@@ -212,6 +212,9 @@ test('browser confirmation uses the page as context without displaying its actio
         'Enter your order number to check ticket cancellation.',
       );
       assert.deepEqual(request.data.args.typedOnPage, ['SYNTHETIC-42']);
+      assert.equal(request.data.args.step, 'click');
+      assert.deepEqual(request.data.args.control, [{ role: 'button', name: 'Submit' }]);
+      assert.equal(request.data.args.command, undefined);
       assert.equal(request.data.args.connectionId, undefined);
       assert.equal(request.data.details.verifiedBinding, undefined);
       assert.equal(request.data.args.api_key, '[redacted]');
@@ -314,6 +317,39 @@ test('a complete schedule approval keeps ordinary text and still hides Basic cre
     );
   }
   assert.equal(calls, 2);
+});
+
+test('browser wording keeps material command facts for steps other than clicks', async () => {
+  for (const command of [
+    { action: 'press', key: 'Enter', selector: '@e3' },
+    { action: 'select', text: 'Synthetic company', selector: '@e3' },
+    { action: 'type', text: 'Synthetic message\n', selector: '@e3' },
+    { action: 'evaluate', script: 'document.querySelector("form").requestSubmit()' },
+  ]) {
+    let calls = 0;
+    const communication = createCommunication({
+      pool: { query: async () => ({ rows: [] }) } as unknown as pg.Pool,
+      ownerId: 'synthetic-owner',
+      review: async (_instructions, input) => {
+        calls++;
+        const request = input as Record<string, any>;
+        const { selector: _selector, ...material } = command;
+        assert.equal(request.data.args.step, command.action);
+        assert.deepEqual(request.data.args.command, material);
+        if (request.purpose === 'confirmation_review') return { valid: true };
+        return { text: 'Can I submit the synthetic form?', action: 'Submit form' };
+      },
+    });
+    const proposal: ApprovalDescription = {
+      turn: { threadId: 'synthetic-thread', turnId: 'synthetic-turn' },
+      action: 'NOD_browser',
+      args: { website: 'https://form.example.test', step: command.action, command },
+    };
+    const saved = structuredClone(proposal.args);
+    await communication.describe(proposal);
+    assert.equal(calls, 2);
+    assert.deepEqual(proposal.args, saved);
+  }
 });
 
 test('browser upload wording omits the private workspace path', async () => {

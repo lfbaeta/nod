@@ -178,6 +178,7 @@ test(
     let browserControls = [{ role: 'button', name: 'Authorize payment' }];
     let calendarBrowser: Pick<Computer, 'act' | 'currentPage'> | undefined;
     let calendarReview: ((input: object) => unknown) | undefined;
+    let browserWording: ((input: Record<string, any>) => unknown) | undefined;
     let allowMethodBrowser = false;
     let methodBindings = 0;
     let dialogOpen = false;
@@ -223,6 +224,13 @@ test(
       id: 'fixture',
       configured: true,
       curate: async ({ task, input }, _signal, report) => {
+        if (
+          browserWording &&
+          'purpose' in input &&
+          ['confirmation', 'confirmation_review'].includes(String(input.purpose)) &&
+          Object(Object(input).data).action === 'NOD_browser'
+        )
+          return browserWording(input as Record<string, any>);
         if ('purpose' in input && input.purpose === 'connection' && connectionLabels.length)
           return connectionLabels.shift();
         if ('purpose' in input && input.purpose === 'payment')
@@ -1423,6 +1431,63 @@ test(
             assert.match(batchErrors.slice(errors).join('\n'), /click target is not identified/);
           } finally {
             browserControls = [{ role: 'button', name: 'Authorize payment' }];
+          }
+        },
+      );
+
+      await t.test(
+        'a labeled click keeps its replay command out of wording and waits for approval',
+        async () => {
+          const before = browserActs.filter((act) => act.action === 'click').length;
+          const wording: Array<Record<string, any>> = [];
+          browserWording = (input) => {
+            wording.push(structuredClone(input));
+            if (input.purpose === 'confirmation_review')
+              return input.data.args.command
+                ? { valid: false, reason: 'The proposed operation contains a raw browser command.' }
+                : { valid: true };
+            return syntheticConfirmation(input);
+          };
+          try {
+            const held = await propose('click', { selector: '@e7' }, 'browser');
+            const [card] = await approvalsFor(held);
+            assert.ok(card);
+            assert.equal(card.status, 'pending');
+            assert.deepEqual(card.args.command, { action: 'click', selector: '@e7' });
+            assert.equal(browserActs.filter((act) => act.action === 'click').length, before);
+            assert.deepEqual(
+              wording.map((input) => input.purpose),
+              ['confirmation', 'confirmation_review'],
+            );
+            for (const input of wording) {
+              assert.equal(input.data.args.command, undefined);
+              assert.equal(input.data.args.step, 'click');
+              assert.deepEqual(input.data.args.control, [
+                { role: 'button', name: 'Authorize payment' },
+              ]);
+              assert.deepEqual(input.data.args.submits, {
+                method: 'POST',
+                to: 'https://bank.example.test/transfer/send',
+              });
+            }
+            const reviewed = (fallbackChecks as Array<Record<string, any>>).findLast(
+              (input) => input.action?.name === 'NOD_browser',
+            );
+            assert.deepEqual(reviewed?.action.arguments.command, {
+              action: 'click',
+              selector: '@e7',
+            });
+            const approved = await request('POST', '/api/messages', {
+              text: 'Yes',
+              replyToMessageId: card.confirmation_message_id,
+              clientMessageId: randomUUID(),
+            });
+            assert.equal(approved.statusCode, 200, approved.body);
+            await waitFor(approved.json().turnId, 'succeeded');
+            assert.equal(browserActs.filter((act) => act.action === 'click').length, before + 1);
+            assert.equal((await approvalsFor(held))[0].status, 'completed');
+          } finally {
+            browserWording = undefined;
           }
         },
       );
