@@ -31,10 +31,12 @@ import { artifactView, localArtifacts, type ArtifactService } from './artifacts.
 import {
   activeHandoffSql,
   activeThread,
+  chatRecovery,
   ownerStarted,
   pendingAnswerChoicesSql,
   reactToAssistantMessage,
   resetThread,
+  restartChatContext,
   resumeAfterHandoff,
   stopSignal,
   stopThread,
@@ -250,6 +252,10 @@ export async function createApp(dependencies: AppDependencies = {}) {
     forceCloseConnections: true,
   });
   const streams = new Set<ServerResponse>();
+  const browserFrameAcks = new Map<
+    string,
+    { turnId: string; browserId: string; acknowledge(): void }
+  >();
   if (dependencies.failureLog)
     app.addHook('onRequest', (_request, _reply, done) =>
       withFailureLog(dependencies.failureLog!, done),
@@ -355,27 +361,35 @@ export async function createApp(dependencies: AppDependencies = {}) {
         [ownerId, thread.id, rows.map((message) => message.id)],
       ),
     );
-    const [messages, hiddenMessages, turns, pendingChoices, verificationRequests, activity] =
-      await Promise.all([
-        messageRows,
-        hiddenMetadata,
-        pool.query(
-          `SELECT ${turnFields} FROM turns u WHERE u.owner_id=$1 AND u.thread_id=$2 ORDER BY u.created_at DESC LIMIT 50`,
-          [ownerId, thread.id],
-        ),
-        pool.query<{ id: string }>(
-          `SELECT m.id FROM turns waiting JOIN LATERAL (
+    const [
+      messages,
+      hiddenMessages,
+      turns,
+      pendingChoices,
+      verificationRequests,
+      activity,
+      recovery,
+    ] = await Promise.all([
+      messageRows,
+      hiddenMetadata,
+      pool.query(
+        `SELECT ${turnFields} FROM turns u WHERE u.owner_id=$1 AND u.thread_id=$2 ORDER BY u.created_at DESC LIMIT 50`,
+        [ownerId, thread.id],
+      ),
+      pool.query<{ id: string }>(
+        `SELECT m.id FROM turns waiting JOIN LATERAL (
           SELECT m.* FROM messages m WHERE m.turn_id=waiting.id AND m.owner_id=waiting.owner_id
             AND m.thread_id=waiting.thread_id AND m.role='assistant' AND m.hidden_at IS NULL
           ORDER BY m.created_at DESC,m.id DESC LIMIT 1
         ) m ON true
         WHERE waiting.owner_id=$1 AND waiting.thread_id=$2 AND waiting.status='waiting'
           AND waiting.waiting_reason='question' AND ${pendingAnswerChoicesSql}`,
-          [ownerId, thread.id],
-        ),
-        dependencies.verification?.pending() ?? [],
-        dependencies.activity?.() ?? [],
-      ]);
+        [ownerId, thread.id],
+      ),
+      dependencies.verification?.pending() ?? [],
+      dependencies.activity?.() ?? [],
+      chatRecovery(thread.id),
+    ]);
     const hasEarlierMessages = messages.rows.length > 150;
     const visibleIds = new Set(hiddenMessages.rows[0]!.visibleIds);
     const visibleMessages = messages.rows
@@ -389,6 +403,7 @@ export async function createApp(dependencies: AppDependencies = {}) {
     const planning = dependencies.planningTasks?.();
     return {
       threadId: thread.id,
+      ...(recovery ? { chatRecovery: recovery } : {}),
       tasks: await dependencies.taskLedger?.(),
       hasEarlierMessages,
       hiddenMessageCount: hiddenMessages.rows[0]!.count,
@@ -514,6 +529,13 @@ export async function createApp(dependencies: AppDependencies = {}) {
         void dependencies.computer?.discard(id).catch(() => {});
       return reset;
     }, threadId);
+  });
+  app.post('/api/conversation/restart-context', async (request) => {
+    const { threadId, turnId } = z
+      .object({ threadId: z.uuid(), turnId: z.uuid() })
+      .strict()
+      .parse(request.body);
+    return restartChatContext(threadId, turnId);
   });
   app.post('/api/messages', textMessageOptions, async (request) => {
     const arrival = stopSignal();
@@ -757,7 +779,9 @@ export async function createApp(dependencies: AppDependencies = {}) {
   app.get('/api/browser-handoff/stream', async (request, reply) => {
     const view = dependencies.computer?.view;
     if (!view) return reply.code(404).send({ error: 'The browser is unavailable.' });
-    const { turnId } = z.object({ turnId: z.uuid() }).parse(request.query);
+    const { turnId, view: viewId } = z
+      .object({ turnId: z.uuid(), view: z.string().min(1).max(120).optional() })
+      .parse(request.query);
     const browserId = await handoffBrowser(turnId);
     if (!browserId) return reply.code(423).send({ error: handoffClosed });
     const controller = new AbortController();
@@ -822,12 +846,28 @@ export async function createApp(dependencies: AppDependencies = {}) {
       while (!next.done && !controller.signal.aborted) {
         const length = Buffer.alloc(4);
         length.writeUInt32BE(next.value.length);
+        let acknowledge: Promise<void> | undefined;
+        if (viewId) {
+          acknowledge = new Promise<void>((resolve) => {
+            const finish = () => {
+              if (browserFrameAcks.get(viewId)?.acknowledge === finish)
+                browserFrameAcks.delete(viewId);
+              controller.signal.removeEventListener('abort', finish);
+              resolve();
+            };
+            browserFrameAcks.set(viewId, { turnId, browserId, acknowledge: finish });
+            controller.signal.addEventListener('abort', finish, { once: true });
+            if (controller.signal.aborted) finish();
+          });
+        }
         reply.raw.write(length);
         if (!reply.raw.write(next.value))
           await new Promise((resolve) => {
             reply.raw.once('drain', resolve);
             reply.raw.once('close', resolve);
           });
+        await acknowledge;
+        if (controller.signal.aborted) break;
         next = await frames.next();
         if (next.done && !controller.signal.aborted) {
           frames = open();
@@ -842,6 +882,19 @@ export async function createApp(dependencies: AppDependencies = {}) {
       void frames.return?.().catch(() => {});
       if (reply.raw.headersSent) reply.raw.end();
     }
+  });
+  app.post('/api/browser-handoff/frame-ack', async (request, reply) => {
+    const { turnId, view } = z
+      .object({ turnId: z.uuid(), view: z.string().min(1).max(120) })
+      .strict()
+      .parse(request.body);
+    const pending = browserFrameAcks.get(view);
+    if (!pending || pending.turnId !== turnId)
+      return reply.code(409).send({ error: 'The browser frame is no longer waiting.' });
+    if ((await handoffBrowser(turnId)) !== pending.browserId)
+      return reply.code(423).send({ error: handoffClosed });
+    pending.acknowledge();
+    return { ok: true };
   });
   app.post('/api/browser-handoff', async (request, reply) => {
     const body = z

@@ -25,6 +25,7 @@ import remarkParse from 'remark-parse';
 import { unified } from 'unified';
 import type { ProductAnalytics } from '../src/ports/analytics.ts';
 import type { MemoryCurator } from '../src/ports/memory-curator.ts';
+import { IntegrationConnectionError } from '../src/ports/integrations.ts';
 import { createAnalytics, snapshotAnalytics } from '../src/server/analytics.ts';
 import {
   accessCookie,
@@ -44,7 +45,9 @@ import {
 import { createCommunication } from '../src/server/communication.ts';
 import { ApprovalCard, ApprovalChoiceCard } from '../src/web/components/action-card.tsx';
 import { createE2eCurators } from '../scripts/e2e-curators.ts';
+import { createIntegrationFixture } from '../scripts/e2e-fixtures.ts';
 import { createPiMemoryCurator } from '../src/providers/pi/memory-curator.ts';
+import { createIntegrations } from '../src/server/integrations.ts';
 
 function markdownNodes(markdown: string) {
   const tree = unified().use(remarkParse).use(remarkGfm).parse(markdown);
@@ -658,6 +661,11 @@ test('server configuration refuses remote exposure without a valid token and an 
     ' https://nod.example',
     'https://nod.example\n',
     'file:///tmp/nod',
+    'https://nod.example:443/assistant',
+    'https://nod.example:443?token=secret',
+    'https://nod.example:443#token',
+    'https://user:password@nod.example:443',
+    'http://nod.example:80',
   ])
     assert.throws(() => serverNetwork({ NOD_PUBLIC_URL, NOD_AUTH_TOKEN: key }));
   const remote = serverNetwork({
@@ -677,7 +685,23 @@ test('server configuration refuses remote exposure without a valid token and an 
     'http://[::1]:4310',
   ])
     assert.equal(serverNetwork({ NOD_PUBLIC_URL }).publicOrigin, NOD_PUBLIC_URL);
+  for (const NOD_PUBLIC_URL of ['https://nod.example:443', 'https://nod.example:443/']) {
+    const defaultPort = serverNetwork({ NOD_PUBLIC_URL, NOD_AUTH_TOKEN: key });
+    assert.equal(defaultPort.publicOrigin, 'https://nod.example');
+    assert.equal(defaultPort.accessOrigin, 'https://nod.example');
+  }
+  for (const NOD_PUBLIC_URL of ['http://localhost:80', 'http://127.0.0.1:80', 'http://[::1]:80'])
+    assert.equal(
+      serverNetwork({ NOD_PUBLIC_URL }).publicOrigin,
+      NOD_PUBLIC_URL.replace(/:80$/, ''),
+    );
   assert.equal(serverNetwork({}).accessOrigin, undefined);
+  assert.equal(serverNetwork({ NOD_AUTH_TOKEN: key }).accessOrigin, undefined);
+  for (const environment of [{ PORT: '80' }, { PORT: '80', NOD_AUTH_TOKEN: key }]) {
+    const defaultPort = serverNetwork(environment);
+    assert.equal(defaultPort.publicOrigin, 'http://localhost');
+    assert.equal(defaultPort.accessOrigin, undefined);
+  }
   assert.equal(serverNetwork({ NOD_DESKTOP: 'true', NOD_AUTH_TOKEN: '' }).authToken, undefined);
 });
 
@@ -789,6 +813,43 @@ test('remote access authenticates cookies and bearer clients only on the configu
     assert.equal((await rotated.inject({ url: '/api/fixture', headers })).statusCode, 401);
 });
 
+test('a server token alone keeps every local address and still refuses a foreign Host', async (t) => {
+  const key = randomBytes(32).toString('base64url');
+  const network = serverNetwork({ NOD_AUTH_TOKEN: key });
+  const app = Fastify({ trustProxy: false });
+  t.after(() => app.close());
+  registerLocalAccess(app, network.port, { key, origin: network.accessOrigin, bearer: true });
+  app.get('/api/privacy', async () => ({ content: null }));
+  for (const host of ['localhost:4310', '127.0.0.1:4310', '[::1]:4310'])
+    assert.equal((await app.inject({ url: '/api/privacy', headers: { host } })).statusCode, 200);
+  assert.equal(
+    (await app.inject({ url: '/api/privacy', headers: { host: 'nod.example' } })).statusCode,
+    403,
+  );
+  const defaultPort = Fastify({ trustProxy: false });
+  t.after(() => defaultPort.close());
+  registerLocalAccess(defaultPort, 80, { key, bearer: true });
+  defaultPort.get('/api/privacy', async () => ({ content: null }));
+  for (const [host, status] of [
+    ['localhost', 200],
+    ['127.0.0.1', 200],
+    ['[::1]', 200],
+    ['localhost:4310', 403],
+  ] as const)
+    assert.equal(
+      (await defaultPort.inject({ url: '/api/privacy', headers: { host } })).statusCode,
+      status,
+    );
+  assert.equal(
+    (
+      await defaultPort.inject({
+        url: '/api/privacy',
+        headers: { host: 'localhost', origin: 'http://localhost' },
+      })
+    ).statusCode,
+    200,
+  );
+});
 test('localhost access requires the owner key and rejects foreign Host, Origin and cross-site requests', async () => {
   const root = await mkdtemp(join(tmpdir(), 'nod-access-'));
   const app = Fastify();
@@ -1380,6 +1441,58 @@ test(
         });
         return { promise, resolve };
       };
+      for (const [status, code] of [
+        [429, 'installation_busy'],
+        [503, 'service_unavailable'],
+      ] as const) {
+        await t.test(
+          `a ${status} during session creation expires the approved app action`,
+          async (t) => {
+            const fixture = createIntegrationFixture(`http://localhost:${port}`);
+            let sessions = 0;
+            const integrations = await createIntegrations(db.pool, {
+              ownerId,
+              baseUrl: `http://localhost:${port}`,
+              wake: async () => {},
+              provider: {
+                ...fixture.provider,
+                createSession: async () => {
+                  sessions++;
+                  throw new IntegrationConnectionError(
+                    status === 429 ? 'rate_limit' : 'unavailable',
+                    'session',
+                    status,
+                    code,
+                  );
+                },
+              },
+            });
+            const connectionId = randomUUID();
+            await db.pool.query(
+              "INSERT INTO app_connections(id,owner_id,slug,provider_id,account_id) VALUES($1,$2,'gmail',$3,'synthetic-account')",
+              [connectionId, ownerId, fixture.provider.id],
+            );
+            t.after(async () => {
+              executionResult = undefined;
+              await db.pool.query('DELETE FROM app_connections WHERE id=$1', [connectionId]);
+            });
+            const turn = await begin('Synthetic session refusal');
+            const args = { ...email('session-refusal@example.test'), connectionId };
+            const approvalId = await propose(turn, 'GMAIL_SEND_EMAIL', args);
+            await finish(turn.turnId);
+            const confirmed = await confirm(approvalId, true);
+            assert.ok(confirmed && 'turnId' in confirmed);
+            assert.equal((await stored(approvalId)).status, 'confirmed');
+            executionResult = () => integrations.execute(ownerId, 'GMAIL_SEND_EMAIL', args);
+            const result = await execute(approvalId);
+            assert.equal((await stored(approvalId)).status, 'expired');
+            assert.match(result?.prompt ?? '', /did not run/);
+            assert.equal(sessions, 1);
+            assert.equal(fixture.writes.length, 0);
+            await finish(confirmed.turnId, 'succeeded');
+          },
+        );
+      }
       await t.test(
         'one authorization review preserves the original instructions and executed arguments',
         async () => {
@@ -1600,6 +1713,50 @@ test(
         assert.deepEqual(unusable(), []);
         await finish(declined.turnId, 'cancelled');
       });
+
+      await t.test(
+        'a browser step quoted from informal owner words runs, and uncovered steps still ask',
+        async () => {
+          const request =
+            'no brecho.example.test clica no icone de lapis do anuncio da luminaria, muda o preço p 90 e salva as alteraçoes';
+          const step = (name: string) => ({
+            website: 'https://brecho.example.test',
+            page: 'https://brecho.example.test/minha-loja/anuncios',
+            step: 'click',
+            control: [{ role: 'button', name }],
+            command: { action: 'click', selector: '@e12' },
+          });
+          const turn = await begin(request);
+          for (const because of [
+            '...clica no icone de lapis do anuncio da luminaria',
+            '…salva as alteraçoes',
+            'clica no ícone de lápis do anúncio da luminária',
+            'salva as alterações',
+          ]) {
+            aligned = () => ({ run: true, because });
+            const verdict = await trust.check(turn, 'NOD_browser', step('editar anúncio'));
+            assert.equal(verdict.confirm, false, because);
+            assert.equal(!verdict.confirm && verdict.basis.kind, 'message', because);
+          }
+          for (const because of [
+            'clica no ícone ... salva as alterações',
+            'apaga o anúncio da luminária',
+            '...',
+          ]) {
+            aligned = () => ({ run: true, because });
+            compareVerdict(await trust.check(turn, 'NOD_browser', step('apagar anúncio')), {
+              confirm: true,
+              reason: 'unrequested',
+            });
+          }
+          aligned = false;
+          compareVerdict(await trust.check(turn, 'NOD_browser', step('apagar anúncio')), {
+            confirm: true,
+            reason: 'unrequested',
+          });
+          await finish(turn.turnId, 'cancelled');
+        },
+      );
 
       await t.test('a newer chat correction before action handoff prevents the write', async () => {
         aligned = true;
@@ -4130,6 +4287,64 @@ test(
         const error = await request('GET', '/api/fixture-error');
         assert.equal(error.statusCode, 500);
         assert.equal(error.body.includes('fixture-private-key'), false);
+      });
+
+      await t.test('a written no carries the owner words to the resumed turn', async () => {
+        const reply = 'No, stop this task for now';
+        replyAnswers[reply.toLowerCase()] = 'no';
+        const pending = async (channel?: string) => {
+          const turn = await begin('Synthetic paperwork comparison', { channel });
+          const id = await propose(turn, 'NOD_notification_preferences_update', {
+            notificationRule: 'Synthetic declined change',
+          });
+          await finish(turn.turnId);
+          return id;
+        };
+        const resumed = async (id: string) => {
+          const approval = await stored(id);
+          assert.equal(approval.status, 'declined');
+          return row(approval.execution_turn_id);
+        };
+        const executed = calls.length;
+        const written = await pending('telegram:fixture-decline');
+        await messages.submit(reply, [], {
+          channel: 'telegram:fixture-decline',
+          replyToMessageId: (await stored(written)).confirmation_message_id,
+        });
+        const writtenTurn = await resumed(written);
+        assert.equal(writtenTurn.source, 'resume');
+        assert.ok(writtenTurn.prompt.includes(reply), writtenTurn.prompt);
+        aligned = true;
+        const check = await trust.check(await running(writtenTurn.id), 'GMAIL_SEND_EMAIL', {
+          recipient_email: 'synthetic@example.test',
+          body: 'Synthetic body.',
+        });
+        const said = reviews.at(-1)?.userMessages as Array<{
+          text: string;
+          canAuthorize?: boolean;
+        }>;
+        assert.equal(said.find((message) => message.text === reply)?.canAuthorize, false);
+        assert.equal(check.confirm, true);
+        aligned = false;
+        await finish(writtenTurn.id, 'succeeded');
+        const clicked = await pending();
+        const record = await stored(clicked);
+        await transaction(
+          (client) =>
+            approvals.chat.accept(client, {
+              text: 'Synthetic refusal label',
+              channel: 'web',
+              threadId: record.thread_id,
+              replyToMessageId: record.confirmation_message_id,
+              clientMessageId: randomUUID(),
+              clicked: true,
+              answer: { approvalId: clicked, approved: false },
+            }),
+          db.pool,
+        );
+        assert.doesNotMatch((await resumed(clicked)).prompt, /Synthetic refusal label/);
+        assert.equal(calls.length, executed);
+        delete replyAnswers[reply.toLowerCase()];
       });
 
       await t.test(

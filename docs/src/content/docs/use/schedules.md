@@ -16,7 +16,7 @@ Ask in chat. For example:
 - "Every weekday at 8:00, summarize my calendar and anything urgent in my inbox."
 - "Tomorrow at 15:00, remind me to call the landlord."
 
-A schedule runs **One time** or is **Recurring**. Nod tells you when it's saved and when it runs next. If you ask for a schedule that's already active with the same name or instruction, time and chat, Nod keeps the one you have instead of adding a copy. When you hand Nod work that needs follow-up, it can also plan its own check-in, such as "I'll look for a reply on Friday". Check-ins are schedules too.
+A schedule runs **One time** or is **Recurring**. Nod tells you when it's saved and when it runs next. If you ask for a schedule that's already active with the same name or instruction, time and chat, Nod keeps the one you have instead of adding a copy, and uses the model you named for it, if any. When you hand Nod work that needs follow-up, it can also plan its own check-in, such as "I'll look for a reply on Friday". Check-ins are schedules too.
 
 Nod uses your time zone, saved from your browser the first time you use Nod. Change it in **Settings → General**. If Nod doesn't know your time zone, it asks.
 
@@ -37,7 +37,7 @@ In chat, "stop the morning summary" asks Nod to pause the schedule. If Nod asks 
 
 ## Run a schedule now
 
-Open **Scheduled** and select **Run now** on a schedule. Nod opens its details so you can follow the run. The new result opens when it is available.
+Open **Scheduled** and select **Run now** on a schedule. Nod opens its details so you can follow the run. The new result opens when it is available. A run that failed in chat offers **Run now** too. If you changed the schedule after that run failed, Nod refuses and asks you to review it first.
 
 The extra run uses the saved instruction and delivery channel. The usual approval checks still apply. It does not change the next scheduled time or resume a paused schedule. You can also run a completed one-time schedule again.
 
@@ -93,6 +93,8 @@ The first time Nod messages you about something on its own, such as a calendar c
 
 Select **Edit schedule** to review its name, instructions and timing together. Timing changes preview the next run without changing the saved schedule. **Save changes** applies only the fields you changed, so renaming a schedule keeps its next run. Editing the complete work instruction supplies a new complete instruction. A name or timing edit keeps the existing work and its permission limits. **Cancel** closes the editor without saving.
 
+A schedule uses the model for schedules from **Settings > Models**. To give one schedule its own model, open **See details** and select **Change** beside **Model**. When a recurring schedule shows a projected monthly cost, it prices the schedule's recent runs on that model. See [Models for each kind of work](/connect/models/#models-for-each-kind-of-work).
+
 **Undo** restores the previous values only if no newer change has replaced them. The Undo notice stays available while you hover over it, focus it, or switch away from Nod. If the schedule changes while you edit, your draft stays open so you can review it.
 
 ## Quiet hours
@@ -110,6 +112,8 @@ A local desktop assistant runs schedules and background work only while Nod is o
 For a local assistant, closing the window keeps Nod running in the menu bar or tray. **Quit Nod** stops it. **Open at login** is on after setup; keep it on in **Settings → General** if you rely on schedules. It starts Nod when you sign in to your computer, not when the computer turns on, so after a restart or power cut nothing runs until you sign in. On a Mac with FileVault turned on, automatic login is off, so someone has to enter your password after every restart.
 
 If a run comes due while the assistant is stopped, it runs once when Nod is running again. If a run starts more than 10 minutes late, its instructions include the due time and start time. If later runs of a recurring schedule were skipped, the instructions also include that count. Counts of 100 or more are shown as "100 or more".
+
+You see the same in chat. The first message of a late run, or of a run after skipped ones, starts with a run track: when the run was due, the runs Nod skipped while it wasn't running, and when it ran. A recurring schedule also skips its timed runs while automatic requests to its model are paused after failed requests; those show on the track of its next run, with that reason. A run that fails at the model shows the track with why it failed, a **Run now** button and, when the model request found no network, the error code. In the desktop app's local assistant, that failure also links to [running Nod on a server](/deploy/self-host/) so schedules keep running while the computer sleeps. The track is written by Nod, not by the model.
 
 ## Related resources
 

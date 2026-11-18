@@ -70,6 +70,7 @@ const help = `Nod capability evals
 
   Common options for run, models and refs
     --model <provider/name>    agent model (default from LLM_PROVIDER, LLM_MODEL or the keys you have)
+    --background-model <name>  model for work Nod starts on its own: light, or a model on the --model provider
     --judge <provider/name>    judge model (default ${defaultJudge}, kept fixed so runs stay comparable)
     --tier pr|full|release|live  default full: all controlled cases except the release suite, including
                                pending cases; pr is the small suite; release adds the release suite;
@@ -98,6 +99,7 @@ function runOptions(args: Args): RunOptions {
   return {
     root: resultsRoot(text(args, 'out')),
     model: text(args, 'model'),
+    backgroundModel: text(args, 'background-model'),
     ...(text(args, 'effort')
       ? {
           effort: choice(

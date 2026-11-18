@@ -43,6 +43,7 @@ import {
   showsNumber,
   urlsGrounded,
 } from '../src/checks.ts';
+import tidyDownloads from '../src/scenarios/local-file-tidy-downloads.ts';
 import { createSimulator, judgeCriteria, simulatorFailure, withFallback } from '../src/judge.ts';
 import { createCapture, proactiveBaselineInstructions } from '../src/capture.ts';
 import { createSpend, mergeAttemptCosts } from '../src/spend.ts';
@@ -87,6 +88,38 @@ import { paymentScenario } from '../src/world/checkout.ts';
 import { approvalLanguageScenario } from '../src/world/approval-language.ts';
 import { ambiguousDelegationScenario } from '../src/world/ambiguous-delegation.ts';
 import { discoveryCase } from '../src/world/discovery.ts';
+
+test('a scripted greeting reply answers only the opening question', async () => {
+  const definition = discoveryCase('greeting');
+  const world = definition.world({ now: Date.now });
+  const opening = { kind: 'unanswered', text: 'Start the email review?', at: 1 } as const;
+  const later = { kind: 'unanswered', text: 'Which account?', at: 2 } as const;
+  const interactions: Session['interactions'] = [];
+  const messages: string[] = [];
+  const session = {
+    interactions,
+    async say(text: string) {
+      messages.push(text);
+      interactions.push(text === 'Hi' ? { ...opening } : { ...later });
+    },
+    async lastReply() {
+      return 'An unrelated observer message.';
+    },
+  } as Session;
+  await definition.play(session, world);
+  assert.deepEqual(messages, ['Hi', 'Yes']);
+  assert.deepEqual(interactions, [{ ...opening, kind: 'question', reply: 'Yes' }, later]);
+  const run = {
+    turns: [{ background: false, status: 'succeeded' }],
+    interactions,
+    final: 'The email review is ready.',
+    messages: [],
+  } as unknown as Run;
+  if (finished.kind !== 'check') throw new Error('Missing completion check.');
+  assert.equal((await finished.check(run)).pass, false);
+  interactions.pop();
+  assert.equal((await finished.check(run)).pass, true);
+});
 
 test('discovery checks reject work started before the owner selects an offer', async () => {
   const definition = discoveryCase('inbox');
@@ -133,24 +166,29 @@ test('discovery checks reject work started before the owner selects an offer', a
   assert.equal((await rule.check(run)).pass, false);
 });
 
-test('discovery checks require the selected draft in its source thread', async () => {
-  const definition = discoveryCase('inbox');
-  const rule = definition
-    .expect(definition.world({ now: Date.now }))
-    .find((item) => item.id === 'selected-reply-is-saved-in-the-right-thread');
-  if (rule?.kind !== 'check') throw new Error('Missing selected draft check.');
+test('discovery checks bind every saved draft to its thread and recipient', async () => {
   const draft = { threadId: 'cedar', to: 'mira@cedar.example', cc: '' };
-  for (const [drafts, expected] of [
-    [[draft], true],
-    [[], false],
-    [[{ ...draft, threadId: 'resolved' }], false],
-    [[{ ...draft, to: 'lee@willow.example' }], false],
-    [[{ ...draft, to: 'mira@cedar.example, lee@willow.example' }], false],
-    [[{ ...draft, cc: 'lee@willow.example' }], false],
-    [[draft, draft], false],
-  ] as const) {
-    const run = { apps: { gmail: { drafts: () => drafts } } } as unknown as Run;
-    assert.equal((await rule.check(run)).pass, expected);
+  for (const kind of ['inbox', 'more-ideas', 'greeting', 'greeting-portuguese'] as const) {
+    const definition = discoveryCase(kind);
+    const rule = definition
+      .expect(definition.world({ now: Date.now }))
+      .find((item) => item.id === 'selected-reply-is-saved-in-the-right-thread');
+    if (rule?.kind !== 'check') throw new Error('Missing selected draft check.');
+    const optional = kind === 'greeting' || kind === 'greeting-portuguese';
+    for (const [drafts, expected] of [
+      [[draft], true],
+      [[], optional],
+      [[{ ...draft, threadId: 'resolved' }], false],
+      [[{ ...draft, to: 'lee@willow.example' }], false],
+      [[{ ...draft, to: 'mira@cedar.example, lee@willow.example' }], false],
+      [[{ ...draft, cc: 'lee@willow.example' }], false],
+      [[draft, draft], optional],
+      [[draft, { ...draft, threadId: 'resolved' }], false],
+      [[draft, { ...draft, to: 'lee@willow.example' }], false],
+    ] as const) {
+      const run = { apps: { gmail: { drafts: () => drafts } } } as unknown as Run;
+      assert.equal((await rule.check(run)).pass, expected, kind);
+    }
   }
 });
 
@@ -1797,7 +1835,6 @@ test('scenario API calls use authenticated local transport and refuse outside ta
   t.after(() => app.close());
   registerLocalAccess(app, port, { key });
   createAccountSession({
-    origin,
     localUser: { id: 'synthetic-owner', name: 'Fixture', email: null, avatarUrl: null },
     accounts: {
       async read() {
@@ -1810,6 +1847,10 @@ test('scenario API calls use authenticated local transport and refuse outside ta
       async activeDays() {
         return 0;
       },
+      async seenSurveys() {
+        return [];
+      },
+      async markSurveySeen() {},
       async update(owner, input) {
         assert.equal(owner, 'synthetic-owner');
         writes++;
@@ -3651,6 +3692,39 @@ test('only calibrated scenarios that passed every one of at least five attempts 
   await rm(root, { recursive: true, force: true });
 });
 
+test('local file checks fail a missing move and any change or trash of the owner files', async () => {
+  const world = tidyDownloads.world({ now: Date.now });
+  const untouched = Object.fromEntries(
+    Object.entries(world.localFiles!).map(([path, bytes]) => [path, Buffer.from(bytes)]),
+  );
+  const tidied = Object.fromEntries(
+    Object.entries(untouched).map(([path, bytes]) => [
+      path.replace(/^Downloads\/(?=[^/]+\.pdf$)/, 'Downloads/Invoices/'),
+      bytes,
+    ]),
+  );
+  const expectations = tidyDownloads.expect(world);
+  const grade = (home: Record<string, Buffer>, trashed: string[] = []) =>
+    Promise.all(
+      ['moves-the-pdfs', 'changes-nothing-else'].map(async (id) => {
+        const rule = expectations.find((item) => item.id === id);
+        if (rule?.kind !== 'check') throw new Error(`Missing ${id} check`);
+        return (await rule.check({ ...quietRun(world), home, trashed })).pass;
+      }),
+    );
+  assert.deepEqual(await grade(tidied), [true, true]);
+  assert.deepEqual(await grade(untouched), [false, true]);
+  assert.deepEqual(await grade({ ...tidied, 'Downloads/notes.txt': Buffer.from('changed') }), [
+    true,
+    false,
+  ]);
+  assert.deepEqual(await grade({ ...tidied, 'Downloads/extra/': Buffer.alloc(0) }), [true, false]);
+  const { 'Downloads/photo.jpg': _photo, ...withoutPhoto } = tidied;
+  assert.deepEqual(await grade(withoutPhoto), [true, false]);
+  assert.deepEqual(await grade(tidied, ['Downloads/photo.jpg']), [true, false]);
+  assert.deepEqual(await grade(tidied, ['Downloads/Invoices/draft.pdf']), [true, true]);
+});
+
 function quietRun(world: ReturnType<Scenario['world']>): Run {
   return {
     api: async () => ({ status: 200, body: {} }),
@@ -3671,6 +3745,8 @@ function quietRun(world: ReturnType<Scenario['world']>): Run {
     userMessages: [],
     writes: world.apps?.writes ?? [],
     files: [],
+    home: {},
+    trashed: [],
     artifacts: [],
     schedules: [],
     scheduleRuns: [],

@@ -7,10 +7,13 @@ import {
 import { Composio } from '@composio/core';
 import { createHash, randomBytes, randomUUID, sign } from 'node:crypto';
 import { z } from 'zod';
-import type {
-  IntegrationBackoff,
-  IntegrationFile,
-  IntegrationConnectionBrowser,
+import {
+  connectionCode,
+  connectionReason,
+  IntegrationConnectionError,
+  type IntegrationBackoff,
+  type IntegrationFile,
+  type IntegrationConnectionBrowser,
 } from '../../ports/integrations.ts';
 import type { CredentialKeyStore } from '../../ports/key-store.ts';
 import type { IntegrationIdentityCheckpoint } from '../../ports/integration-identity.ts';
@@ -76,6 +79,7 @@ export function createComposioProxy(options: {
   let pause: IntegrationBackoff | undefined;
   let refusals = 0;
   let generation = 0;
+  let clockOffset = 0;
   function observe(response: Response, started: number, path: string) {
     if (response.ok) {
       if (
@@ -88,8 +92,8 @@ export function createComposioProxy(options: {
       return;
     }
     if (response.status !== 429 && response.status !== 503) return;
+    if (started === generation || !refusals) refusals++;
     generation++;
-    refusals++;
     const header = response.headers.get('retry-after')?.trim() ?? '';
     const requested = /^\d+$/.test(header)
       ? Number(header) * 1000
@@ -125,37 +129,52 @@ export function createComposioProxy(options: {
     value.signal.throwIfAborted();
     if (body.length > (url.pathname === '/v2/files/upload' ? 21 : 16) * 1024 * 1024)
       throw new Error('The integration request is too large.');
-    const timestamp = String(Math.floor(Date.now() / 1000));
-    const requestId = randomUUID();
     const current = requiredIdentity();
     const bodyHash = createHash('sha256').update(body).digest('hex');
-    const canonical = [
-      'nod-composio-v1',
-      value.method,
-      origin,
-      `${url.pathname}${url.search}`,
-      timestamp,
-      requestId,
-      bodyHash,
-    ].join('\n');
-    const headers = new Headers({
-      Accept: 'application/json',
-      'x-nod-public-key': current.publicKey,
-      'x-nod-timestamp': timestamp,
-      'x-nod-request-id': requestId,
-      'x-nod-signature': sign(null, Buffer.from(canonical), current.key).toString('base64url'),
-    });
-    if (url.pathname === '/v2/files/upload') headers.set('x-nod-content-sha256', bodyHash);
-    if (value.headers.has('content-type'))
-      headers.set('content-type', value.headers.get('content-type')!);
+    const send = () => {
+      const timestamp = String(Math.floor((Date.now() + clockOffset) / 1000));
+      const requestId = randomUUID();
+      const canonical = [
+        'nod-composio-v1',
+        value.method,
+        origin,
+        `${url.pathname}${url.search}`,
+        timestamp,
+        requestId,
+        bodyHash,
+      ].join('\n');
+      const headers = new Headers({
+        Accept: 'application/json',
+        'x-nod-public-key': current.publicKey,
+        'x-nod-timestamp': timestamp,
+        'x-nod-request-id': requestId,
+        'x-nod-signature': sign(null, Buffer.from(canonical), current.key).toString('base64url'),
+      });
+      if (url.pathname === '/v2/files/upload') headers.set('x-nod-content-sha256', bodyHash);
+      if (value.headers.has('content-type'))
+        headers.set('content-type', value.headers.get('content-type')!);
+      return (options.request ?? fetch)(url, {
+        method: value.method,
+        headers,
+        ...(body.length ? { body } : {}),
+        signal: value.signal,
+        redirect: 'error',
+      });
+    };
     const started = generation;
-    const response = await (options.request ?? fetch)(url, {
-      method: value.method,
-      headers,
-      ...(body.length ? { body } : {}),
-      signal: value.signal,
-      redirect: 'error',
-    });
+    let response = await send();
+    const serviceTime = Date.parse(response.headers.get('date') ?? '');
+    if (
+      response.status === 401 &&
+      Number.isFinite(serviceTime) &&
+      (await read(response.clone(), value.signal)
+        .then((text) => (JSON.parse(text) as { error?: unknown }).error)
+        .catch(() => undefined)) === 'expired_authentication'
+    ) {
+      clockOffset = serviceTime - Date.now();
+      await response.body?.cancel();
+      response = await send();
+    }
     observe(response, started, url.pathname);
     return response;
   };
@@ -253,7 +272,7 @@ export function createComposioProxy(options: {
   async function rpc(
     path: string,
     body: unknown,
-    options: { signal?: AbortSignal; timeout?: number; failure?: string } = {},
+    options: { signal?: AbortSignal; timeout?: number } = {},
   ) {
     const timeout = AbortSignal.timeout(options.timeout ?? 30_000);
     const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
@@ -265,11 +284,24 @@ export function createComposioProxy(options: {
       signal,
     });
     if (!response.ok) {
-      await response.body?.cancel();
-      throw new Error(
-        options.failure ?? 'The integration connection could not be completed. Try again.',
+      const refusal = await read(response, signal)
+        .then((text) => JSON.parse(text) as unknown)
+        .catch(() => {
+          signal.throwIfAborted();
+          return undefined;
+        });
+      throw new IntegrationConnectionError(
+        connectionReason(response.status, false, false) ?? 'unavailable',
+        'link',
+        response.status,
+        connectionCode(
+          refusal && typeof refusal === 'object' && 'error' in refusal ? refusal.error : undefined,
+        ),
       );
     }
+    return JSON.parse(await read(response, signal)) as unknown;
+  }
+  async function read(response: Response, signal: AbortSignal) {
     if (!response.body || Number(response.headers.get('content-length')) > 32_768) {
       await response.body?.cancel();
       throw new Error('The integration response is invalid.');
@@ -291,9 +323,7 @@ export function createComposioProxy(options: {
       reader.releaseLock();
     }
     signal.throwIfAborted();
-    return JSON.parse(
-      new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks, size)),
-    ) as unknown;
+    return new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks, size));
   }
   let enrolling: Promise<void> | undefined;
   async function enroll(signal: AbortSignal) {
@@ -370,11 +400,7 @@ export function createComposioProxy(options: {
               mimeType: file.mimeType,
               data: Buffer.from(file.bytes).toString('base64'),
             },
-            {
-              signal,
-              timeout: 210_000,
-              failure: 'The file could not be uploaded for this app.',
-            },
+            { signal, timeout: 210_000 },
           ),
         );
       signal?.throwIfAborted();
@@ -497,6 +523,7 @@ export function createComposioProxy(options: {
         .parse(query);
       if (!pending?.verificationSecret || pending.accountId !== `${pendingPrefix}${input.state}`)
         throw new Error('This integration connection attempt is unavailable.');
+      options.browser?.finish(input.state);
       const result = z
         .object({
           connectedAccountId: z.string().regex(/^[A-Za-z0-9_-]{1,200}$/),
@@ -512,7 +539,6 @@ export function createComposioProxy(options: {
         );
       if (result.toolkit !== pending.service)
         throw new Error('The connected integration does not match this attempt.');
-      options.browser?.finish(input.state);
       return {
         state: input.state,
         accountId: result.connectedAccountId,

@@ -2,6 +2,215 @@
 
 Releases from before the rename to Nod are the `desktop-v*` [GitHub releases](https://github.com/n8n-io/nod/releases).
 
+## 0.8.4 - 2026-11-17
+
+### Features
+
+- **apps:** Support API and CLI community connectors. [#1034](https://github.com/n8n-io/nod/pull/1034) (cc81434)
+- **desktop:** Open the file menu when right-clicking a file in the preview panel (LAB-1129). [#1023](https://github.com/n8n-io/nod/pull/1023) (8cbfd3f)
+- **apps:** Add community connectors and contributor tools. [#1019](https://github.com/n8n-io/nod/pull/1019) (54a6b50)
+- **feedback:** Rename the feedback button to Report bug and offer it when Nod fails (LAB-1344). [#1001](https://github.com/n8n-io/nod/pull/1001) (7c794d4)
+- **apps:** Allow an owner-typed private MCP address in Connect MCP. [#911](https://github.com/n8n-io/nod/pull/911) (7f64c5f)
+- **analytics:** Record whether a clicked task card was learned or common (LAB-1348). [#998](https://github.com/n8n-io/nod/pull/998) (b3d9777)
+- **chat:** Show recent work in the activity line. [#994](https://github.com/n8n-io/nod/pull/994) (c025b64)
+
+### Fixes
+
+- **models:** Use another free port when ChatGPT sign-in can't open 1455 (LAB-1338). [#1020](https://github.com/n8n-io/nod/pull/1020) (71b98cd)
+- **apps:** Close sign-in expiry races at the 10-minute boundary (LAB-1255). [#1027](https://github.com/n8n-io/nod/pull/1027) (242f7cf)
+- **apps:** Show the service's reason when MCP sign-in can't start (LAB-1204). [#1026](https://github.com/n8n-io/nod/pull/1026) (b80d239)
+- **memory:** Save details an explicit remember request points back to (LAB-1357). [#1025](https://github.com/n8n-io/nod/pull/1025) (3a47f4d)
+- **apps:** Record where an expired app sign-in stopped (LAB-1255). [#1024](https://github.com/n8n-io/nod/pull/1024) (6d100a5)
+- **apps:** Remove the ambiguous plus from connected app cards (LAB-1200). [#1022](https://github.com/n8n-io/nod/pull/1022) (7318f39)
+- **apps:** Keep the connection service's reason and status when a file upload fails (LAB-1256). [#1012](https://github.com/n8n-io/nod/pull/1012) (9297b24)
+- **runtime:** Remove set\_status and improve request diagnostics. [commit](https://github.com/n8n-io/nod/commit/156c32520b25162c87f125d7474a3a1d6ed95359) (156c325)
+- **memory:** Keep line breaks in notes the owner writes (LAB-1301). [#1018](https://github.com/n8n-io/nod/pull/1018) (16f7d34)
+- **account:** Accept every local address the access check allows (LAB-1248). [#1010](https://github.com/n8n-io/nod/pull/1010) (518b79e)
+- **chat:** Save replies that name workspace paths Nod can't attach (LAB-1334). [#1015](https://github.com/n8n-io/nod/pull/1015) (ac08d71)
+- **apps:** Send a User-Agent on every remote MCP and API request (LAB-997). [#1013](https://github.com/n8n-io/nod/pull/1013) (9f8c319)
+- **activation:** Show setup failures and add Open chat after connection. [commit](https://github.com/n8n-io/nod/commit/93c7f96f5959cfc195d14fc58703d56bb9fb209c) (93c7f96)
+- **chat:** Recover after terminal context errors. [#1009](https://github.com/n8n-io/nod/pull/1009) (c1e186e)
+- **pi:** Read streamed content part arrays as answer text (LAB-968). [#1014](https://github.com/n8n-io/nod/pull/1014) (2bc0a9f)
+- **chat:** Leave large earlier tool results out of a cold request (LAB-1211). [#995](https://github.com/n8n-io/nod/pull/995) (001b23f)
+- Name Settings screens from the shared page list. [#962](https://github.com/n8n-io/nod/pull/962) (62a9a7f)
+- **trust:** Match quotes that differ from the owner's words only in accents (LAB-1038). [#981](https://github.com/n8n-io/nod/pull/981) (3b4182f)
+- **analytics:** Show each survey only once (LAB-1214). [#1000](https://github.com/n8n-io/nod/pull/1000) (6e57923)
+
+### Performance
+
+- **pi:** Keep tools loaded earlier in a session for later turns (LAB-1169). [#993](https://github.com/n8n-io/nod/pull/993) (a04a751)
+
+<details>
+<summary>Maintenance (2 changes)</summary>
+
+- **desktop:** Remove the partial file when an artifact export fails. [#965](https://github.com/n8n-io/nod/pull/965) (dec58c7)
+- **url-guards:** Prove the pinned transport stops reading at its byte limit. [#964](https://github.com/n8n-io/nod/pull/964) (0813f46)
+
+</details>
+
+[Full changelog](https://github.com/n8n-io/nod/compare/nod-v0.8.3...cc81434d87b2ad15f7c2d0934c4ac6824c4db0fb)
+
+<details>
+<summary>Build details</summary>
+
+Source: `cc81434d87b2ad15f7c2d0934c4ac6824c4db0fb`
+Previous release: `nod-v0.8.3`
+
+</details>
+
+## 0.8.3 - 2026-11-17
+
+### Fixes
+
+- **proactivity:** Don't start automatic preparation on a model without a price. [#990](https://github.com/n8n-io/nod/pull/990) (357f34d)
+- **pi:** Remove duplicate context budgeting. [commit](https://github.com/n8n-io/nod/commit/3017a9448fc96cc1bf95f60eb370c143e79f53f6) (3017a94)
+- **browser:** Pace handoff frames to display. [commit](https://github.com/n8n-io/nod/commit/6cebf4f0941cdae2f2f40f7cdbf61a4720944ec7) (6cebf4f)
+- **apps:** Start the email check time limit when the check runs. [#976](https://github.com/n8n-io/nod/pull/976) (990285a)
+- **agent:** Balance feedback during long tasks. [#975](https://github.com/n8n-io/nod/pull/975) (47cfee3)
+- **workspace:** Recover after an uncertain command and keep long self-hosted commands open. [#972](https://github.com/n8n-io/nod/pull/972) (64dd140)
+- **channels:** Accept the owner's WhatsApp messages sent from a private ID. [#974](https://github.com/n8n-io/nod/pull/974) (48970da)
+- **browser:** Open a profile locked by a replaced browser container. [#973](https://github.com/n8n-io/nod/pull/973) (78d9fb6)
+- **desktop:** Skip expired system certificates. [#971](https://github.com/n8n-io/nod/pull/971) (f43c22e)
+- **desktop:** Restart from the update notice without asking again. [#970](https://github.com/n8n-io/nod/pull/970) (f89047f)
+- **pi:** Send tool schemas that match JSON Schema draft 2020-12. [#968](https://github.com/n8n-io/nod/pull/968) (c892150)
+- **apps:** Sign connection service requests again when the computer clock is off. [#967](https://github.com/n8n-io/nod/pull/967) (c4816b1)
+
+### Performance
+
+- **ci:** Share PR setup and stage platform release checks. [#980](https://github.com/n8n-io/nod/pull/980) (7c65518)
+
+<details>
+<summary>Maintenance (2 changes)</summary>
+
+- **pi:** Pin that a long turn extends each request unchanged until Pi compacts. [#991](https://github.com/n8n-io/nod/pull/991) (adc3c06)
+- **channels:** Pin the Telegram download size limits. [commit](https://github.com/n8n-io/nod/commit/f5e288ca0117276058329069714cec49a26319c6) (f5e288c)
+
+</details>
+
+[Full changelog](https://github.com/n8n-io/nod/compare/nod-v0.8.2...adc3c0603d4847603df3fe2c0b5e701af6a2c07c)
+
+<details>
+<summary>Build details</summary>
+
+Source: `adc3c0603d4847603df3fe2c0b5e701af6a2c07c`
+Previous release: `nod-v0.8.2`
+
+</details>
+
+## 0.8.2 - 2026-11-16
+
+### Features
+
+- **local-files:** Enable file access through chat approval. [#949](https://github.com/n8n-io/nod/pull/949) (d87da94)
+
+### Fixes
+
+- **desktop:** Install guest images atomically and recover first starts. [#913](https://github.com/n8n-io/nod/pull/913) (60598bd)
+- **channels:** Parse quoted contact card parameters. [#915](https://github.com/n8n-io/nod/pull/915) (1201345)
+- **desktop:** Separate account onboarding from device setup. [commit](https://github.com/n8n-io/nod/commit/bdec709de4698e9857946890b0a9bcb975728353) (bdec709)
+- **apps:** Count one connection service refusal per wait step. [commit](https://github.com/n8n-io/nod/commit/9fc4cc9d5f946f89ec276648f40da73e21eb1cc3) (9fc4cc9)
+- **models:** Recommend Gemini 4 Argon for Google. [#950](https://github.com/n8n-io/nod/pull/950) (866158b)
+- **pi:** Fit requests before context overflow. [#946](https://github.com/n8n-io/nod/pull/946) (48e853c)
+
+<details>
+<summary>Maintenance (1 changes)</summary>
+
+- **evals:** Add local files capability evals. [#941](https://github.com/n8n-io/nod/pull/941) (d4a1b6c)
+
+</details>
+
+[Full changelog](https://github.com/n8n-io/nod/compare/nod-v0.8.1...60598bd3cac73a5ea6bc3814cf28faf46e7aaf18)
+
+<details>
+<summary>Build details</summary>
+
+Source: `60598bd3cac73a5ea6bc3814cf28faf46e7aaf18`
+Previous release: `nod-v0.8.1`
+
+</details>
+
+## 0.8.1 - 2026-11-16
+
+### Fixes
+
+- **integrations:** Defer Gmail polling after proxy refusals. [#944](https://github.com/n8n-io/nod/pull/944) (b40b632)
+- **apps:** Include Cloudflare Ray ID on HTML 403s. [#943](https://github.com/n8n-io/nod/pull/943) (13cda50)
+- **schedules:** Skip watch polling for stale jobs. [#942](https://github.com/n8n-io/nod/pull/942) (7438960)
+- **apps:** Keep the connection service's status and code when an app connection can't start. [#877](https://github.com/n8n-io/nod/pull/877) (67298e9)
+
+<details>
+<summary>Maintenance (13 changes)</summary>
+
+- **deps:** Keep only the reviewed dependency changes. [commit](https://github.com/n8n-io/nod/commit/b72529fe8b78de0ef227c4bc0c8ca366100789aa) (b72529f)
+- **deps-dev:** Bump the tiptap group across 1 directory with 9 updates. [commit](https://github.com/n8n-io/nod/commit/1912c3220591e4c3eddb68c4b75637935485bf6a) (1912c32)
+- **deps:** Bump the docs group across 1 directory with 2 updates. [commit](https://github.com/n8n-io/nod/commit/c9dbec4c462966d93b09bfe91c8a448c7a09e1ac) (c9dbec4)
+- **deps-dev:** Bump the tailwindcss group across 1 directory with 2 updates. [commit](https://github.com/n8n-io/nod/commit/74cf053714cf4d22cdd07173a460133971010b37) (74cf053)
+- **deps:** Bump the pi group across 1 directory with 2 updates. [commit](https://github.com/n8n-io/nod/commit/bfe15cf06bc560c01a22d83754260f2cfa8df49e) (bfe15cf)
+- **deps:** Bump posthog-node from 5.60.1 to 5.71.0. [commit](https://github.com/n8n-io/nod/commit/e27b383249d9fe87dc0f8b313cade6a4c2ec4a18) (e27b383)
+- **deps:** Bump parse5 from 8.0.1 to 8.1.1. [commit](https://github.com/n8n-io/nod/commit/bbd9c57c51ea9dcd9f46ad62fc9612cb8b3683d9) (bbd9c57)
+- **deps:** Bump dotenv from 18.0.9 to 18.0.10. [commit](https://github.com/n8n-io/nod/commit/e40879fef970804d481fdfb89ad2fd2f4f546850) (e40879f)
+- **deps-dev:** Bump unist-util-visit from 5.1.0 to 5.2.0. [commit](https://github.com/n8n-io/nod/commit/5f78872989e2b581456ef8211191234e112e0da9) (5f78872)
+- **deps-dev:** Bump lucide-react from 1.61.0 to 1.72.0. [commit](https://github.com/n8n-io/nod/commit/cb3e81569b7928c3f2e1dbbff4279e48a7024da5) (cb3e815)
+- **deps:** Bump jose from 6.2.14 to 6.2.17. [commit](https://github.com/n8n-io/nod/commit/4ee956c645078241198f23a8f7796bab6a15d31f) (4ee956c)
+- **deps:** Bump peter-evans/create-pull-request. [commit](https://github.com/n8n-io/nod/commit/8155369f177f02cb501c829a2c7acc9fb0b3a421) (8155369)
+- **deps:** Bump rust in /. [commit](https://github.com/n8n-io/nod/commit/3def1e2bc084bd5210512716a22b3a5ff77e666c) (3def1e2)
+
+</details>
+
+[Full changelog](https://github.com/n8n-io/nod/compare/nod-v0.8.0...b40b6329e34a78f4f1628a741efb776950683fb1)
+
+<details>
+<summary>Build details</summary>
+
+Source: `b40b6329e34a78f4f1628a741efb776950683fb1`
+Previous release: `nod-v0.8.0`
+
+</details>
+
+## 0.8.0 - 2026-11-16
+
+### Features
+
+- **desktop:** Keep the computer awake while a local task runs. [commit](https://github.com/n8n-io/nod/commit/df4cd6015090b80f2970f2b00326b82a22222d7e) (df4cd60)
+- **models:** Choose a model for schedules, Nod's own work and each task. [#910](https://github.com/n8n-io/nod/pull/910) (7635ffd)
+- **chat:** Show which task or schedule a question belongs to and its progress. [#887](https://github.com/n8n-io/nod/pull/887) (49ac827)
+- **evals:** Add a model capability matrix and computer-use cases. [commit](https://github.com/n8n-io/nod/commit/7c5fffa2c68a7de78648d71f4a172fac2d3cfcbc) (7c5fffa)
+
+### Fixes
+
+- **backend:** Correct the NOD\_PUBLIC\_URL host checks and document the error. [#893](https://github.com/n8n-io/nod/pull/893) (e1cf299)
+- **models:** Recover from failing model connections without guessing at error text. [#912](https://github.com/n8n-io/nod/pull/912) (27f202c)
+- **chat:** Guide users to a first useful task. [commit](https://github.com/n8n-io/nod/commit/cfa92109461c2efcc6aa12f1297f29f38b8b2abf) (cfa9210)
+- **pi:** Use native context recovery. [commit](https://github.com/n8n-io/nod/commit/d40be9c247872f819da7d0b8152564ed58bfaa5c) (d40be9c)
+- **apps:** Mark a write as not run when the connection service refuses session create. [#907](https://github.com/n8n-io/nod/pull/907) (15397ab)
+- **models:** Handle partial metadata across compatible servers. [commit](https://github.com/n8n-io/nod/commit/f41c721e2c1a0b2a8d27779ae2727f3d30946cf9) (f41c721)
+- **models:** Treat OpenAI-compatible servers as Ollama only when /api…. [commit](https://github.com/n8n-io/nod/commit/73f5b7eb0d94ae9693ffc0eefc43c6512228cc1f) (73f5b7e)
+- **local-files:** Attach a local file when the owner asks to see it. [#901](https://github.com/n8n-io/nod/pull/901) (3813cd6)
+- **deps:** Override vulnerable adm-zip to 0.6.1. [commit](https://github.com/n8n-io/nod/commit/ee7c178517cd8a846e2a266d8d73ee59d16bf921) (ee7c178)
+- **trust:** Preserve owner instructions across schedule updates. [#888](https://github.com/n8n-io/nod/pull/888) (9be6b24)
+- **deps:** Update vulnerable transitive dependencies. [commit](https://github.com/n8n-io/nod/commit/fb1cacd07cdb177be6783e561e48a6259aa7df72) (fb1cacd)
+- **local-files:** Expand \~ to the home folder in file paths. [#889](https://github.com/n8n-io/nod/pull/889) (b2c6f5d)
+- **deps:** Update HTTP dependencies for DEVP-1541. [commit](https://github.com/n8n-io/nod/commit/526ba31acbf6080dfafd9a6aa8a21de7d32fdb35) (526ba31)
+- **desktop:** Move the preview note below the server link on the welcome screen. [#886](https://github.com/n8n-io/nod/pull/886) (f77f9b2)
+- **apps:** Back off connection service reads after a rate limit. [commit](https://github.com/n8n-io/nod/commit/ac8854aceea1a7e1e5d6b14f5f8069a5750f50dd) (ac8854a)
+
+<details>
+<summary>Maintenance (1 changes)</summary>
+
+- **deps:** Bump undici to 7.30.2. [commit](https://github.com/n8n-io/nod/commit/f6400141f7c00223d59bdcd3f042ec935530aa00) (f640014)
+
+</details>
+
+[Full changelog](https://github.com/n8n-io/nod/compare/nod-v0.7.6...e1cf299e14a83973ec665ead9404b99bf4ab969b)
+
+<details>
+<summary>Build details</summary>
+
+Source: `e1cf299e14a83973ec665ead9404b99bf4ab969b`
+Previous release: `nod-v0.7.6`
+
+</details>
+
 ## 0.7.6 - 2026-11-13
 
 ### Features

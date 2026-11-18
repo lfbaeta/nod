@@ -13,6 +13,13 @@ import type {
   TurnStatus,
 } from '../shared/contracts.ts';
 import type { enqueueTurn } from './thread.ts';
+import { modelSelectionInput } from './models.ts';
+import {
+  repriceUsd,
+  type ModelChoice,
+  type ModelSelection,
+  type WorkUsage,
+} from '../shared/models.ts';
 import { activeThreadSql } from './history.ts';
 import { waitingTurnSql } from './turn-chain.ts';
 import type { WorkConsumers } from './work-admission.ts';
@@ -58,10 +65,11 @@ const createSchema = timingSchema
     prompt: z.string().trim().min(1),
     baselineObservation: verifiedObservationSchema.optional(),
     watch: watchSchema.optional(),
+    model: modelSelectionInput.optional(),
   })
   .strict();
 const updateSchema = createSchema
-  .omit({ kind: true, watch: true })
+  .omit({ kind: true, watch: true, model: true })
   .partial()
   .extend({
     kind: z.enum(['once', 'recurring']).optional(),
@@ -78,7 +86,7 @@ const historySchema = z
   })
   .strict();
 const columns =
-  'id,title,prompt,kind,cron,run_at AS "runAt",time_zone AS "timeZone",enabled,revision,next_run_at AS "nextRun",job_id AS "jobId",delivery_channel AS "deliveryChannel",channel_source_id AS "channelSourceId",authority,baseline_observation AS "baselineObservation",watch,watch_marker AS "watchMarker"';
+  'id,title,prompt,kind,cron,run_at AS "runAt",time_zone AS "timeZone",enabled,revision,next_run_at AS "nextRun",job_id AS "jobId",delivery_channel AS "deliveryChannel",channel_source_id AS "channelSourceId",authority,baseline_observation AS "baselineObservation",watch,watch_marker AS "watchMarker",model';
 
 export interface ScheduleDependencies {
   analytics?: CaptureAnalytics;
@@ -97,8 +105,14 @@ export interface ScheduleDependencies {
   sessionCosts?(sessionIds: string[]): Promise<Record<string, number | null>>;
   watchable?(connectionIds: string[]): Promise<boolean>;
   watchState?(connectionIds: string[]): Promise<string | null>;
+  modelPaused?(model: ModelSelection | null): boolean;
   recentTurnCost?(turnId?: string): Promise<number | null>;
+  validateModel?(choice: ModelSelection): ModelSelection;
+  sessionUsage?(sessionIds: string[]): Promise<Record<string, WorkUsage>>;
+  workPricing?(own: ModelSelection | null): WorkPrice | undefined;
 }
+
+type WorkPrice = { modelId: string; pricing: ModelChoice['pricing'] };
 
 interface ScheduleRow {
   id: string;
@@ -118,6 +132,7 @@ interface ScheduleRow {
   baselineObservation: ScheduleObservation | null;
   watch: string[] | null;
   watchMarker: string | null;
+  model: ModelSelection | null;
 }
 
 interface ScheduleJob {
@@ -261,9 +276,19 @@ export function createSchedules(dependencies: ScheduleDependencies) {
     return gap > 5 * 60_000 ? 'long' : 'short';
   }
 
-  function lateNote(schedule: ScheduleRow) {
-    const due = schedule.kind === 'once' ? schedule.runAt! : schedule.nextRun!;
-    const started = now();
+  function missedFires(schedule: ScheduleRow, due: Date, started: Date) {
+    const fires: Date[] = [];
+    if (schedule.kind === 'recurring' && started.getTime() - due.getTime() > lateAfterMs)
+      for (
+        let next = nextOccurrence(schedule, due)!;
+        next <= started && fires.length < skippedCountLimit;
+        next = nextOccurrence(schedule, next)!
+      )
+        fires.push(next);
+    return fires;
+  }
+
+  function lateNote(schedule: ScheduleRow, due: Date, started: Date, skipped: number) {
     if (started.getTime() - due.getTime() <= lateAfterMs) return '';
     const format = new Intl.DateTimeFormat('en-GB', {
       timeZone: schedule.timeZone,
@@ -276,15 +301,6 @@ export function createSchedules(dependencies: ScheduleDependencies) {
       hourCycle: 'h23',
       timeZoneName: 'short',
     });
-    let skipped = 0;
-    if (schedule.kind === 'recurring') {
-      for (
-        let next = nextOccurrence(schedule, due)!;
-        next <= started && skipped < skippedCountLimit;
-        next = nextOccurrence(schedule, next)!
-      )
-        skipped++;
-    }
     const gap = skipped
       ? ` ${skipped >= skippedCountLimit ? `${skippedCountLimit} or more` : skipped} later ${skipped === 1 ? 'run was' : 'runs were'} skipped.`
       : '';
@@ -348,6 +364,7 @@ export function createSchedules(dependencies: ScheduleDependencies) {
     jobId: string,
     scheduledFor: Date,
     note = '',
+    missed: Date[] = [],
   ) {
     const turnId = await enqueueTurn(
       `Scheduled task: ${row.title}\n${row.prompt}\nDeliver what this schedule asks for in this run, even when an earlier message covered the same ground. When it asks for nothing to be sent, message the owner only about a useful result, a problem or a necessary question.${note}`,
@@ -360,9 +377,21 @@ export function createSchedules(dependencies: ScheduleDependencies) {
         client,
       },
     );
+    const paused =
+      (
+        await client.query<{ skipped: { at: string; reason: 'paused' }[] }>(
+          `UPDATE schedules s SET skipped='[]'::jsonb FROM (SELECT skipped FROM schedules WHERE id=$1 AND owner_id=$2) old
+           WHERE s.id=$1 AND s.owner_id=$2 RETURNING old.skipped`,
+          [row.id, ownerId],
+        )
+      ).rows[0]?.skipped ?? [];
+    const skipped = [
+      ...paused,
+      ...missed.map((at) => ({ at: at.toISOString(), reason: 'stopped' as const })),
+    ].slice(-skippedCountLimit);
     await client.query(
-      `INSERT INTO schedule_runs(id,owner_id,schedule_id,schedule_revision,job_id,title,turn_id,scheduled_for,time_zone,authority,baseline_observation)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+      `INSERT INTO schedule_runs(id,owner_id,schedule_id,schedule_revision,job_id,title,turn_id,scheduled_for,time_zone,authority,baseline_observation,skipped)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
       [
         randomUUID(),
         ownerId,
@@ -375,6 +404,7 @@ export function createSchedules(dependencies: ScheduleDependencies) {
         row.timeZone,
         row.authority ? JSON.stringify(row.authority) : null,
         row.baselineObservation ? JSON.stringify(row.baselineObservation) : null,
+        JSON.stringify(skipped),
       ],
     );
     return { turnId };
@@ -420,8 +450,8 @@ export function createSchedules(dependencies: ScheduleDependencies) {
     job.signal.throwIfAborted();
     const watched = (
       await pool.query<Pick<ScheduleRow, 'watch' | 'kind'>>(
-        'SELECT watch,kind FROM schedules WHERE id=$1 AND owner_id=$2',
-        [job.data.scheduleId, ownerId],
+        'SELECT watch,kind FROM schedules WHERE id=$1 AND owner_id=$2 AND enabled AND job_id=$3 AND revision=$4 AND next_run_at=$5',
+        [job.data.scheduleId, ownerId, job.id, job.data.revision, job.data.scheduledFor],
       )
     ).rows[0];
     const marker =
@@ -464,6 +494,15 @@ export function createSchedules(dependencies: ScheduleDependencies) {
         );
       }
       if (busy) return true;
+      if (row.kind === 'recurring' && dependencies.modelPaused?.(row.model)) {
+        await client.query(
+          `UPDATE schedules SET skipped=(CASE WHEN jsonb_array_length(skipped)>=$4 THEN skipped-0 ELSE skipped END)
+             ||jsonb_build_array(jsonb_build_object('at',$3::text,'reason','paused'))
+           WHERE id=$1 AND owner_id=$2`,
+          [row.id, ownerId, row.nextRun!.toISOString(), skippedCountLimit],
+        );
+        return true;
+      }
       const unchanged = marker ? `${row.revision}:${marker}` : null;
       if (unchanged) {
         if (
@@ -483,13 +522,10 @@ export function createSchedules(dependencies: ScheduleDependencies) {
           unchanged,
         ]);
       }
-      await startRun(
-        client,
-        row,
-        job.id,
-        row.kind === 'once' ? row.runAt! : row.nextRun!,
-        lateNote(row),
-      );
+      const due = row.kind === 'once' ? row.runAt! : row.nextRun!;
+      const started = now();
+      const missed = missedFires(row, due, started);
+      await startRun(client, row, job.id, due, lateNote(row, due, started, missed.length), missed);
       job.signal.throwIfAborted();
       return true;
     });
@@ -533,6 +569,11 @@ export function createSchedules(dependencies: ScheduleDependencies) {
       ALTER TABLE schedules DROP COLUMN IF EXISTS authority_instruction, DROP COLUMN IF EXISTS authority_source_message_id, DROP COLUMN IF EXISTS authority_context;
       ALTER TABLE schedule_runs DROP COLUMN IF EXISTS authority_instruction, DROP COLUMN IF EXISTS authority_source_message_id, DROP COLUMN IF EXISTS authority_context;
       ALTER TABLE schedules ADD COLUMN IF NOT EXISTS watch jsonb, ADD COLUMN IF NOT EXISTS watch_marker text;
+      ALTER TABLE schedules ADD COLUMN IF NOT EXISTS model jsonb;
+      ALTER TABLE schedules ADD COLUMN IF NOT EXISTS skipped jsonb NOT NULL DEFAULT '[]'::jsonb;
+      ALTER TABLE schedule_runs ADD COLUMN IF NOT EXISTS skipped jsonb NOT NULL DEFAULT '[]'::jsonb,
+        ADD COLUMN IF NOT EXISTS notice_shown boolean NOT NULL DEFAULT true;
+      ALTER TABLE schedule_runs ALTER COLUMN notice_shown SET DEFAULT false;
       ALTER TABLE schedule_runs ADD COLUMN IF NOT EXISTS baseline_observation jsonb,
         ADD COLUMN IF NOT EXISTS observation jsonb, ADD COLUMN IF NOT EXISTS observed_at timestamptz;
       CREATE INDEX IF NOT EXISTS schedule_runs_owner_time ON schedule_runs(owner_id,created_at DESC,id DESC);
@@ -701,17 +742,30 @@ export function createSchedules(dependencies: ScheduleDependencies) {
       )
     ).rows;
     const costs = await dependencies.sessionCosts(runs.map((run) => run.turn_id));
-    const pricedRuns = (keep: (run: (typeof runs)[number]) => boolean) =>
+    const usage = (await dependencies.sessionUsage?.(runs.map((run) => run.turn_id))) ?? {};
+    const runCost = (run: (typeof runs)[number], target: WorkPrice | undefined) => {
+      const recorded = costs[run.turn_id];
+      const spent = usage[run.turn_id];
+      if (!spent || !target || (spent.models.length === 1 && spent.models[0] === target.modelId))
+        return recorded;
+      return repriceUsd(spent, target.pricing);
+    };
+    const pricedRuns = (
+      target: WorkPrice | undefined,
+      keep: (run: (typeof runs)[number]) => boolean,
+    ) =>
       runs.flatMap((run) => {
-        const cost = keep(run) ? costs[run.turn_id] : undefined;
+        const cost = keep(run) ? runCost(run, target) : undefined;
         return typeof cost === 'number' && cost > 0 ? [cost] : [];
       });
-    const recent = pricedRuns((run) => run.latest);
     let fallback: Promise<number | null> | undefined;
     const from = now();
     const month = 30 * 86_400_000;
     for (const row of recurring) {
-      const own = pricedRuns((run) => run.schedule_id === row.id);
+      const target = dependencies.workPricing?.(row.model);
+      if (dependencies.workPricing && !target) continue;
+      const own = pricedRuns(target, (run) => run.schedule_id === row.id);
+      const recent = pricedRuns(target, (run) => run.latest);
       const priced = runs.some((run) => run.schedule_id === row.id)
         ? own
         : recent.length
@@ -752,6 +806,7 @@ export function createSchedules(dependencies: ScheduleDependencies) {
       activeRun: await activeRun(pool, row.id),
       baselineObservation: row.baselineObservation,
       watch: row.watch,
+      model: row.model,
       monthlyUsd: (monthly ?? (await monthlyCosts([row], turnId))).get(row.id) ?? null,
     };
   }
@@ -776,8 +831,14 @@ export function createSchedules(dependencies: ScheduleDependencies) {
       );
   }
 
+  function validateModel<T extends { model?: ModelSelection | null }>(input: T) {
+    if (!input.model) return input;
+    if (!dependencies.validateModel) throw invalid('Model choices are unavailable.');
+    return { ...input, model: dependencies.validateModel(input.model) };
+  }
+
   function validateCreate(raw: unknown) {
-    const input = createSchema.parse(raw);
+    const input = validateModel(createSchema.parse(raw));
     validateTiming(input, true);
     return input;
   }
@@ -1010,11 +1071,22 @@ export function createSchedules(dependencies: ScheduleDependencies) {
       assertChange(provenance, input);
       const authorized = await authority(client, input, provenance);
       const existing = provenance && (await duplicate(client, input, route));
-      if (existing) return { row: existing, existing: true };
+      if (existing) {
+        const updated = input.model
+          ? (
+              await client.query<ScheduleRow>(
+                `UPDATE schedules SET model=$3::jsonb WHERE id=$1 AND owner_id=$2 AND model IS DISTINCT FROM $3::jsonb RETURNING ${columns}`,
+                [existing.id, ownerId, JSON.stringify(input.model)],
+              )
+            ).rows[0]
+          : undefined;
+        if (updated) modelChanged(client, 'agent', input.model ?? null);
+        return { row: updated ?? existing, existing: true };
+      }
       const saved = (
         await client.query<ScheduleRow>(
-          `INSERT INTO schedules(id,owner_id,title,prompt,kind,cron,run_at,time_zone,delivery_channel,channel_source_id,authority,baseline_observation,watch)
-           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING ${columns}`,
+          `INSERT INTO schedules(id,owner_id,title,prompt,kind,cron,run_at,time_zone,delivery_channel,channel_source_id,authority,baseline_observation,watch,model)
+           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING ${columns}`,
           [
             randomUUID(),
             ownerId,
@@ -1031,6 +1103,7 @@ export function createSchedules(dependencies: ScheduleDependencies) {
               ? JSON.stringify({ ...input.baselineObservation, checkedAt: now().toISOString() })
               : null,
             input.watch ? JSON.stringify(input.watch) : null,
+            input.model ? JSON.stringify(input.model) : null,
           ],
         )
       ).rows[0]!;
@@ -1092,7 +1165,7 @@ export function createSchedules(dependencies: ScheduleDependencies) {
           `UPDATE schedules SET title=$3,prompt=$4,kind=$5,cron=$6,run_at=$7,time_zone=$8,
              enabled=$9,authority=$10::jsonb,
              baseline_observation=COALESCE($11::jsonb,baseline_observation),
-             watch=CASE WHEN $12 THEN $13::jsonb ELSE watch END,revision=revision+1 WHERE id=$1 AND owner_id=$2 RETURNING ${columns}`,
+             watch=CASE WHEN $12 THEN $13::jsonb ELSE watch END,skipped='[]'::jsonb,revision=revision+1 WHERE id=$1 AND owner_id=$2 RETURNING ${columns}`,
           [
             id,
             ownerId,
@@ -1138,6 +1211,36 @@ export function createSchedules(dependencies: ScheduleDependencies) {
       });
     });
     return value(row, undefined, provenance?.turnId);
+  }
+
+  async function setModel(
+    id: string,
+    model: ModelSelection | null,
+    actor: 'owner' | 'agent',
+    shared?: PoolClient,
+  ) {
+    z.uuid().parse(id);
+    const choice = validateModel({ model }).model ?? null;
+    const changed = await transaction(async (client) => {
+      const { rowCount } = await client.query(
+        'UPDATE schedules SET model=$3::jsonb WHERE id=$1 AND owner_id=$2 AND model IS DISTINCT FROM $3::jsonb',
+        [id, ownerId, choice ? JSON.stringify(choice) : null],
+      );
+      if (!rowCount) await read(id, client);
+      return Boolean(rowCount);
+    }, shared);
+    if (changed) modelChanged(shared ?? pool, actor, choice);
+    return value(await read(id, shared));
+  }
+
+  function modelChanged(client: object, actor: 'owner' | 'agent', choice: ModelSelection | null) {
+    afterCommit(client, () => {
+      refresh();
+      dependencies.analytics?.({
+        event: 'setting_changed',
+        properties: { setting: 'schedule_model', actor, state: choice ? 'configured' : 'default' },
+      });
+    });
   }
 
   async function remove(id: string) {
@@ -1195,6 +1298,13 @@ export function createSchedules(dependencies: ScheduleDependencies) {
         .parse(request.body);
       return update(request.params.id, body, undefined, expectedRevision);
     });
+    app.put<{ Params: { id: string } }>('/api/schedules/:id/model', (request) => {
+      const { model } = z
+        .object({ model: modelSelectionInput.nullable() })
+        .strict()
+        .parse(request.body);
+      return setModel(request.params.id, model, 'owner');
+    });
     app.delete<{ Params: { id: string } }>('/api/schedules/:id', (request) =>
       remove(request.params.id),
     );
@@ -1208,6 +1318,7 @@ export function createSchedules(dependencies: ScheduleDependencies) {
     get: async (id: string) => value(await read(id)),
     create,
     update,
+    setModel,
     remove,
     history,
     registerRoutes,

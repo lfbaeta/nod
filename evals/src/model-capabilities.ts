@@ -1,5 +1,6 @@
 import type { ModelDefinition } from '../../src/ports/models.ts';
-import { createPiModelBackend, modelContextBudget } from '../../src/providers/pi/models.ts';
+import { createPiModelBackend } from '../../src/providers/pi/models.ts';
+import { modelContext } from '../../src/providers/pi/context.ts';
 import { agentModels } from '../../src/shared/model-defaults.ts';
 import { modelProviders, type ModelEffort, type ModelProvider } from '../../src/shared/models.ts';
 import type { RunSummary } from './results.ts';
@@ -55,7 +56,7 @@ export async function capabilityMatrix(runs: Array<{ label: string; summary: Run
         ? (await catalog(known)).find((item) => item.choice.id === rest.join('/'))
         : undefined;
       const budget = definition
-        ? modelContextBudget(definition.spec as Parameters<typeof modelContextBudget>[0])
+        ? modelContext(definition.spec as Parameters<typeof modelContext>[0])
         : undefined;
       const measured = Object.fromEntries(
         Object.entries(measuredCapabilities).map(([name, capability]) => {
@@ -76,7 +77,7 @@ export async function capabilityMatrix(runs: Array<{ label: string; summary: Run
       return {
         model,
         images: definition?.choice.images ?? null,
-        contextWindow: budget?.window ?? null,
+        contextWindow: budget?.model.contextWindow ?? null,
         compact: budget?.compact ?? null,
         efforts: definition?.choice.efforts ?? [],
         measured,
