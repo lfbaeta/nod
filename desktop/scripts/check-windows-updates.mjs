@@ -440,6 +440,12 @@ app.whenReady().then(async () => {
   );
   verifyIdentity(await start());
   receipt.stage = 'updating to 1.0.1 from the running app';
+  const retired = join(installation, 'resources/app/retired/retired.mjs');
+  const cachedRuntime = join(installation, 'resources/engine/windows-runtime/guest.tar.gz');
+  for (const path of [retired, cachedRuntime]) {
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, 'synthetic');
+  }
   await writeFile(stop, dirname(installers['1.0.1']));
   await waitFor((entries) =>
     entries.find((entry) => entry.event === 'stopped' && entry.pid === child.pid),
@@ -453,6 +459,8 @@ app.whenReady().then(async () => {
   assert.deepEqual(updated.files, first.files);
   assert.equal(updated.keyHash, first.keyHash);
   assert.deepEqual(updated.preferences, first.preferences);
+  await assert.rejects(stat(retired), { code: 'ENOENT' });
+  assert.equal(await readFile(cachedRuntime, 'utf8'), 'synthetic');
   verifyIdentity(updated);
   receipt.stage = 'installing on quit without relaunch';
   const runningUpdated = await start({ hold: true });
@@ -488,6 +496,7 @@ app.whenReady().then(async () => {
     failedInstallPreserved: true,
     runningAppQuitByInstaller: true,
     updateStartedByApp: true,
+    retiredFilesRemoved: true,
     foreignInstallerRefused: true,
     windowsCatalogInstallerRefused: true,
     encryptedProfilePreserved: true,
