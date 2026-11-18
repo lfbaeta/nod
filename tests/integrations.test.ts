@@ -87,6 +87,7 @@ import { fileBytes } from '../src/shared/files.ts';
 import { connectionGroups } from '../src/web/lib/secondary-pages.ts';
 import { fakeComputer, fakeExecution, fakeWorkspace } from './runtime-fixtures.ts';
 import { appAccessPath, bundledApps, loadAppCatalog } from '../src/server/app-catalog.ts';
+import { createMcpRegistry } from '../src/server/mcp-registry.ts';
 import { appAccessSchema } from '../src/server/app-access.ts';
 import { checkAppContract } from '../scripts/check-apps.ts';
 import { createApp, type CreateAppOptions } from '../scripts/create-app.ts';
@@ -14281,3 +14282,87 @@ test(
     assert.equal((await f.service.activitySources()).length, 0);
   },
 );
+
+test('the MCP catalog sync keeps only connectable servers and survives an outage from its saved file', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'nod-mcp-registry-'));
+  const file = join(directory, 'mcp-registry.json');
+  const entry = (slug: string, extra: Record<string, unknown> = {}) => ({
+    id: 1,
+    attributes: {
+      slug,
+      title: `Server ${slug}`,
+      authType: 'oauth2',
+      isPublished: true,
+      status: 'active',
+      remotes: [{ type: 'streamable-http', url: `https://${slug}.fixtures.io/mcp` }],
+      ...extra,
+    },
+  });
+  const entries = [
+    entry('good'),
+    entry('unpublished', { isPublished: false }),
+    entry('credentials', { authType: 'usesCredentials' }),
+    entry('deprecated', { status: 'deprecated' }),
+    entry('capable', { requiredCapabilities: ['sampling'] }),
+    entry('plain', { remotes: [{ type: 'streamable-http', url: 'http://plain.fixtures.io/mcp' }] }),
+    entry('private', {
+      remotes: [{ type: 'streamable-http', url: 'https://user:key@private.fixtures.io/mcp?x=1' }],
+    }),
+    entry('loopback', { remotes: [{ type: 'streamable-http', url: 'https://127.0.0.1/mcp' }] }),
+    entry('empty-query', {
+      remotes: [{ type: 'streamable-http', url: 'https://empty-query.fixtures.io/mcp?' }],
+    }),
+    entry('named', { title: 'Roboflow (Official)' }),
+    entry('sse', { remotes: [{ type: 'sse', url: 'https://sse.fixtures.io/sse' }] }),
+  ];
+  let online = true;
+  const served: string[] = [];
+  const errors: string[] = [];
+  const fetcher = (async () =>
+    online
+      ? Response.json({ data: entries, meta: { pagination: { pageCount: 1 } } })
+      : new Response('down', { status: 503 })) as typeof fetch;
+  try {
+    const first = createMcpRegistry({
+      file,
+      url: 'https://registry.example.org',
+      served: async () => served,
+      fetch: fetcher,
+      onError: (error) => errors.push(error.message),
+    });
+    await first.start();
+    assert.deepEqual(
+      (await first.available()).map((server) => [server.slug, server.endpoint]),
+      [
+        ['named', 'https://named.fixtures.io/mcp'],
+        ['good', 'https://good.fixtures.io/mcp'],
+      ],
+    );
+    assert.equal(
+      (await first.available()).find((server) => server.slug === 'named')?.name,
+      'Roboflow Official',
+    );
+    served.push('https://GOOD.fixtures.io/mcp/');
+    assert.deepEqual(
+      (await first.available()).map((server) => server.slug),
+      ['named'],
+    );
+    served.length = 0;
+    online = false;
+    const second = createMcpRegistry({
+      file,
+      url: 'https://registry.example.org',
+      served: async () => served,
+      fetch: fetcher,
+      onError: (error) => errors.push(error.message),
+    });
+    await second.start();
+    assert.deepEqual(
+      (await second.available()).map((server) => server.slug),
+      ['named', 'good'],
+    );
+    assert.match(errors.join(), /answered 503: down/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});

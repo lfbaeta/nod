@@ -852,6 +852,7 @@ export function Apps({
       />
       {manualMcp && (
         <ManualMcpDialog
+          listed={groups}
           onClose={() => {
             manualMcpAnalytics.current = null;
             setManualMcp(false);

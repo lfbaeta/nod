@@ -55,7 +55,7 @@ export type BundledApp = AppMetadata &
       }
   );
 
-function publicAddress(value: string, name: string, query = false) {
+export function publicAddress(value: string, name: string, query = false) {
   const url = URL.parse(value);
   if (
     !url ||

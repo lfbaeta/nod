@@ -43,6 +43,8 @@ Nod connects to MCP servers over Streamable HTTP. When a server refuses it with 
 
 A failed tool request keeps the server's status and reason. Nod does not retry it. If the SSE stream closes, the next request opens a new connection.
 
+When Nod starts, it reads the published MCP server catalog from the n8n creator portal in the background and saves the result in `NOD_DATA_ROOT/mcp-registry.json`. **Connect MCP** then offers the servers in **Suggested servers**. Choosing one only fills in the name and address with browser sign-in. You still select **Continue**, and the usual address checks and [trust check](/trust/approvals/) apply. Nod lists only active servers that use browser sign-in and a public HTTPS Streamable HTTP address, and that need no extra client features. If the portal can't be reached, Nod keeps the last saved list and logs the portal's status and reason. Nothing from your account is sent. Set `NOD_MCP_REGISTRY_URL` to [change or turn off the source](/deploy/configuration/).
+
 Ask Nod to connect a service it can't find in the app catalog. Nod proposes a way in, called an access path, and sends you a link to a private setup page. There, you paste a token or sign in. The model never sees the token.
 
 | Access path | What Nod calls                                                 | How it signs in                       |
