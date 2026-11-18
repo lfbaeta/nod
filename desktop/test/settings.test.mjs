@@ -549,6 +549,7 @@ async function runningDesktop(
     handle: (name, handler) => handlers.set(name, handler),
   });
   let openAtLogin = false;
+  let initialized = false;
   let requestHeaders;
   let permissionCheck;
   let permissionRequest;
@@ -618,7 +619,9 @@ async function runningDesktop(
         if (updateLoginItems(value)) openAtLogin = value.openAtLogin;
       },
       quit: () => appEvents.emit('before-quit', { preventDefault() {} }),
-      exit,
+      exit: () => {
+        if (initialized) exit();
+      },
     },
     process: {
       platform,
@@ -995,6 +998,7 @@ async function runningDesktop(
     })()`,
     context,
   );
+  initialized = true;
   return {
     ...context.running,
     openLink: (value) => appEvents.emit('open-url', { preventDefault() {} }, value),

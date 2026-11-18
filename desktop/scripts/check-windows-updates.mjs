@@ -140,6 +140,14 @@ try {
   await writeFile(join(profile, 'profile.json'), JSON.stringify({ ownerId: owner }));
   const source = join(root, 'source');
   await mkdir(source);
+  const mainSource = await readFile(join(repository, 'desktop/main/main.mjs'), 'utf8');
+  const guardStart = mainSource.indexOf('if (!app.requestSingleInstanceLock())');
+  const guardEnd = mainSource.indexOf('else if (await openedDuringUpdateRestart())', guardStart);
+  assert.ok(
+    guardStart >= 0 && guardEnd > guardStart,
+    'The desktop single-instance guard is missing.',
+  );
+  const singleInstanceGuard = mainSource.slice(guardStart, guardEnd);
   await copyFile(join(repository, 'desktop/main/settings.mjs'), join(source, 'settings.mjs'));
   await copyFile(
     join(repository, 'desktop/main/windows-update.mjs'),
@@ -180,8 +188,7 @@ const storageState = async () => Promise.all(['userData', 'sessionData'].map(asy
   } catch (error) { return { scope, error: error.code || error.name }; }
 }));
 app.setPath('userData', join(root, 'electron'));
-if (!app.requestSingleInstanceLock()) app.quit();
-else if (process.argv.includes('--quit')) app.exit();
+${singleInstanceGuard}
 else {
 app.on('second-instance', async (_event, argv) => {
   if (!argv.includes('--quit')) return;

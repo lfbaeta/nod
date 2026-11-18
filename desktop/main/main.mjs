@@ -2710,7 +2710,7 @@ async function importRuntime() {
   return status;
 }
 
-if (!app.requestSingleInstanceLock()) app.quit();
+if (!app.requestSingleInstanceLock()) app.exit();
 else if (process.argv.includes('--quit')) app.exit();
 else if (await openedDuringUpdateRestart()) app.exit();
 else {
