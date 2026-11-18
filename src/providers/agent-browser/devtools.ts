@@ -1,3 +1,4 @@
+import { BrowserActionError } from '../../ports/computer.ts';
 type FrameNode = {
   frame: { id: string; loaderId?: string; securityOrigin?: string };
   childFrames?: FrameNode[];
@@ -571,7 +572,7 @@ export async function openDevtools(url: string, targetId: string, signal?: Abort
           session,
         )) as { result?: { objectId?: string }; exceptionDetails?: unknown };
         if (exceptionDetails || (result?.objectId && found))
-          throw new Error('The sign-in selector must identify one control.');
+          throw new BrowserActionError('browser_sign_in_choice');
         if (result?.objectId) {
           const { node } = (await send(
             'DOM.describeNode',
@@ -890,7 +891,7 @@ export async function openDevtools(url: string, targetId: string, signal?: Abort
     },
     async signInControl(query: ControlQuery): Promise<BoundSignInControl> {
       const found = query.selector ? await signInSelector(query.selector) : await locate(query);
-      if (!found) throw new Error('The sign-in control could not be found.');
+      if (!found) throw new BrowserActionError('browser_sign_in_choice');
       try {
         const frames = await tree(found.session);
         let frame: FrameNode['frame'] | undefined;
@@ -924,7 +925,7 @@ export async function openDevtools(url: string, targetId: string, signal?: Abort
           found.session,
         )) as { result?: { objectId?: string }; exceptionDetails?: unknown };
         if (exceptionDetails || !result?.objectId)
-          throw new Error('The sign-in control is not available.');
+          throw new BrowserActionError('browser_sign_in_choice');
         const { node } = (await send(
           'DOM.describeNode',
           { objectId: result.objectId },
@@ -935,11 +936,9 @@ export async function openDevtools(url: string, targetId: string, signal?: Abort
           backendNodeId: node.backendNodeId,
           session: found.session,
         });
-        if (
-          !controls[0]?.name ||
-          !['button', 'link'].includes(controls[0].role) ||
-          (await controlSnapshot(result.objectId, found.session)) !== snapshot
-        )
+        if (!controls[0]?.name || !['button', 'link'].includes(controls[0].role))
+          throw new BrowserActionError('browser_sign_in_choice');
+        if ((await controlSnapshot(result.objectId, found.session)) !== snapshot)
           throw new Error('The sign-in control changed during inspection.');
         const details = JSON.parse(snapshot) as {
           origin: string;

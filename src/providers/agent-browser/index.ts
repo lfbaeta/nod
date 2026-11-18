@@ -1882,20 +1882,26 @@ export function createAgentBrowserComputer(options: {
         const document = await checkout(state, devtools);
         const controls = new Map<string, BoundSignInControl>();
         const choices: { id: string; label: string; page: BrowserPage }[] = [];
-        for (const method of methods) {
+        for (const [index, method] of methods.entries()) {
           signal?.throwIfAborted();
           const target = selector(method.selector);
           const ref = referenceOf(target);
           const observed = ref ? state.refs.get(ref) : undefined;
           if (ref && !observed) throw new BrowserActionError('browser_target_changed');
-          const control = await devtools
-            .signInControl(ref ? await pointOf(state, ref) : { selector: target })
-            .catch((error: unknown) => {
-              throw error instanceof BrowserActionError
-                ? error
-                : new BrowserActionError('browser_sign_in_choice');
-            });
-          if (control.origin !== origin) throw new BrowserActionError('browser_sign_in_choice');
+          const refused = () =>
+            new BrowserActionError(
+              'browser_sign_in_choice',
+              `Choice ${index + 1} of ${methods.length}.`,
+            );
+          const control = await (async () =>
+            devtools.signInControl(ref ? await pointOf(state, ref) : { selector: target }))().catch(
+            (error: unknown) => {
+              if (!(error instanceof BrowserActionError))
+                throw new BrowserActionError('browser_target_changed');
+              throw error.code === 'browser_sign_in_choice' ? refused() : error;
+            },
+          );
+          if (control.origin !== origin) throw refused();
           if (
             [...controls.values()].some(
               (previous) => previous.backendNodeId === control.backendNodeId,
