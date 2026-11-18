@@ -205,6 +205,7 @@ export interface CredentialRequest {
   methods?: { id: string; label: string }[];
   fields?: { kind: 'identifier' | 'password' | 'otp'; selector: string; label: string }[];
   status: 'pending' | 'entering' | 'uncertain' | 'filled' | 'expired';
+  notEntered?: boolean;
   savedEntries?: (VaultLoginEntry & { username: string })[];
   username?: string;
   passwordManager?: { name: string; account?: string };

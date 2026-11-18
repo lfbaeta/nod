@@ -256,6 +256,7 @@ export async function createPayments(
   }
 
   async function fail(row: Row, error: unknown) {
+    if (error instanceof VaultUseError && error.notEntered) return error.message;
     if (!(error instanceof VaultUseError) || error.statusCode !== 502)
       return 'This payment request is no longer open. Check the order or payment state before a new attempt.';
     await record(
@@ -404,7 +405,10 @@ export async function createPayments(
     } catch (error) {
       if (error instanceof VaultUseError && error.statusCode === 502)
         await options.resume(row.turn_id, await fail(row, error));
-      return { status: 'unavailable' as const };
+      return {
+        status: 'unavailable' as const,
+        ...(error instanceof VaultUseError && error.notEntered ? { notEntered: true } : {}),
+      };
     }
     return { status: 'submitted' as const };
   }
@@ -416,8 +420,13 @@ export async function createPayments(
         reply.header('Cache-Control', 'no-store');
         if (!z.uuid().safeParse(request.params.id).success)
           return reply.code(404).send({ error: 'This payment request is unavailable.' });
-        const result = await pool.query<{ status: string; card_id: string; card_version: string }>(
-          `SELECT p.card_id,p.card_version,CASE WHEN v.status='running' THEN 'entering' WHEN v.status IS NOT NULL THEN v.status
+        const result = await pool.query<{
+          status: string;
+          card_id: string;
+          card_version: string;
+          not_entered: boolean;
+        }>(
+          `SELECT p.card_id,p.card_version,v.status='not_entered' AS not_entered,CASE WHEN v.status='not_entered' THEN 'expired' WHEN v.status='running' THEN 'entering' WHEN v.status IS NOT NULL THEN v.status
            WHEN p.status='pending' AND EXISTS(SELECT 1 FROM turns u JOIN threads th ON th.id=u.thread_id AND th.owner_id=u.owner_id
              WHERE u.id=p.turn_id AND u.owner_id=p.owner_id AND th.archived_at IS NULL AND ${currentTurnSql}) THEN 'pending'
            ELSE 'expired' END AS status
@@ -435,7 +444,7 @@ export async function createPayments(
           )
         )
           return { status: 'expired' };
-        return { status: row.status };
+        return { status: row.status, ...(row.not_entered ? { notEntered: true } : {}) };
       },
     );
     app.get<{ Params: { id: string } }>('/api/payment-requests/:id', async (request, reply) => {

@@ -208,7 +208,7 @@ type RequestRow = {
   kind: CredentialRequest['kind'];
   token_hash: string;
   status: 'pending' | 'consumed' | 'superseded' | 'retried';
-  operation_status?: 'running' | 'submitted' | 'uncertain';
+  operation_status?: 'running' | 'submitted' | 'uncertain' | 'not_entered';
   selectors: CredentialInput | MethodInput;
   flow_id: string | null;
   flow_expires_at: Date | null;
@@ -1375,6 +1375,7 @@ export async function createVault(pool: Pool, options: VaultOptions) {
       label: row.label,
       kind: row.kind,
       status: requestStatus(row),
+      ...(row.operation_status === 'not_entered' ? { notEntered: true } : {}),
     }));
   }
 
@@ -1438,6 +1439,7 @@ export async function createVault(pool: Pool, options: VaultOptions) {
       fields: row.inspection.fields,
       ...(row.kind === 'method' ? { methods: row.inspection.methods ?? [] } : {}),
       status,
+      ...(row.operation_status === 'not_entered' ? { notEntered: true } : {}),
       ...(savedEntries ? { savedEntries } : {}),
       ...(row.kind === 'password' && username ? { username } : {}),
       ...(manager ? { passwordManager: manager } : {}),
@@ -2108,7 +2110,8 @@ export async function createVault(pool: Pool, options: VaultOptions) {
     try {
       return await enterLogin(turn, ownerId, raw, { kind: 'selection', selected });
     } catch (error) {
-      if (error instanceof VaultUseError && error.statusCode === 502) throw error;
+      if (error instanceof VaultUseError && (error.statusCode === 502 || error.notEntered))
+        throw error;
       return false;
     }
   }
@@ -2161,7 +2164,8 @@ export async function createVault(pool: Pool, options: VaultOptions) {
         since,
       });
     } catch (error) {
-      if (error instanceof VaultUseError && error.statusCode === 502) throw error;
+      if (error instanceof VaultUseError && (error.statusCode === 502 || error.notEntered))
+        throw error;
       return false;
     }
   }
@@ -2171,7 +2175,7 @@ export async function createVault(pool: Pool, options: VaultOptions) {
     turnId: string,
     text: string,
     requestId: string,
-  ): Promise<{ status: 'submitted' | 'invalid' | 'unavailable' }> {
+  ): Promise<{ status: 'submitted' | 'invalid' | 'unavailable'; notEntered?: boolean }> {
     if (ownerId !== owner) return { status: 'unavailable' };
     const code = text.trim();
     if (!/^\d{4,8}$/.test(code)) return { status: 'invalid' };
@@ -2185,8 +2189,11 @@ export async function createVault(pool: Pool, options: VaultOptions) {
       if (rows.length !== 1) return { status: 'unavailable' };
       await submit(rows[0].token_hash, { code }, true);
       return { status: 'submitted' };
-    } catch {
-      return { status: 'unavailable' };
+    } catch (error) {
+      return {
+        status: 'unavailable',
+        ...(error instanceof VaultUseError && error.notEntered ? { notEntered: true } : {}),
+      };
     }
   }
 
@@ -2352,7 +2359,10 @@ export async function createVault(pool: Pool, options: VaultOptions) {
             [tokenHash(request.params.id), owner],
           );
           if (!rows[0]) throw new VaultError('Credential request not found.', 404);
-          return { status: requestStatus(rows[0]) };
+          return {
+            status: requestStatus(rows[0]),
+            ...(rows[0].operation_status === 'not_entered' ? { notEntered: true } : {}),
+          };
         },
       );
       scope.post<{ Params: { id: string } }>(

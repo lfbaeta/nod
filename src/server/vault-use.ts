@@ -33,6 +33,7 @@ export class VaultUseError extends Error {
   constructor(
     message: string,
     readonly statusCode: number,
+    readonly notEntered = false,
   ) {
     super(message);
   }
@@ -106,9 +107,15 @@ export async function createVaultUses(
   ): Promise<T | undefined> {
     return withTurnCancellation(use.turnId, async (cancelled) => {
       const signal = lifetime ? AbortSignal.any([cancelled, lifetime]) : cancelled;
-      signal.throwIfAborted();
       if (use.ownerId !== ownerId)
         throw new VaultUseError('This private operation belongs to another owner.', 409);
+      const stoppedBeforeEntry = () =>
+        new VaultUseError(
+          'This private step was stopped before entry. No values were entered in this step.',
+          409,
+          true,
+        );
+      if (signal.aborted) throw stoppedBeforeEntry();
       const id = use.id ?? randomUUID();
       const uncertain = (cause?: unknown) =>
         new VaultUseError(
@@ -133,7 +140,9 @@ export async function createVaultUses(
         });
       let claimStarted = false;
       const ready = await transaction(async (client) => {
-        if ((await operation.prepare?.(client)) === false) return false;
+        const prepared = await operation.prepare?.(client);
+        if (signal.aborted) throw stoppedBeforeEntry();
+        if (prepared === false) return false;
         claimStarted = true;
         const claimed = await client.query(
           `INSERT INTO vault_uses(id,owner_id,root_turn_id,origin,kind,item_id,status)
@@ -145,6 +154,7 @@ export async function createVaultUses(
             'This private operation was already used. Check its result before entering fresh credentials.',
             409,
           );
+        if (signal.aborted) throw stoppedBeforeEntry();
         return true;
       }).catch(async (error: unknown) => {
         if (error instanceof VaultUseError || !claimStarted) throw error;
@@ -166,34 +176,33 @@ export async function createVaultUses(
         throw error;
       });
       if (!ready) return;
-      let stage: 'entry' | 'completion' = 'entry';
+      let stage: 'claim' | 'entry' | 'completion' = 'claim';
       try {
-        signal.throwIfAborted();
+        if (signal.aborted) throw stoppedBeforeEntry();
+        stage = 'entry';
         const result = await operation.perform(signal);
-        signal.throwIfAborted();
         stage = 'completion';
         await transaction(async (client) => {
-          signal.throwIfAborted();
           await operation.complete?.(client, result);
-          signal.throwIfAborted();
           await client.query(
             "UPDATE vault_uses SET status='submitted' WHERE id=$1 AND owner_id=$2",
             [id, use.ownerId],
           );
-          signal.throwIfAborted();
         });
         captureSecureEntry(analytics, use, 'submitted');
         return result;
       } catch (error) {
-        report(stage, error);
-        captureSecureEntry(analytics, use, 'uncertain');
+        const notEntered = stage === 'claim' && error instanceof VaultUseError && error.notEntered;
+        if (!notEntered) report(stage, error);
+        captureSecureEntry(analytics, use, notEntered ? 'failed' : 'uncertain');
         await pool
-          .query("UPDATE vault_uses SET status='uncertain' WHERE id=$1 AND owner_id=$2", [
+          .query('UPDATE vault_uses SET status=$3 WHERE id=$1 AND owner_id=$2', [
             id,
             use.ownerId,
+            notEntered ? 'not_entered' : 'uncertain',
           ])
           .catch((error: unknown) => logFailure('vault_use_uncertain', error));
-        throw uncertain(error);
+        throw notEntered ? error : uncertain(error);
       }
     });
   }

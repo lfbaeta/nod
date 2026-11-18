@@ -173,7 +173,7 @@ export interface RuntimeContext {
   withdrawnRequest?: 'stopped' | 'failed';
   confirmedActions?: string[];
   credentialRequests?: Array<
-    Pick<CredentialRequest, 'turnId' | 'origin' | 'label' | 'kind' | 'status'>
+    Pick<CredentialRequest, 'turnId' | 'origin' | 'label' | 'kind' | 'status' | 'notEntered'>
   >;
   taskContext?: {
     id: string;

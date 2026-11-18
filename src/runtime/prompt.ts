@@ -19,7 +19,7 @@ export const coreSkills = ['connected-apps', 'schedules-and-watches', 'artifacts
 
 const formatExample = new Date('2026-03-07T15:30:00Z');
 const credentialStatusGuide =
-  'An earlier sign-in link does not prove its form is open. credentialRequests gives current server status for earlier forms in this session. Only pending means open; if a form is absent, its state is unknown. An expired form needs a new request. Filled does not prove website sign-in.';
+  'An earlier sign-in link does not prove its form is open. credentialRequests gives current server status for earlier forms in this session. Only pending means open; if a form is absent, its state is unknown. An expired form needs a new request. Filled does not prove website sign-in. If notEntered is true, no values were entered in that step. Do not start that step again unless the owner asks.';
 const credentialStatusCaution =
   'An earlier sign-in link does not prove its form is open; absent credentialRequests status means unknown.';
 const replyScope =

@@ -5,7 +5,7 @@ import { act, createElement } from 'react';
 import { JSDOM } from 'jsdom';
 import { runProcess } from '../src/providers/process.ts';
 import { Vault } from '../src/web/pages/vault.tsx';
-import { Credentials } from '../src/web/pages/credentials.tsx';
+import { Credentials, Payment } from '../src/web/pages/credentials.tsx';
 import { SetupActions } from '../src/web/components/setup-link.tsx';
 import { messageSetupLinks } from '../src/web/lib/message-links.ts';
 import { paymentInvitation } from '../src/runtime/communication.ts';
@@ -45,6 +45,7 @@ import { createPayments } from '../src/server/payments.ts';
 import type { CardEntry } from '../src/ports/computer.ts';
 import { withFailureLog } from '../src/server/failure-log.ts';
 import { cancelTurnOperations } from '../src/server/turn-cancellation.ts';
+import { afterCommit } from '../src/server/transaction.ts';
 
 async function seedTurns(pool: pg.Pool) {
   await pool.query(
@@ -213,7 +214,7 @@ test('an idle 1Password helper closing late never fails a request on its replace
   }
 });
 
-async function vaultFixture() {
+async function vaultFixture(emailCode?: Parameters<typeof createVault>[1]['emailCode']) {
   const schema = `test_vault_${randomUUID().replaceAll('-', '')}`;
   const admin = new pg.Pool({ connectionString: process.env.TEST_DATABASE_URL });
   await admin.query(`CREATE SCHEMA ${schema}`);
@@ -229,7 +230,36 @@ async function vaultFixture() {
     origin: 'https://example.com',
     url: 'https://example.com/login',
   });
-  const vault = await createVault(pool, {
+  let cancelAtCommit: string | undefined;
+  const database = new Proxy(pool, {
+    get(target, member) {
+      if (member === 'connect')
+        return async () => {
+          const client = await target.connect();
+          return new Proxy(client, {
+            get(connection, key) {
+              if (key === 'query')
+                return async (...args: Parameters<typeof client.query>) => {
+                  const value = await client.query(...args);
+                  if (args[0] === 'COMMIT' && cancelAtCommit) {
+                    const turnId = cancelAtCommit;
+                    cancelAtCommit = undefined;
+                    await pool.query("UPDATE turns SET status='cancelled' WHERE id=$1", [turnId]);
+                    cancelTurnOperations([turnId]);
+                  }
+                  return value;
+                };
+              const value = Reflect.get(connection, key);
+              return typeof value === 'function' ? value.bind(connection) : value;
+            },
+          });
+        };
+      const value = Reflect.get(target, member);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+  const vault = await createVault(database, {
+    emailCode,
     requestKey: Buffer.alloc(32, 42),
     keyStore: { id: 'fixture', configured: true, getKey: async () => randomBytes(32) },
     page: () => inspecting(),
@@ -270,6 +300,9 @@ async function vaultFixture() {
     app,
     vault,
     calls,
+    cancelBeforeEntry(turnId: string) {
+      cancelAtCommit = turnId;
+    },
     resumed: async () =>
       (
         await pool.query(
@@ -305,6 +338,83 @@ async function vaultFixture() {
     },
   };
 }
+
+test(
+  'automatic login and email-code entry preserve a known stop without a fallback form',
+  { skip: !process.env.TEST_DATABASE_URL },
+  async () => {
+    const f = await vaultFixture(async () => ({ code: '381742', current: async () => true }));
+    try {
+      const first = await f.turn();
+      const invitation = await f.vault.request(first, 'local-development', {
+        origin: 'https://example.com',
+        label: 'Synthetic staged sign-in',
+        kind: 'identifier',
+        usernameSelector: '#username',
+      });
+      await f.wait(first);
+      const entered = await f.app.inject({
+        method: 'POST',
+        url: invitation.url.replace('/vault/', '/api/credential-requests/'),
+        payload: { username: 'synthetic@example.com', password: 'Synthetic held password' },
+      });
+      assert.equal(entered.statusCode, 200, entered.body);
+      const resumed = await f.resume(first);
+      const before = f.calls.injected;
+      f.cancelBeforeEntry(resumed.turnId);
+      await assert.rejects(
+        f.vault.fillSelected(resumed, 'local-development', {
+          origin: 'https://example.com',
+          label: 'Synthetic staged sign-in',
+          kind: 'password',
+          passwordSelector: '#password',
+        }),
+        (error: unknown) =>
+          error instanceof Error && 'notEntered' in error && error.notEntered === true,
+      );
+      assert.equal(f.calls.injected, before);
+      assert.equal(
+        (await f.pool.query('SELECT 1 FROM credential_requests WHERE turn_id=$1', [resumed.turnId]))
+          .rowCount,
+        0,
+      );
+      const email = await f.turn();
+      await f.pool.query(
+        "UPDATE turns SET started_at=clock_timestamp()-interval '1 second' WHERE id=$1",
+        [email.turnId],
+      );
+      f.cancelBeforeEntry(email.turnId);
+      await assert.rejects(
+        f.vault.fillEmailCode(email, 'local-development', {
+          origin: 'https://example.com',
+          label: 'Synthetic email code',
+          kind: 'otp',
+          emailCode: true,
+          emailRecipient: 'synthetic@example.com',
+          passwordSelector: '#code',
+        }),
+        (error: unknown) =>
+          error instanceof Error && 'notEntered' in error && error.notEntered === true,
+      );
+      assert.equal(f.calls.injected, before);
+      assert.equal(
+        (await f.pool.query('SELECT 1 FROM credential_requests WHERE turn_id=$1', [email.turnId]))
+          .rowCount,
+        0,
+      );
+      assert.deepEqual(
+        (
+          await f.pool.query(
+            "SELECT status FROM vault_uses WHERE kind IN ('password','otp') ORDER BY created_at",
+          )
+        ).rows,
+        [{ status: 'not_entered' }, { status: 'not_entered' }],
+      );
+    } finally {
+      await f.close();
+    }
+  },
+);
 
 test(
   'interrupted Vault claims and private entry retain uncertainty without replay or secret diagnostics',
@@ -513,6 +623,25 @@ test(
           );
         });
       }
+      const stoppedPreparation = { ...use, id: randomUUID() };
+      const beforePreparation = entries;
+      await assert.rejects(
+        uses.run(stoppedPreparation, {
+          prepare: async () => {
+            cancelTurnOperations([stoppedPreparation.turnId]);
+            return false;
+          },
+          perform: operation.perform,
+        }),
+        (error: unknown) =>
+          error instanceof VaultUseError && error.statusCode === 409 && error.notEntered,
+      );
+      assert.equal(entries, beforePreparation);
+      assert.equal(
+        (await f.pool.query('SELECT 1 FROM vault_uses WHERE id=$1', [stoppedPreparation.id]))
+          .rowCount,
+        0,
+      );
       const lifetime = new AbortController();
       const closingUses = await createVaultUses(
         f.pool,
@@ -523,7 +652,11 @@ test(
       const afterShutdown = { ...use, id: randomUUID() };
       lifetime.abort();
       const entriesBeforeShutdown = entries;
-      await assert.rejects(closingUses.run(afterShutdown, operation), { name: 'AbortError' });
+      await assert.rejects(
+        closingUses.run(afterShutdown, operation),
+        (error: unknown) =>
+          error instanceof VaultUseError && error.statusCode === 409 && error.notEntered,
+      );
       assert.equal(entries, entriesBeforeShutdown);
       assert.equal(
         (await f.pool.query('SELECT 1 FROM vault_uses WHERE id=$1', [afterShutdown.id])).rowCount,
@@ -596,6 +729,103 @@ test(
           })),
         ).includes('fixture-private-value'),
         false,
+      );
+      const stopped = await f.turn();
+      const privatePath = await f.link(stopped);
+      await f.wait(stopped);
+      const entriesBeforeStop = f.calls.injected;
+      f.cancelBeforeEntry(stopped.turnId);
+      const stoppedReply = await f.submit(privatePath);
+      assert.equal(stoppedReply.statusCode, 409, stoppedReply.body);
+      assert.match(stoppedReply.json().error, /stopped before entry/);
+      assert.equal(f.calls.injected, entriesBeforeStop);
+      const stoppedDescription = (await f.app.inject({ url: privatePath })).json();
+      assert.equal(stoppedDescription.status, 'expired');
+      assert.equal(stoppedDescription.notEntered, true);
+      const stoppedId = privatePath.split('/').at(-1)!;
+      const stoppedView = await vaultPage(
+        createElement(Credentials, { id: stoppedId }),
+        async (path) => {
+          const reply = await f.app.inject({ url: path });
+          return new Response(reply.body, {
+            status: reply.statusCode,
+            headers: { 'content-type': 'application/json' },
+          });
+        },
+        `http://localhost:4310/vault/${stoppedId}`,
+      );
+      try {
+        for (
+          let attempt = 0;
+          !stoppedView.document.body.textContent?.includes('Stopped before entry') && attempt < 100;
+          attempt++
+        )
+          await act(async () => {
+            await new Promise((resolve) => setTimeout(resolve, 10));
+          });
+        assert.match(stoppedView.document.body.textContent!, /No values were entered in this step/);
+        assert.doesNotMatch(
+          stoppedView.document.body.textContent!,
+          /result is unknown|may have reached/i,
+        );
+        assert.equal(stoppedView.document.querySelectorAll('input, button').length, 0);
+        await stoppedView.render(createElement(Credentials, { id: stoppedId, key: 'reload' }));
+        for (
+          let attempt = 0;
+          !stoppedView.document.body.textContent?.includes('Stopped before entry') && attempt < 100;
+          attempt++
+        )
+          await act(async () => {
+            await new Promise((resolve) => setTimeout(resolve, 10));
+          });
+        assert.match(stoppedView.document.body.textContent!, /No values were entered in this step/);
+      } finally {
+        await stoppedView.close();
+      }
+      const codeTurn = await f.turn();
+      const codeInvitation = await f.vault.request(codeTurn, 'local-development', {
+        origin: 'https://example.com',
+        label: 'Synthetic code',
+        kind: 'otp',
+        passwordSelector: '#code',
+      });
+      await f.wait(codeTurn);
+      const codeRequestId = (
+        await f.pool.query('SELECT id FROM credential_requests WHERE turn_id=$1', [codeTurn.turnId])
+      ).rows[0].id;
+      f.cancelBeforeEntry(codeTurn.turnId);
+      assert.deepEqual(
+        await f.vault.submitChatCode('local-development', codeTurn.turnId, '563829', codeRequestId),
+        { status: 'unavailable', notEntered: true },
+      );
+      assert.equal(
+        (
+          await f.app.inject({
+            url: codeInvitation.url.replace('/vault/', '/api/credential-requests/'),
+          })
+        ).json().notEntered,
+        true,
+      );
+      assert.equal(f.calls.injected, entriesBeforeStop);
+
+      assert.deepEqual((await f.app.inject({ url: `${privatePath}/status` })).json(), {
+        status: 'expired',
+        notEntered: true,
+      });
+      assert.equal((await f.submit(privatePath)).statusCode, 409);
+      assert.equal(
+        (await f.app.inject({ method: 'POST', url: `${privatePath}/retry`, payload: {} }))
+          .statusCode,
+        409,
+      );
+      assert.equal(f.calls.injected, entriesBeforeStop);
+      assert.deepEqual(
+        (
+          await f.pool.query('SELECT status FROM vault_uses WHERE root_turn_id=$1', [
+            stopped.turnId,
+          ])
+        ).rows,
+        [{ status: 'not_entered' }],
       );
     } finally {
       await f.close();
@@ -1858,6 +2088,7 @@ test(
         input: Record<string, unknown>;
       }> = [];
       let duringFill = async (_signal?: AbortSignal) => {};
+      let stopBeforeEntry: string | undefined;
       const secureEntries: string[] = [];
       const make = () =>
         createPayments(pool, {
@@ -1891,7 +2122,15 @@ test(
             return new Uint8Array([255, 216, 255]);
           },
           cards: vault.paymentCards,
-          card: vault.paymentCard,
+          card: async (id, version, client) => {
+            const card = await vault.paymentCard(id, version, client);
+            if (stopBeforeEntry && client) {
+              const turnId = stopBeforeEntry;
+              stopBeforeEntry = undefined;
+              afterCommit(client, () => cancelTurnOperations([turnId]));
+            }
+            return card;
+          },
           fill: async (input, signal) => {
             if (failFill) throw new Error('Synthetic stale field.');
             await duringFill(signal);
@@ -2259,6 +2498,68 @@ test(
         200,
       );
       await pool.query('DELETE FROM turns WHERE id=$1', [laterTurn]);
+      const beforeNotEntered = { fills: fills.length, resumes: resumed.length };
+      const notEnteredPayment = await payments.request(turn, { ...order, card: card.id });
+      const notEnteredId = notEnteredPayment.url!.split('/').at(-1)!;
+      const notEnteredPath = `/api/payment-requests/${notEnteredId}`;
+      stopBeforeEntry = turn.turnId;
+      const notEnteredReply = await app.inject({
+        method: 'POST',
+        url: notEnteredPath,
+        headers,
+        payload: { code: '737' },
+      });
+      assert.equal(notEnteredReply.statusCode, 409, notEnteredReply.body);
+      assert.match(notEnteredReply.json().error, /stopped before entry/);
+      assert.deepEqual((await app.inject({ url: `${notEnteredPath}/status`, headers })).json(), {
+        status: 'expired',
+        notEntered: true,
+      });
+      assert.deepEqual({ fills: fills.length, resumes: resumed.length }, beforeNotEntered);
+      assert.deepEqual(
+        (await pool.query('SELECT status FROM vault_uses WHERE id=$1', [notEnteredId])).rows,
+        [{ status: 'not_entered' }],
+      );
+      const paymentView = await vaultPage(
+        createElement(Payment, { id: notEnteredId }),
+        async (path) => {
+          const result = await app.inject({ url: path, headers });
+          return new Response(result.body, {
+            status: result.statusCode,
+            headers: { 'content-type': 'application/json' },
+          });
+        },
+        `http://localhost:4310/payments/${notEnteredId}`,
+      );
+      try {
+        for (
+          let attempt = 0;
+          !paymentView.document.body.textContent?.includes('Stopped before entry') && attempt < 100;
+          attempt++
+        )
+          await act(async () => {
+            await new Promise((resolve) => setTimeout(resolve, 10));
+          });
+        assert.match(paymentView.document.body.textContent!, /No values were entered in this step/);
+        assert.doesNotMatch(
+          paymentView.document.body.textContent!,
+          /result is unknown|may have reached/i,
+        );
+        assert.equal(paymentView.document.querySelectorAll('input, button').length, 0);
+        await paymentView.render(createElement(Payment, { id: notEnteredId, key: 'reload' }));
+        for (
+          let attempt = 0;
+          !paymentView.document.body.textContent?.includes('Stopped before entry') && attempt < 100;
+          attempt++
+        )
+          await act(async () => {
+            await new Promise((resolve) => setTimeout(resolve, 10));
+          });
+        assert.match(paymentView.document.body.textContent!, /No values were entered in this step/);
+      } finally {
+        await paymentView.close();
+      }
+      await pool.query("UPDATE turns SET status='running' WHERE id=$1", [turn.turnId]);
       const beforeInterrupted = { fills: fills.length, resumes: resumed.length };
       const interrupted = await payments.request(turn, { ...order, card: card.id });
       const interruptedId = interrupted.url!.split('/').at(-1)!;

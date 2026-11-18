@@ -1419,12 +1419,16 @@ export function createAgentBrowserComputer(options: {
               )
                 throw new Error('The submit control is not on this page.');
               assertOpen();
-              await command(state, {
-                action: 'scrollintoview',
-                selector: control,
-              });
+              await command(
+                state,
+                {
+                  action: 'scrollintoview',
+                  selector: control,
+                },
+                { signal },
+              );
               assertOpen();
-              await command(state, { action: 'click', selector: control });
+              await command(state, { action: 'click', selector: control }, { signal });
             }
           }
           state.privateDocument = undefined;
