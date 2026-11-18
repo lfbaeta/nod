@@ -630,11 +630,16 @@ export function createComposioProvider(options: {
             { signal, maxRetries: 0 },
           )
           .catch((error: unknown) => {
-            if (error instanceof APIError && error.status === 404) return undefined;
+            if (
+              error instanceof APIError &&
+              error.status === 404 &&
+              (error.error as { error?: unknown } | undefined)?.error === 'not_found'
+            )
+              return undefined;
             throw error;
           });
-        if (!response) return false;
         signal?.throwIfAborted();
+        if (!response) return false;
         const missing = z.object({ not_found: z.array(z.string()).optional() });
         const answer = z
           .object({ data: missing.extend({ data: missing.optional() }) })

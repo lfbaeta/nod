@@ -11360,6 +11360,10 @@ test('Composio failure envelopes reject with the provider error', async (t) => {
   });
   assert.equal(await session.offers!('GMAIL_GET_MESSAGE'), false);
   lookup.mock.mockImplementation(async () => {
+    throw APIError.generate(404, undefined, '<html>missing</html>', new Headers());
+  });
+  await assert.rejects(session.offers!('GMAIL_GET_MESSAGE'));
+  lookup.mock.mockImplementation(async () => {
     throw APIError.generate(503, { error: 'unavailable' }, undefined, new Headers());
   });
   await assert.rejects(session.offers!('GMAIL_GET_MESSAGE'));
