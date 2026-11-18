@@ -629,10 +629,14 @@ export async function createApprovals(
       let existing = await withTurnLock(turn.turnId, (client) => inspect(client, true));
       if ('repeat' in existing && existing.repeat && classifyRepeat) {
         const candidate = existing.repeat;
+        let repeatFailure: unknown;
         const decision = await classifyRepeat(
           structuredClone(candidate.input),
           options.signal,
-        ).catch(() => 'uncertain' as const);
+        ).catch((error: unknown) => {
+          repeatFailure = error;
+          return 'uncertain' as const;
+        });
         options.signal?.throwIfAborted();
         checkedRepeat = candidate;
         if (decision === 'new') {
@@ -641,6 +645,22 @@ export async function createApprovals(
           await options.admit?.(true);
         }
         existing = await withTurnLock(turn.turnId, (client) => inspect(client, true));
+        if (decision === 'uncertain') {
+          const failure = repeatFailure as { statusCode?: unknown; status?: unknown } | undefined;
+          const status = failure?.statusCode ?? failure?.status;
+          const http =
+            typeof status === 'number' && Number.isInteger(status) && status >= 100 && status <= 599
+              ? ` (HTTP ${status})`
+              : '';
+          throw Object.assign(
+            conflict(
+              repeatFailure
+                ? `The repeat request check failed${http}: ${failureReason(repeatFailure)} The action did not run again.`
+                : 'The action did not run again because Nod could not verify a new repeat request.',
+            ),
+            { notRun: true },
+          );
+        }
       }
       if ('cached' in existing) {
         if (existing.cached) return existing.result;

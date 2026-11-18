@@ -216,7 +216,7 @@ test(
     let changedRulesDuringDraftRead = 0;
     let repeatAfterConfirm: FixtureCall | FixtureCall[] | undefined;
     let questionAfterConfirm: string | undefined;
-    let repeatDecision: 'new' | 'same' = 'same';
+    let repeatDecision: 'new' | 'same' | 'uncertain' = 'same';
     let workflowUpdate: { workflowId: string; threshold: number } | undefined;
     const repeatChecks: Record<string, unknown>[] = [];
     const prompts = new Map<string, string>();
@@ -441,7 +441,7 @@ test(
                       ),
                     );
                   }
-                  return;
+                  if (!questionAfterConfirm) return;
                 }
                 if (questionAfterConfirm && text.includes('executed once by the trusted worker')) {
                   const question = questionAfterConfirm;
@@ -5509,6 +5509,8 @@ test(
             });
             assert.ok(ownerWords.includes(reply));
             repeatAfterConfirm = { tool: 'synthetic_mcp', action: 'execute_workflow', args: input };
+            const thirdQuestion = 'Should I run the synthetic workflow a third time?';
+            questionAfterConfirm = thirdQuestion;
             const answer = {
               text: 'Run workflow',
               replyToMessageId: second.confirmation_message_id,
@@ -5517,7 +5519,7 @@ test(
             };
             const approved = await request('POST', '/api/messages', answer);
             assert.equal(approved.statusCode, 200, approved.body);
-            await waitFor(approved.json().turnId, 'succeeded');
+            await waitFor(approved.json().turnId, 'waiting');
             assert.deepEqual(
               (await request('POST', '/api/messages', answer)).json(),
               approved.json(),
@@ -5555,6 +5557,62 @@ test(
                 .find((message: { id: string }) => message.id === second.confirmation_message_id)
                 .approval.state,
               'done',
+            );
+            const thirdQuestionId = (
+              await pool.query(
+                "SELECT id FROM messages WHERE turn_id=$1 AND role='assistant' AND text=$2",
+                [approved.json().turnId, thirdQuestion],
+              )
+            ).rows[0].id;
+            const thirdReply = 'Run the synthetic workflow a third time.';
+            plans.set(thirdReply, {
+              tool: 'synthetic_mcp',
+              action: 'execute_workflow',
+              args: input,
+            });
+            asked.add(thirdReply);
+            repeatDecision = 'uncertain';
+            const third = await request('POST', '/api/messages', {
+              text: thirdReply,
+              replyToMessageId: thirdQuestionId,
+            });
+            assert.equal(third.statusCode, 200, third.body);
+            await waitFor(third.json().turnId, 'failed');
+            const failed = (
+              await pool.query('SELECT error FROM turns WHERE id=$1', [third.json().turnId])
+            ).rows[0];
+            assert.match(failed.error, /did not run again/);
+            assert.equal(results.has(third.json().turnId), false);
+            assert.deepEqual(await approvalsFor(third.json().turnId), []);
+            assert.equal(executions.length, 2);
+            assert.deepEqual(updates, [7]);
+            assert.deepEqual((await approvalsFor(initial))[0].result, savedFirst.result);
+            let visibleError = false;
+            for (let attempt = 0; attempt < 300; attempt++) {
+              const visible = await request(
+                'GET',
+                `/api/messages/around/${third.json().messageId}`,
+              );
+              assert.equal(visible.statusCode, 200, visible.body);
+              visibleError = visible
+                .json()
+                .some(
+                  (message: { role: string; turnId: string; text: string }) =>
+                    message.role === 'assistant' &&
+                    message.turnId === third.json().turnId &&
+                    message.text.includes('did not run again'),
+                );
+              if (visibleError) break;
+              await delay(20);
+            }
+            assert.equal(visibleError, true, 'The chat must show the specific repeat refusal.');
+            assert.equal(
+              (
+                await pool.query('SELECT 1 FROM app_actions WHERE turn_id=$1', [
+                  third.json().turnId,
+                ])
+              ).rowCount,
+              0,
             );
           } finally {
             questionAfterConfirm = undefined;

@@ -5210,7 +5210,7 @@ test(
         }
       });
       await t.test(
-        'repeat classification failure and ordinary replies retain the completed result',
+        'ordinary replies keep the completed result and uncertain repeat checks refuse',
         async () => {
           for (const decision of ['same', 'uncertain', 'failure'] as const) {
             const fixture = await repeatFixture('Use the existing threshold.');
@@ -5220,12 +5220,12 @@ test(
               if (decision === 'failure') throw new Error('Synthetic review outage.');
             };
             try {
-              assert.deepEqual(
-                await approvals.request(fixture.turn, fixture.action, fixture.args, {
-                  allowed: true,
-                }),
-                (await stored(fixture.firstId)).result,
-              );
+              const result = approvals.request(fixture.turn, fixture.action, fixture.args, {
+                allowed: true,
+              });
+              if (decision === 'same')
+                assert.deepEqual(await result, (await stored(fixture.firstId)).result);
+              else await assert.rejects(result, /did not run again/);
               assert.equal(await proposal(fixture.turn.turnId), undefined);
               assert.equal(calls.length, before);
             } finally {
@@ -5234,6 +5234,46 @@ test(
           }
         },
       );
+      await t.test('an uncertain explicit repeat returns no stale execution result', async () => {
+        for (const decision of ['uncertain', 'failure', 'timeout'] as const) {
+          const fixture = await repeatFixture('Run the synthetic workflow again.');
+          const before = calls.length;
+          const original = (await stored(fixture.firstId)).result;
+          repeatedAction = 'uncertain';
+          duringRepeat = async () => {
+            if (decision === 'timeout')
+              throw new DOMException('Synthetic repeat review timed out.', 'TimeoutError');
+            if (decision === 'failure')
+              throw Object.assign(
+                new Error('Synthetic repeat review outage PRIVATE_APPROVAL_KEY_CANARY'),
+                { statusCode: 503 },
+              );
+          };
+          try {
+            await assert.rejects(
+              approvals.request(fixture.turn, fixture.action, fixture.args, { allowed: true }),
+              (error: unknown) => {
+                assert.ok(error instanceof Error);
+                assert.equal((error as { notRun?: boolean }).notRun, true);
+                assert.match(error.message, /did not run again/);
+                if (decision === 'failure') {
+                  assert.match(error.message, /HTTP 503/);
+                  assert.match(error.message, /Synthetic repeat review outage/);
+                }
+                if (decision === 'timeout') assert.match(error.message, /timed out/);
+                assert.doesNotMatch(error.message, /PRIVATE_APPROVAL_KEY_CANARY/);
+                return true;
+              },
+            );
+            assert.equal(calls.length, before);
+            assert.equal(await proposal(fixture.turn.turnId), undefined);
+            assert.equal((await stored(fixture.firstId)).status, 'completed');
+            assert.deepEqual((await stored(fixture.firstId)).result, original);
+          } finally {
+            await finishRepeat(fixture);
+          }
+        }
+      });
       await t.test('a repeated action cannot ask when admission refuses a question', async () => {
         const fixture = await repeatFixture();
         const before = calls.length;
