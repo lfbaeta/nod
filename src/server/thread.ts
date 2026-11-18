@@ -15,6 +15,7 @@ import {
   type QuestionAnswer,
 } from '../shared/answer-choices.ts';
 import { logFailure } from './failure-log.ts';
+import { cancelTurnOperations } from './turn-cancellation.ts';
 import { modelFailureReason, modelQuotaFailure } from '../shared/model-quota.ts';
 import { appPages } from '../shared/app-links.ts';
 import { pendingAnswerChoicesSql } from './answer-choices.ts';
@@ -887,7 +888,9 @@ export async function cancelTurns(
      WHERE u.thread_id=$1 AND u.owner_id=$2 AND ($3::uuid IS NULL OR u.session_id=$3) AND (NOT $4 OR u.session_id<>$1) AND u.status IN ('queued','running','waiting')`,
     values,
   );
-  abortTurns(candidates.rows.map(({ id }) => id));
+  const cancelledIds = candidates.rows.map(({ id }) => id);
+  abortTurns(cancelledIds);
+  afterCommit(client, () => abortTurns(cancelledIds));
   const current = await client.query(
     "UPDATE turns SET status='cancelled',finished_at=now() WHERE thread_id=$1 AND owner_id=$2 AND ($3::uuid IS NULL OR session_id=$3) AND (NOT $4 OR session_id<>$1) AND status IN ('queued','running','waiting') RETURNING id,session_id",
     values,
@@ -933,6 +936,7 @@ export async function cancelTurns(
 }
 
 export function abortTurns(ids: string[]) {
+  cancelTurnOperations(ids);
   for (const id of ids) running.get(id)?.abort();
 }
 
@@ -2590,6 +2594,7 @@ async function executeTurn(turn: any, dependencies: ThreadDependencies) {
 
 export async function stopThreadWorkers() {
   stopping = true;
+  cancelTurnOperations();
   for (const controller of running.values()) controller.abort();
   await boss.stop({ graceful: true, timeout: 5000 });
   await Promise.race([

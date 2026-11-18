@@ -106,7 +106,7 @@ export async function createPayments(
     capture(threadId: string): Promise<Uint8Array>;
     cards(): Promise<VaultPaymentCard[]>;
     card(id: string, version: string, client: PoolClient): Promise<CardEntry['card']>;
-    fill(input: CardEntry): Promise<void>;
+    fill(input: CardEntry, signal?: AbortSignal): Promise<void>;
     resume(turnId: string, prompt: string, client?: PoolClient): Promise<void>;
     record(
       turn: TurnRef,
@@ -183,6 +183,7 @@ export async function createPayments(
       {
         id: row.id,
         ownerId,
+        turnId: row.turn_id,
         origin: row.origin,
         kind: 'card',
         itemId: card.id,
@@ -205,20 +206,23 @@ export async function createPayments(
           if (!claimed.rowCount) throw new PaymentError('This payment request is no longer open.');
           value = await options.card(row.card_id, row.card_version, client);
         },
-        perform: async () => {
+        perform: async (signal) => {
           captureSecureEntry(
             options.analytics,
             { kind: 'payment', origin: row.origin, payment: spent(row) },
             'approved',
           );
-          await options.fill({
-            threadId: row.browser_id ?? row.thread_id,
-            fields: row.fields,
-            document: row.document,
-            destinations: row.destinations,
-            submitSelector: row.submit_selector ?? undefined,
-            card: { ...value, securityCode },
-          });
+          await options.fill(
+            {
+              threadId: row.browser_id ?? row.thread_id,
+              fields: row.fields,
+              document: row.document,
+              destinations: row.destinations,
+              submitSelector: row.submit_selector ?? undefined,
+              card: { ...value, securityCode },
+            },
+            signal,
+          );
         },
         complete: async (client) => {
           await record(

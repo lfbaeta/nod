@@ -1370,16 +1370,18 @@ export function createAgentBrowserComputer(options: {
     submitSelector: string | undefined,
     operation: (devtools: Awaited<ReturnType<typeof openDevtools>>, document: string) => Promise<T>,
     submitOrigins: string[] = [],
+    signal?: AbortSignal,
   ): Promise<T> {
     if (state.injecting) throw new BrowserLockedError();
     const assertOpen = () => {
+      signal?.throwIfAborted();
       if (state.closed || state.closing)
         throw new Error('The browser session has expired. Open the URL again.');
     };
     state.injecting = true;
     try {
       return await serialize(state, async () => {
-        const devtools = await inspector(state);
+        const devtools = await inspector(state, signal);
         try {
           const document = await checkout(state, devtools);
           state.privateDocument = document;
@@ -1401,11 +1403,13 @@ export function createAgentBrowserComputer(options: {
                   throw new BrowserActionError('browser_card_changed');
                 const { enabled } = z
                   .object({ enabled: z.boolean() })
-                  .parse(await command(state, { action: 'isenabled', selector: control }));
+                  .parse(
+                    await command(state, { action: 'isenabled', selector: control }, { signal }),
+                  );
                 if (enabled) break;
                 if (performance.now() >= readyBy)
                   throw new BrowserActionError('browser_card_disabled');
-                await delay(100);
+                await delay(100, undefined, { signal });
               }
               const field = await focusField(state, devtools, control);
               const origin = new URL(await currentUrl(state)).origin;
@@ -1435,37 +1439,52 @@ export function createAgentBrowserComputer(options: {
     }
   }
 
-  async function injectCredentials(input: CredentialInput): Promise<CredentialSubmission> {
+  async function injectCredentials(
+    input: CredentialInput,
+    signal?: AbortSignal,
+  ): Promise<CredentialSubmission> {
+    signal?.throwIfAborted();
     const state = browsers.get(threadIdentity(input.threadId));
     if (!state?.started) throw new Error('The browser session has expired. Reopen the login page.');
     if (browserUrl(input.origin).origin !== input.origin)
       throw new Error('An exact login origin is required.');
     const fields = credentialFields(input);
-    return privateEntry(state, input.submitSelector, async (devtools, document) => {
-      if (new URL(await currentUrl(state)).origin !== input.origin)
-        throw new Error('The page is not on the website for this login.');
-      for (const step of fields) {
-        const secret = input.kind === 'otp' ? input.code! : step.value;
-        const identifier = input.kind === 'identifier' || step.value === input.username;
-        if (!identifier) state.secrets.add(secret);
-        const field = await focusField(state, devtools, step.selector);
-        if (field.origin !== input.origin)
-          throw new Error('The login field is on a different origin.');
-        if (step.code) {
-          if (!(await devtools.code(field, step.selector, step.value)))
-            throw new Error('The code fields changed during private entry.');
-          continue;
+    return privateEntry(
+      state,
+      input.submitSelector,
+      async (devtools, document) => {
+        if (new URL(await currentUrl(state)).origin !== input.origin)
+          throw new Error('The page is not on the website for this login.');
+        for (const step of fields) {
+          signal?.throwIfAborted();
+          const secret = input.kind === 'otp' ? input.code! : step.value;
+          const identifier = input.kind === 'identifier' || step.value === input.username;
+          if (!identifier) state.secrets.add(secret);
+          const field = await focusField(state, devtools, step.selector);
+          if (field.origin !== input.origin)
+            throw new Error('The login field is on a different origin.');
+          signal?.throwIfAborted();
+          if (step.code) {
+            if (!(await devtools.code(field, step.selector, step.value)))
+              throw new Error('The code fields changed during private entry.');
+            continue;
+          }
+          if (!(await devtools.arm(field)))
+            throw new Error('The login field is no longer available.');
+          if (
+            (await devtools.document()) !== document ||
+            !(await devtools.insert(field, step.value))
+          )
+            throw new Error(
+              'The login field changed during entry. Check the result before another attempt.',
+            );
         }
-        if (!(await devtools.arm(field)))
-          throw new Error('The login field is no longer available.');
-        if ((await devtools.document()) !== document || !(await devtools.insert(field, step.value)))
-          throw new Error(
-            'The login field changed during entry. Check the result before another attempt.',
-          );
-      }
-      await saveState(state);
-      return { status: 'submitted' as const };
-    });
+        await saveState(state);
+        return { status: 'submitted' as const };
+      },
+      [],
+      signal,
+    );
   }
 
   async function privateDocumentOpen(state: BrowserState, signal?: AbortSignal) {
@@ -1595,7 +1614,8 @@ export function createAgentBrowserComputer(options: {
     });
   }
 
-  async function fillCard(input: CardEntry): Promise<void> {
+  async function fillCard(input: CardEntry, signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
     const state = browsers.get(threadIdentity(input.threadId));
     if (!state?.started) throw new Error('The checkout page is no longer open.');
     if (state.injecting) throw new BrowserLockedError();
@@ -1646,6 +1666,7 @@ export function createAgentBrowserComputer(options: {
       async (devtools, document) => {
         if (document !== input.document) throw new BrowserActionError('browser_card_changed');
         for (const step of steps) {
+          signal?.throwIfAborted();
           const privateValue = step.field === 'number' || step.field === 'securityCode';
           if (privateValue) for (const value of step.values) state.secrets.add(value);
           const selection = fields[step.field]!;
@@ -1656,6 +1677,7 @@ export function createAgentBrowserComputer(options: {
           );
           if (field.origin !== input.destinations[step.field])
             throw new BrowserActionError('browser_card_site');
+          signal?.throwIfAborted();
           const tag = await devtools.arm(field, privateValue);
           if (!tag) throw new BrowserActionError('browser_card_field');
           if (tag === 'SELECT') {
@@ -1669,6 +1691,7 @@ export function createAgentBrowserComputer(options: {
         }
       },
       steps.map((step) => input.destinations[step.field]!),
+      signal,
     );
   }
 

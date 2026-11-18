@@ -163,8 +163,11 @@ export interface Computer {
     state: 'live' | 'last_known' | 'unavailable';
     capturedAt?: string;
   };
-  injectCredentials(input: CredentialInput): Promise<CredentialSubmission | void>;
-  fillCard(input: CardEntry): Promise<void>;
+  injectCredentials(
+    input: CredentialInput,
+    signal?: AbortSignal,
+  ): Promise<CredentialSubmission | void>;
+  fillCard(input: CardEntry, signal?: AbortSignal): Promise<void>;
   cardDestinations(
     threadId: string,
     fields: CardFields,

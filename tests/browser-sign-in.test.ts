@@ -532,6 +532,150 @@ test(
 );
 
 test(
+  'private submission stops before a click when its operation is cancelled',
+  { timeout: 20_000 },
+  async () => {
+    let submissions = 0;
+    const controller = new AbortController();
+    const server = createHttpServer((request, response) => {
+      response.setHeader('content-type', 'text/html');
+      if (request.url === '/submit') {
+        submissions++;
+        response.end('<h1>Unexpected submission</h1>');
+      } else
+        response.end(`<form action="/submit" method="post"><input id="password" type="password"><button id="submit" disabled>Continue</button></form><script>
+        document.querySelector('input').oninput=()=>{clearTimeout(window.validation);window.validation=setTimeout(()=>document.querySelector('button').disabled=false,1500)};
+      </script>`);
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const origin = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+    const directory = await mkdtemp(join(tmpdir(), 'nod-private-close-'));
+    let disabled!: () => void;
+    const waiting = new Promise<void>((resolve) => {
+      disabled = resolve;
+    });
+    const computer = createAgentBrowserComputer({
+      dataRoot: directory,
+      browserExecutable: process.env.NOD_TEST_BROWSER_EXECUTABLE,
+      privateNetwork: true,
+      headless: true,
+      daemonCommand: async (path, command, signal, timeout, maxBytes) => {
+        const result = await existingDaemonCommand(path, command, signal, timeout, maxBytes);
+        if (command.action === 'isenabled' && result.enabled === false) disabled();
+        return result;
+      },
+    });
+    try {
+      await computer.act('closing', { action: 'open', url: origin });
+      const outcome = computer
+        .injectCredentials(
+          {
+            threadId: 'closing',
+            origin,
+            kind: 'password',
+            password: 'Synthetic close password',
+            passwordSelector: '#password',
+            submitSelector: '#submit',
+          },
+          controller.signal,
+        )
+        .then(
+          () => true,
+          () => false,
+        );
+      await waiting;
+      controller.abort();
+      const submitted = await outcome;
+      await delay(1700);
+      assert.equal(submitted, false);
+      assert.equal(submissions, 0);
+      await computer.act('closing', { action: 'reload' });
+      assert.equal((await computer.currentPage('closing')).origin, origin);
+    } finally {
+      await computer.dispose();
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  'private card submission stops before a click when its operation is cancelled',
+  { timeout: 20_000 },
+  async () => {
+    let submissions = 0;
+    const controller = new AbortController();
+    const server = createHttpServer((request, response) => {
+      response.setHeader('content-type', 'text/html');
+      if (request.url === '/submit') {
+        submissions++;
+        response.end('<h1>Unexpected submission</h1>');
+      } else
+        response.end(`<form action="/submit" method="post"><input id="password" type="password"><button id="submit" disabled>Continue</button></form><script>
+        document.querySelector('input').oninput=()=>{clearTimeout(window.validation);window.validation=setTimeout(()=>document.querySelector('button').disabled=false,1500)};
+      </script>`);
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const origin = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+    const directory = await mkdtemp(join(tmpdir(), 'nod-private-close-'));
+    let disabled!: () => void;
+    const waiting = new Promise<void>((resolve) => {
+      disabled = resolve;
+    });
+    const computer = createAgentBrowserComputer({
+      dataRoot: directory,
+      browserExecutable: process.env.NOD_TEST_BROWSER_EXECUTABLE,
+      privateNetwork: true,
+      headless: true,
+      daemonCommand: async (path, command, signal, timeout, maxBytes) => {
+        const result = await existingDaemonCommand(path, command, signal, timeout, maxBytes);
+        if (command.action === 'isenabled' && result.enabled === false) disabled();
+        return result;
+      },
+    });
+    try {
+      await computer.act('closing', { action: 'open', url: origin });
+      const fields = { number: '#password' };
+      const destinations = await computer.cardDestinations('closing', fields);
+      const outcome = computer
+        .fillCard(
+          {
+            threadId: 'closing',
+            fields,
+            ...destinations,
+            card: {
+              cardNumber: '4111111111111111',
+              expiryMonth: 12,
+              expiryYear: 2099,
+              cardholder: 'Synthetic owner',
+            },
+            submitSelector: '#submit',
+          },
+          controller.signal,
+        )
+        .then(
+          () => true,
+          () => false,
+        );
+      await waiting;
+      controller.abort();
+      const submitted = await outcome;
+      await delay(1700);
+      assert.equal(submitted, false);
+      assert.equal(submissions, 0);
+      await computer.act('closing', { action: 'reload' });
+      assert.equal((await computer.currentPage('closing')).origin, origin);
+    } finally {
+      await computer.dispose();
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
   'private submission refuses a disabled control and a page change without submission',
   { timeout: 60_000 },
   async () => {

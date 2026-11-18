@@ -1327,6 +1327,7 @@ async function initializeApplication(
     icon,
   });
   vault = await createVault(pool, {
+    signal: closing.signal,
     analytics: captureAnalytics,
     refresh,
     keyStore: adapters.keyStore,
@@ -2094,7 +2095,7 @@ async function initializeApplication(
     capture: (threadId) => computer.checkoutImage(threadId),
     cards: () => vault.paymentCards(),
     card: (id, version, client) => vault.paymentCard(id, version, client),
-    fill: (input) => computer.fillCard(input),
+    fill: (input, signal) => computer.fillCard(input, signal),
     resume: resumeAfterPayment,
     record: (turn, entry, client) => vaultAccess.record(turn, entry, client),
   });
@@ -2886,6 +2887,7 @@ async function initializeApplication(
   proactivity.registerRoutes(app);
 
   app.addHook('preClose', async () => {
+    closing.abort();
     await adapters.models?.close();
   });
   const feedbackReportOptions: FeedbackReportOptions = {
@@ -3133,7 +3135,6 @@ async function initializeApplication(
     void admission.run(integrations.resumeWritingStyle)?.catch(() => {});
   let closingConsumers: Promise<void> | undefined;
   app.addHook('preClose', async () => {
-    closing.abort();
     admission.close();
     closingConsumers = consumers.close();
     void closingConsumers.catch(() => {});

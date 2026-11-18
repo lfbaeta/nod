@@ -88,9 +88,9 @@ async function dispatch(
       await computer.selectSignInMethod(request.threadId, request.input, signal);
       return null;
     case 'injectCredentials':
-      return computer.injectCredentials(request.input);
+      return computer.injectCredentials(request.input, signal);
     case 'fillCard':
-      await computer.fillCard(request.input);
+      await computer.fillCard(request.input, signal);
       return null;
     case 'cardDestinations':
       return computer.cardDestinations(request.threadId, request.fields);

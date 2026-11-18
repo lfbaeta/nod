@@ -635,6 +635,81 @@ function result(response: BrowserResponse) {
   return response.ok ? response.result : undefined;
 }
 
+for (const kind of ['login', 'card'] as const)
+  test(`private ${kind} cancellation crosses the browser bridge without a later submission`, async () => {
+    const entered = deferred();
+    const release = deferred();
+    let operationSignal: AbortSignal | undefined;
+    let submissions = 0;
+    const wait = async (signal?: AbortSignal) => {
+      operationSignal = signal;
+      entered.resolve();
+      await release.promise;
+      signal?.throwIfAborted();
+      submissions++;
+    };
+    const fixture = await harness({
+      computer: fakeComputer({
+        injectCredentials: async (_input, signal) => {
+          await wait(signal);
+          return { status: 'submitted' };
+        },
+        fillCard: async (_input, signal) => {
+          await wait(signal);
+        },
+      }),
+    });
+    const computer = fixture.client(`/synthetic/private-${kind}`);
+    const controller = new AbortController();
+    const pending =
+      kind === 'login'
+        ? computer.injectCredentials(
+            {
+              threadId: 'task',
+              origin: 'https://example.com',
+              kind: 'password',
+              password: 'Synthetic bridge password',
+              passwordSelector: '#password',
+              submitSelector: '#submit',
+            },
+            controller.signal,
+          )
+        : computer.fillCard(
+            {
+              threadId: 'task',
+              fields: { number: '#number' },
+              document: 'synthetic-document',
+              destinations: { number: 'https://example.com' },
+              submitSelector: '#submit',
+              card: {
+                cardNumber: '4111111111111111',
+                expiryMonth: 12,
+                expiryYear: 2099,
+                cardholder: 'Synthetic owner',
+              },
+            },
+            controller.signal,
+          );
+    const rejected = assert.rejects(pending, /cancelled/);
+    try {
+      await entered.promise;
+      assert.ok(operationSignal);
+      assert.equal(operationSignal.aborted, false);
+      controller.abort();
+      for (let attempt = 0; !operationSignal.aborted && attempt < 100; attempt++) await delay(10);
+      assert.equal(operationSignal.aborted, true);
+      release.resolve();
+      await rejected;
+      assert.equal(submissions, 0);
+      await assert.rejects(computer.act('task', { action: 'snapshot' }), /unavailable/);
+      assert.ok(await computer.act('task', { action: 'open', url: 'https://example.com/reopen' }));
+    } finally {
+      release.resolve();
+      await rejected;
+      await fixture.close();
+    }
+  });
+
 test('quiesce refuses a pending request without aborting or querying its browser', async () => {
   const entered = deferred();
   const release = deferred();

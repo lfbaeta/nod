@@ -559,11 +559,14 @@ export function createBridgeComputer(options: {
     selectSignInMethod: async (id, input, signal) => {
       await call({ method: 'selectSignInMethod', threadId: threadIdentity(id), input }, signal);
     },
-    fillCard: async (input) => {
-      await call({
-        method: 'fillCard',
-        input: browserCardInput.parse({ ...input, threadId: threadIdentity(input.threadId) }),
-      });
+    fillCard: async (input, signal) => {
+      await call(
+        {
+          method: 'fillCard',
+          input: browserCardInput.parse({ ...input, threadId: threadIdentity(input.threadId) }),
+        },
+        signal,
+      );
     },
     cardDestinations: async (id, fields) =>
       z
@@ -587,20 +590,23 @@ export function createBridgeComputer(options: {
         throw new Error('The checkout page could not be captured.');
       return new Uint8Array(Buffer.from(value, 'base64'));
     },
-    injectCredentials: async (input) => {
+    injectCredentials: async (input, signal) => {
       return (
         z
           .object({ status: z.literal('submitted') })
           .strict()
           .nullable()
           .parse(
-            await call({
-              method: 'injectCredentials',
-              input: browserCredentialInput.parse({
-                ...input,
-                threadId: threadIdentity(input.threadId),
-              }),
-            }),
+            await call(
+              {
+                method: 'injectCredentials',
+                input: browserCredentialInput.parse({
+                  ...input,
+                  threadId: threadIdentity(input.threadId),
+                }),
+              },
+              signal,
+            ),
           ) ?? undefined
       );
     },

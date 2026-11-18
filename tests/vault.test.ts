@@ -44,6 +44,7 @@ import { PasswordManagerError, type PasswordManager } from '../src/ports/passwor
 import { createPayments } from '../src/server/payments.ts';
 import type { CardEntry } from '../src/ports/computer.ts';
 import { withFailureLog } from '../src/server/failure-log.ts';
+import { cancelTurnOperations } from '../src/server/turn-cancellation.ts';
 
 async function seedTurns(pool: pg.Pool) {
   await pool.query(
@@ -512,6 +513,22 @@ test(
           );
         });
       }
+      const lifetime = new AbortController();
+      const closingUses = await createVaultUses(
+        f.pool,
+        'local-development',
+        undefined,
+        lifetime.signal,
+      );
+      const afterShutdown = { ...use, id: randomUUID() };
+      lifetime.abort();
+      const entriesBeforeShutdown = entries;
+      await assert.rejects(closingUses.run(afterShutdown, operation), { name: 'AbortError' });
+      assert.equal(entries, entriesBeforeShutdown);
+      assert.equal(
+        (await f.pool.query('SELECT 1 FROM vault_uses WHERE id=$1', [afterShutdown.id])).rowCount,
+        0,
+      );
       const unfinished = { ...use, id: randomUUID() };
       await withFailureLog(record, async () => {
         await assert.rejects(
@@ -1840,7 +1857,7 @@ test(
         turn: { threadId: string; turnId: string };
         input: Record<string, unknown>;
       }> = [];
-      let duringFill = async () => {};
+      let duringFill = async (_signal?: AbortSignal) => {};
       const secureEntries: string[] = [];
       const make = () =>
         createPayments(pool, {
@@ -1875,9 +1892,10 @@ test(
           },
           cards: vault.paymentCards,
           card: vault.paymentCard,
-          fill: async (input) => {
+          fill: async (input, signal) => {
             if (failFill) throw new Error('Synthetic stale field.');
-            await duringFill();
+            await duringFill(signal);
+            signal?.throwIfAborted();
             fills.push(input);
           },
           resume: async (_turnId, prompt) => {
@@ -2241,6 +2259,62 @@ test(
         200,
       );
       await pool.query('DELETE FROM turns WHERE id=$1', [laterTurn]);
+      const beforeInterrupted = { fills: fills.length, resumes: resumed.length };
+      const interrupted = await payments.request(turn, { ...order, card: card.id });
+      const interruptedId = interrupted.url!.split('/').at(-1)!;
+      let entrySignal: AbortSignal | undefined;
+      let entered!: () => void;
+      let release!: () => void;
+      const entryStarted = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const entryReady = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      duringFill = async (signal) => {
+        entrySignal = signal;
+        entered();
+        await entryReady;
+      };
+      const interruptedReply = app
+        .inject({
+          method: 'POST',
+          url: `/api/payment-requests/${interruptedId}`,
+          headers,
+          payload: { code: '737' },
+        })
+        .then((response) => response);
+      try {
+        await entryStarted;
+        assert.ok(entrySignal);
+        assert.equal(entrySignal.aborted, false);
+        await pool.query("UPDATE turns SET status='cancelled' WHERE id=$1", [turn.turnId]);
+        cancelTurnOperations([turn.turnId]);
+        assert.equal(entrySignal.aborted, true);
+        release();
+        assert.equal((await interruptedReply).statusCode, 409);
+        assert.equal(fills.length, beforeInterrupted.fills);
+        assert.deepEqual(
+          (await pool.query('SELECT status FROM vault_uses WHERE id=$1', [interruptedId])).rows,
+          [{ status: 'uncertain' }],
+        );
+        assert.equal(
+          (
+            await app.inject({
+              method: 'POST',
+              url: `/api/payment-requests/${interruptedId}`,
+              headers,
+              payload: { code: '737' },
+            })
+          ).statusCode,
+          409,
+        );
+      } finally {
+        release();
+        await interruptedReply;
+        duringFill = async () => {};
+      }
+      await pool.query("UPDATE turns SET status='running' WHERE id=$1", [turn.turnId]);
       const beforeCancelled = { fills: fills.length, resumes: resumed.length };
       await payments.request(turn, { ...order, card: card.id });
       const stoppedPayment = (await latest()).id;

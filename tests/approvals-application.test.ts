@@ -159,6 +159,13 @@ test(
     const workspaceFiles = new Map<string, Uint8Array>();
     const browserActs: Array<Record<string, unknown>> = [];
     const injected: CredentialInput[] = [];
+    const filledCards: object[] = [];
+    let privateEntryWait:
+      | {
+          entered(signal?: AbortSignal): void;
+          release: Promise<void>;
+        }
+      | undefined;
     let browserUrl = 'https://bank.example.test/transfer';
     let browserControls = [{ role: 'button', name: 'Authorize payment' }];
     let calendarBrowser: Pick<Computer, 'act' | 'currentPage'> | undefined;
@@ -209,6 +216,11 @@ test(
       curate: async ({ task, input }, _signal, report) => {
         if ('purpose' in input && input.purpose === 'connection' && connectionLabels.length)
           return connectionLabels.shift();
+        if ('purpose' in input && input.purpose === 'payment')
+          return {
+            text: 'Approve the synthetic payment with the private code.',
+            action: 'Approve payment',
+          };
         if ('purpose' in input && input.purpose === 'confirmation_review')
           return confirmationValid
             ? { valid: true }
@@ -406,7 +418,7 @@ test(
                     options.tools
                       .find((tool) => tool.name === (plan.tool ?? 'manage_personal_context'))!
                       .execute(
-                        plan.tool === 'send_message'
+                        plan.tool === 'send_message' || plan.tool === 'pay'
                           ? plan.args
                           : plan.tool === 'read_source'
                             ? { input: plan.args }
@@ -453,7 +465,34 @@ test(
           selectSignInMethod: async () => {
             throw new Error('This fixture never selects a method.');
           },
-          injectCredentials: async (input) => {
+          checkoutImage: async () =>
+            Buffer.from(
+              'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII=',
+              'base64',
+            ),
+          cardDestinations: async () => ({
+            document: 'synthetic-card-document',
+            destinations: {
+              number: 'https://bank.example.test',
+              expiry: 'https://bank.example.test',
+            },
+          }),
+          fillCard: async (input, signal) => {
+            const held = privateEntryWait;
+            if (held) {
+              held.entered(signal);
+              await held.release;
+              signal?.throwIfAborted();
+            }
+            filledCards.push(input);
+          },
+          injectCredentials: async (input, signal) => {
+            const held = privateEntryWait;
+            if (held) {
+              held.entered(signal);
+              await held.release;
+              signal?.throwIfAborted();
+            }
             injected.push(input);
             return { status: 'submitted' };
           },
@@ -591,11 +630,20 @@ test(
       origin: `http://localhost:${port}`,
       cookie: `${accessCookie(port)}=${await accessKey(dataRoot)}`,
     };
-    const request = (
+    let messagesAvailableAt = 0;
+    const request = async (
       method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
       path: string,
       payload?: Record<string, unknown>,
-    ) => application.app.inject({ method, url: path, headers, payload });
+    ) => {
+      const message = method === 'POST' && path === '/api/messages';
+      if (message && messagesAvailableAt > Date.now())
+        await delay(messagesAvailableAt - Date.now());
+      const response = await application.app.inject({ method, url: path, headers, payload });
+      if (message && Number(response.headers['x-ratelimit-remaining']) === 0)
+        messagesAvailableAt = Date.now() + Number(response.headers['x-ratelimit-reset']) * 1000;
+      return response;
+    };
     async function waitFor(id: string, status: string) {
       for (let attempt = 0; attempt < 300; attempt++) {
         const turn = (await pool.query('SELECT status,error FROM turns WHERE id=$1', [id])).rows[0];
@@ -3686,6 +3734,157 @@ test(
           }
         },
       );
+      await t.test('Stop cancels private entry in running and waiting turns', async () => {
+        const origin = 'https://bank.example.test';
+        const input = {
+          origin,
+          label: 'Synthetic cancellation login',
+          kind: 'password',
+          passwordSelector: '@password',
+          submitSelector: '@submit',
+          message: 'Enter the synthetic password.',
+        };
+        const before = injected.length;
+        let login: string | undefined;
+        for (const source of ['form', 'saved', 'card']) {
+          if (source === 'saved') {
+            const saved = await request('POST', '/api/vault', {
+              origin,
+              label: 'Synthetic cancellation login',
+              username: 'synthetic@example.test',
+              password: 'Synthetic cancellation password',
+            });
+            assert.equal(saved.statusCode, 200, saved.body);
+            login = saved.json().id;
+          }
+          let card: string | undefined;
+          if (source === 'card') {
+            const saved = await request('POST', '/api/vault', {
+              kind: 'card',
+              label: 'Synthetic cancellation card',
+              cardholder: 'Synthetic owner',
+              cardNumber: '4111111111111111',
+              expiryMonth: 12,
+              expiryYear: new Date().getUTCFullYear() + 3,
+            });
+            assert.equal(saved.statusCode, 200, saved.body);
+            card = saved.json().id;
+          }
+          const cardsBefore = filledCards.length;
+          let release!: () => void;
+          let entered = false;
+          let signal: AbortSignal | undefined;
+          privateEntryWait = {
+            entered(value) {
+              signal = value;
+              entered = true;
+            },
+            release: new Promise<void>((resolve) => {
+              release = resolve;
+            }),
+          };
+          let consumption:
+            ReturnType<typeof request> | Promise<Awaited<ReturnType<typeof request>>> | undefined;
+          let token: string | undefined;
+          try {
+            const text = `Sign in with the synthetic ${source} login ${randomUUID()}`;
+            asked.add(text);
+            plans.set(text, {
+              tool: source === 'card' ? 'pay' : 'sign_in',
+              action: 'Enter saved login',
+              args:
+                source === 'card'
+                  ? {
+                      amount: '12.34',
+                      currency: 'EUR',
+                      card,
+                      fields: { number: '@number', expiry: '@expiry' },
+                      submitSelector: '@submit',
+                    }
+                  : { ...input, ...(login ? { savedLoginId: login } : {}) },
+            });
+            const response = await request('POST', '/api/messages', { text });
+            assert.equal(response.statusCode, 200, response.body);
+            const turnId = response.json().turnId as string;
+            if (source !== 'saved') {
+              await waitFor(turnId, 'waiting');
+              const messages = JSON.stringify(
+                (
+                  await pool.query('SELECT text,presentation FROM messages WHERE turn_id=$1', [
+                    turnId,
+                  ])
+                ).rows,
+              );
+              token = (
+                source === 'card' ? /\/payments\/([a-f0-9-]{36})/ : /\/vault\/([A-Za-z0-9_-]{43})/
+              ).exec(messages)?.[1];
+              assert.ok(token);
+              consumption = request(
+                'POST',
+                source === 'card'
+                  ? `/api/payment-requests/${token}`
+                  : `/api/credential-requests/${token}`,
+                source === 'card'
+                  ? { code: '737' }
+                  : { password: 'Synthetic cancellation password' },
+              ).then((result) => result);
+            }
+            for (let attempt = 0; !entered && attempt < 300; attempt++) await delay(20);
+            assert.equal(entered, true);
+            assert.ok(signal);
+            assert.equal(signal.aborted, false);
+            assert.equal((await request('POST', '/api/thread/stop')).statusCode, 200);
+            assert.equal(signal.aborted, true);
+            release();
+            if (consumption) {
+              const result = await consumption;
+              assert.equal(result.statusCode, source === 'card' ? 409 : 502, result.body);
+              assert.equal(
+                (
+                  await request(
+                    'POST',
+                    source === 'card'
+                      ? `/api/payment-requests/${token}`
+                      : `/api/credential-requests/${token}`,
+                    source === 'card'
+                      ? { code: '737' }
+                      : { password: 'Synthetic cancellation password' },
+                  )
+                ).statusCode,
+                409,
+              );
+            }
+            await waitFor(turnId, 'cancelled');
+            let status: string | undefined;
+            for (let attempt = 0; status !== 'uncertain' && attempt < 300; attempt++) {
+              status = (
+                await pool.query(
+                  source === 'card'
+                    ? 'SELECT status FROM vault_uses WHERE id=$1'
+                    : 'SELECT status FROM vault_uses WHERE root_turn_id=$1',
+                  [source === 'card' ? token : turnId],
+                )
+              ).rows[0]?.status;
+              if (status !== 'uncertain') await delay(20);
+            }
+            assert.equal(status, 'uncertain');
+            assert.equal(injected.length, before);
+            assert.equal(filledCards.length, cardsBefore);
+            assert.equal(
+              (await pool.query('SELECT 1 FROM turns WHERE parent_turn_id=$1', [turnId])).rowCount,
+              0,
+            );
+          } finally {
+            release();
+            await consumption;
+            privateEntryWait = undefined;
+          }
+        }
+        const text = `Use the synthetic saved login again ${randomUUID()}`;
+        asked.add(text);
+        await propose('Enter saved login', { ...input, savedLoginId: login }, 'sign_in', text);
+        assert.equal(injected.length, before + 1);
+      });
       await t.test(
         'saved login consent keeps the account name and enters a code only with exact-origin consent',
         async () => {
@@ -4014,26 +4213,95 @@ test(
         },
       );
       await calendarRetry();
-      await t.test('shutdown saves usage from the last provider before it returns', async () => {
-        await pool.query(`
+      await t.test(
+        'shutdown cancels private entry before cleanup and saves final usage',
+        async () => {
+          await pool.query(`
           CREATE FUNCTION delay_closing_usage() RETURNS trigger LANGUAGE plpgsql AS $$
             BEGIN PERFORM pg_sleep(1); RETURN NEW; END;
           $$;
           CREATE TRIGGER delay_closing_usage BEFORE INSERT ON model_usage
             FOR EACH ROW WHEN (NEW.id='${closingUsageId}') EXECUTE FUNCTION delay_closing_usage()`);
-        recordClosingUsage = true;
-        try {
-          await application.app.close();
-          assert.deepEqual(
-            (await pool.query('SELECT cost_usd FROM model_usage WHERE id=$1', [closingUsageId]))
-              .rows,
-            [{ cost_usd: 0.125 }],
-          );
-        } finally {
-          recordClosingUsage = false;
-          await pool.query('DROP FUNCTION delay_closing_usage() CASCADE');
-        }
-      });
+          const closeModels = models.close;
+          let releaseModels!: () => void;
+          let modelsClosing!: () => void;
+          const modelCleanup = new Promise<void>((resolve) => {
+            releaseModels = resolve;
+          });
+          const cleanupEntered = new Promise<void>((resolve) => {
+            modelsClosing = resolve;
+          });
+          models.close = async () => {
+            modelsClosing();
+            await modelCleanup;
+            await closeModels();
+          };
+          let releaseEntry!: () => void;
+          let entryStarted = false;
+          let entrySignal: AbortSignal | undefined;
+          privateEntryWait = {
+            entered(signal) {
+              entryStarted = true;
+              entrySignal = signal;
+            },
+            release: new Promise<void>((resolve) => {
+              releaseEntry = resolve;
+            }),
+          };
+          let closingApplication: Promise<void> | undefined;
+          const before = injected.length;
+          recordClosingUsage = true;
+          try {
+            const saved = await request('POST', '/api/vault', {
+              origin: 'https://bank.example.test',
+              label: 'Synthetic shutdown login',
+              username: 'shutdown@example.test',
+              password: 'Synthetic shutdown password',
+            });
+            assert.equal(saved.statusCode, 200, saved.body);
+            const text = `Use the synthetic shutdown login ${randomUUID()}`;
+            asked.add(text);
+            plans.set(text, {
+              tool: 'sign_in',
+              action: 'Enter saved login',
+              args: {
+                origin: 'https://bank.example.test',
+                label: 'Synthetic shutdown login',
+                kind: 'password',
+                savedLoginId: saved.json().id,
+                passwordSelector: '@password',
+                submitSelector: '@submit',
+                message: 'Use the synthetic login.',
+              },
+            });
+            assert.equal((await request('POST', '/api/messages', { text })).statusCode, 200);
+            for (let attempt = 0; !entryStarted && attempt < 300; attempt++) await delay(20);
+            assert.equal(entryStarted, true);
+            assert.ok(entrySignal);
+            assert.equal(entrySignal.aborted, false);
+            closingApplication = application.app.close();
+            await cleanupEntered;
+            assert.equal(entrySignal.aborted, true);
+            releaseEntry();
+            releaseModels();
+            await closingApplication;
+            assert.equal(injected.length, before);
+            assert.deepEqual(
+              (await pool.query('SELECT cost_usd FROM model_usage WHERE id=$1', [closingUsageId]))
+                .rows,
+              [{ cost_usd: 0.125 }],
+            );
+          } finally {
+            releaseEntry();
+            releaseModels();
+            await closingApplication;
+            models.close = closeModels;
+            privateEntryWait = undefined;
+            recordClosingUsage = false;
+            await pool.query('DROP FUNCTION delay_closing_usage() CASCADE');
+          }
+        },
+      );
     } finally {
       await application.app.close();
       await pool.end();
