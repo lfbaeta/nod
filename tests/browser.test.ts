@@ -4730,14 +4730,65 @@ test('composer preserves keyboard shortcuts, upload retries, previews and failed
           'a\\**x* *y*\\*b',
           'a\\***x**\\*b',
           '\\*\\**x*',
+          '\\*!\\**x*',
+          '\\~a\nb *x*\\~',
+          '\\*Y\\* \\**Y*\\*',
+          'y'.repeat(5000) + '\n\\\u0060a \u0060x\u0060',
+          '\\\u0060a \u0060x\u0060',
           'a\\\u0060\u0060x\u0060\\\u0060b',
           '| a          |\n| ---------- |\n| b\\\\\\\\<br>c |',
+          '&#x61;~~<u>x</u>~~&#x61;',
+          '\\<!a **Q1**',
         ]) {
           await act(async () => replaceText(draft));
           await submit();
-          assert.equal(sends.at(-1).text.trimEnd(), draft);
           assert.deepEqual(parseComposerMarkdown(sends.at(-1).text), parseComposerMarkdown(draft));
         }
+        for (const [draft, sent] of [
+          ['# \u0060\u0060\u0060a *x* *', '# \u0060\u0060\u0060a *x* *'],
+          ['**Note:**&#x73;ee_it', '**Note:**&#x73;ee_it'],
+          ['\\#tag a*b\nc **Q1**\n========', '#tag a*b\nc **Q1**\n========'],
+        ]) {
+          await act(async () => replaceText(draft));
+          await submit();
+          assert.equal(sends.at(-1).text.trimEnd(), sent);
+        }
+        const { Editor } = await import('@tiptap/core');
+        const { createComposerExtensions } = await import('./src/web/lib/composer-editor.ts');
+        const { composerMarkdown } = await import('./src/web/lib/composer-markdown.ts');
+        const serializer = new Editor({ extensions: createComposerExtensions({ submit() {}, upload() {} }) });
+        for (const [address, href] of [
+          ['https://example.test', 'https://example.test'],
+          ['ada@example.test', 'mailto:ada@example.test'],
+          ['www.example.test', 'http://www.example.test'],
+        ]) {
+          serializer.commands.setContent({
+            type: 'doc',
+            content: [{ type: 'paragraph', content: [
+              { type: 'text', text: 'see ' + address },
+              { type: 'text', text: '(x)', marks: [{ type: 'strike' }] },
+            ] }],
+          });
+          const nodes = parseComposerMarkdown(composerMarkdown(serializer.state.doc)).content[0].content;
+          assert.deepEqual(
+            nodes.map((node) => [node.text, node.marks?.map((mark) => mark.attrs?.href ?? mark.type)]),
+            [['see ', undefined], [address, [href]], ['(x)', ['strike']]],
+          );
+        }
+        serializer.commands.setContent({
+          type: 'doc',
+          content: [{ type: 'paragraph', content: [
+            { type: 'text', text: 'see \\https://example.test' },
+            { type: 'text', text: '(x)', marks: [{ type: 'strike' }] },
+          ] }],
+        });
+        assert.deepEqual(
+          parseComposerMarkdown(composerMarkdown(serializer.state.doc)).content[0].content.map((node) => [
+            node.text,
+            node.marks?.map((mark) => mark.attrs?.href ?? mark.type),
+          ]),
+          [['see \\', undefined], ['https://example.test', ['https://example.test']], ['(x)', ['strike']]],
+        );
         await act(async () => replaceText('| label | value |\n| --- | --- |\n| first | second |'));
         await pasteAtEnd('table tr:last-child td:first-child p', 'A|B\\|C\nD');
         await submit();

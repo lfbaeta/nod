@@ -341,7 +341,7 @@ test(
       const before = await memoryFile();
       const unsupported = await ask('Review my synthetic project notes.', [
         { tool: 'fetch_content', args: { urls: ['https://example.test/refunds'] } },
-        learn(),
+        learn(undefined, true),
         learn([randomUUID()], true),
       ]);
       assert.equal(await memoryFile(), before);
@@ -712,7 +712,7 @@ test('a full memory file sheds the oldest archive entries before refusing a save
     [{ id: ids[1], text: 'A note.' }],
     '2026-02-01T00:00:00.000Z',
   );
-  assert.deepEqual(applied, []);
+  assert.deepEqual(applied, { applied: [], rejected: ['full'] });
   assert.deepEqual(render(full), unchanged);
 });
 
@@ -796,9 +796,10 @@ test('memory notes keep their line breaks from every writer while other control 
     ),
   );
   assert.deepEqual(
-    learned.map(({ path }) => path),
+    learned.applied.map(({ path }) => path),
     ['preferences/email-signoff', 'preferences/formal-signoff'],
   );
+  assert.deepEqual(learned.rejected, ['invalid', 'invalid', 'quote']);
   const signoff = (await memory.load()).entries.find((entry) => entry.slug === 'email-signoff');
   assert.equal(signoff?.text, 'Email sign-off: "Cheers,\nSam"; formal: "Kind regards,\nSam"');
   assert.equal(signoff?.quote, 'Cheers,\nSam\n\nunless it is formal');
@@ -820,13 +821,16 @@ test('memory notes keep their line breaks from every writer while other control 
         'stated',
       ),
     ),
-    [
-      {
-        operation: 'archive',
-        path: 'preferences/formal-signoff',
-        text: 'Formal sign-off: Kind regards, Sam',
-      },
-    ],
+    {
+      applied: [
+        {
+          operation: 'archive',
+          path: 'preferences/formal-signoff',
+          text: 'Formal sign-off: Kind regards, Sam',
+        },
+      ],
+      rejected: [],
+    },
   );
   assert.deepEqual(
     applyOps(
@@ -835,7 +839,16 @@ test('memory notes keep their line breaks from every writer while other control 
       [{ id: ids[1], text: 'Line one\nLine two' }],
       '2026-02-01T00:00:00.000Z',
     ),
-    [],
+    { applied: [], rejected: ['quote'] },
+  );
+  assert.deepEqual(
+    applyOps(
+      emptyTree(),
+      [add('x'.repeat(4001), 'Line one')],
+      [{ id: ids[1], text: 'Line one\nLine two' }],
+      '2026-02-01T00:00:00.000Z',
+    ).rejected,
+    ['invalid'],
   );
   assert.deepEqual(
     applyOps(
@@ -844,8 +857,27 @@ test('memory notes keep their line breaks from every writer while other control 
       [{ id: ids[1], text: 'Card 4111\n1111\n1111\n1111' }],
       '2026-02-01T00:00:00.000Z',
     ),
-    [],
+    { applied: [], rejected: ['secret'] },
   );
+  const replacing = (replaces: string[], archived: string[] = []) =>
+    applyOps(
+      treeOf(entry({ slug: 'old-signoff', text: 'Signs off with Best.' })),
+      [
+        ...archived.map((path) => ({
+          op: 'archive',
+          path,
+          reason: 'obsolete',
+          m: [1],
+          quote: 'Cheers',
+        })),
+        { ...add('Sign-off: Cheers', 'Cheers', 'signoff'), replaces },
+      ],
+      [{ id: ids[1], text: 'Cheers' }],
+      '2026-02-01T00:00:00.000Z',
+      'stated',
+    ).rejected;
+  assert.deepEqual(replacing(['preferences/missing-signoff']), ['missing']);
+  assert.deepEqual(replacing(['about/old-signoff'], ['about/old-signoff']), []);
 });
 
 test('repair archives expired, stale and duplicate entries, keeps distinct numbers and never deletes', () => {
