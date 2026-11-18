@@ -101,9 +101,37 @@ FunctionEnd
 !insertmacro CLOSE_NOD ""
 !insertmacro CLOSE_NOD "un."
 
+Function RecoverResourcesSwap
+  SetOutPath "$INSTDIR"
+  IfFileExists "$INSTDIR\resources" resources_live resources_missing
+resources_live:
+  IfFileExists "$INSTDIR\resources.previous" 0 recover_staged_resources
+  ClearErrors
+  RMDir /r "$INSTDIR\resources.previous"
+  IfErrors recover_resources_failed
+  Goto recover_staged_resources
+resources_missing:
+  IfFileExists "$INSTDIR\resources.previous" 0 recover_staged_resources
+  ClearErrors
+  Rename "$INSTDIR\resources.previous" "$INSTDIR\resources"
+  IfErrors recover_resources_failed
+recover_staged_resources:
+  IfFileExists "$INSTDIR\resources.next" 0 recover_resources_done
+  ClearErrors
+  RMDir /r "$INSTDIR\resources.next"
+  IfErrors recover_resources_failed
+recover_resources_done:
+  Return
+recover_resources_failed:
+  MessageBox MB_ICONSTOP "Nod could not recover its app resources. Keep the installation folder and run the installer again."
+  SetErrorLevel 1
+  Abort
+FunctionEnd
+
 Section "nod"
   Call CheckInstallDirectory
   Call CloseNod
+  Call RecoverResourcesSwap
   SetShellVarContext current
   SetOutPath "$INSTDIR"
   FileOpen $0 "$INSTDIR\.nod-installation" w
@@ -114,15 +142,47 @@ Section "nod"
     Abort
   directory_marked:
   WriteUninstaller "$INSTDIR\Uninstall.exe"
-  File /r "${APP_DIR}\*"
+  SetOutPath "$INSTDIR\resources.next"
+  File /r "${APP_DIR}\resources\*"
+  SetOutPath "$INSTDIR"
+  File /r /x resources "${APP_DIR}\*"
   IfFileExists "$EXEDIR\nod-Runtime-win32-x64.tar.gz" 0 runtime_copied
     ClearErrors
-    CopyFiles /SILENT "$EXEDIR\nod-Runtime-win32-x64.tar.gz" "$INSTDIR\resources\engine\windows-runtime\guest.tar.gz"
+    CopyFiles /SILENT "$EXEDIR\nod-Runtime-win32-x64.tar.gz" "$INSTDIR\resources.next\engine\windows-runtime\guest.tar.gz"
     IfErrors 0 runtime_copied
       MessageBox MB_ICONSTOP "Nod could not copy its runtime. Check free disk space, then run this installer again." /SD IDOK
       SetErrorLevel 1
       Abort
   runtime_copied:
+  IfFileExists "$INSTDIR\resources" 0 resources_ready
+  ClearErrors
+  Rename "$INSTDIR\resources" "$INSTDIR\resources.previous"
+  IfErrors resources_backup_failed
+resources_ready:
+  ClearErrors
+  Rename "$INSTDIR\resources.next" "$INSTDIR\resources"
+  IfErrors resources_install_failed
+  IfFileExists "$INSTDIR\resources.previous" 0 resources_installed
+  RMDir /r "$INSTDIR\resources.previous"
+  Goto resources_installed
+resources_install_failed:
+  IfFileExists "$INSTDIR\resources.previous" 0 resources_install_failed_no_backup
+  ClearErrors
+  Rename "$INSTDIR\resources.previous" "$INSTDIR\resources"
+  IfErrors resources_restore_failed
+resources_install_failed_no_backup:
+  MessageBox MB_ICONSTOP "Nod could not replace its app resources. Run the installer again."
+  SetErrorLevel 1
+  Abort
+resources_restore_failed:
+  MessageBox MB_ICONSTOP "Nod could not replace its app resources or restore the previous resources. Do not delete resources.previous; run the installer again."
+  SetErrorLevel 1
+  Abort
+resources_backup_failed:
+  MessageBox MB_ICONSTOP "Nod could not prepare the app resource update. Your current resources were left unchanged. Run the installer again."
+  SetErrorLevel 1
+  Abort
+resources_installed:
   CreateDirectory "$SMPROGRAMS\Nod"
   CreateShortcut "$SMPROGRAMS\Nod\Nod.lnk" "$INSTDIR\nod.exe"
   CreateShortcut "$SMPROGRAMS\Nod\Uninstall.lnk" "$INSTDIR\Uninstall.exe"
