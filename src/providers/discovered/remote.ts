@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { lookup } from 'node:dns/promises';
-import { request as httpRequest } from 'node:http';
+import { type IncomingMessage, request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { isIP } from 'node:net';
 import { Readable } from 'node:stream';
@@ -76,120 +76,157 @@ export async function safeRemoteFetch(
 ): Promise<Response> {
   const prepared = new Request(input, init);
   if (!prepared.headers.has('user-agent')) prepared.headers.set('user-agent', 'nod/0.1.0');
-  const signal = AbortSignal.any([prepared.signal, AbortSignal.timeout(600_000)]);
-  signal.throwIfAborted();
-  const { url, address } = await new Promise<Awaited<ReturnType<typeof publicUrl>>>(
-    (resolve, reject) => {
-      let settled = false;
-      const finish = (operation: () => void) => {
-        if (settled) return;
-        settled = true;
-        signal.removeEventListener('abort', abort);
-        operation();
-      };
-      const abort = () => finish(() => reject(signal.reason));
-      signal.addEventListener('abort', abort, { once: true });
-      dependencies.validate(prepared.url).then(
-        (value) => finish(() => resolve(value)),
-        (error) => finish(() => reject(error)),
-      );
-      if (signal.aborted) abort();
-    },
-  );
-  signal.throwIfAborted();
-  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && dependencies.plain))
-    throw new Error('The connection must use HTTPS.');
-  const body = Buffer.from(await prepared.arrayBuffer());
-  signal.throwIfAborted();
-  if (body.byteLength > maximumRequestBytes) throw new Error('The request is too large.');
-  return new Promise<Response>((resolve, reject) => {
-    const send =
-      url.protocol === 'http:' && dependencies.plain ? dependencies.plain : dependencies.request;
-    const outbound = send(
-      url,
-      {
-        method: prepared.method,
-        headers: Object.fromEntries(prepared.headers),
-        signal,
-        lookup: (_host, options, callback) => {
-          if (options.all) callback(null, [{ address, family: isIP(address) }]);
-          else callback(null, address, isIP(address));
-        },
+  let deadline = Date.now() + 3_600_000;
+  const idle = new AbortController();
+  let response: IncomingMessage | undefined;
+  let timer: NodeJS.Timeout | undefined;
+  const wait = () => {
+    clearTimeout(timer);
+    const left = deadline - Date.now();
+    timer = setTimeout(
+      () => {
+        const reason = new Error(
+          left > 600_000
+            ? 'The remote server sent nothing for 10 minutes.'
+            : 'The remote request did not finish within an hour.',
+        );
+        response?.destroy(reason);
+        idle.abort(reason);
       },
-      (incoming) => {
-        if (incoming.statusCode && incoming.statusCode >= 300 && incoming.statusCode < 400) {
-          incoming.destroy();
-          const location = incoming.headers.location;
-          if (!location || redirects <= 0) {
-            reject(new Error('The connection redirected too many times or without a location.'));
-            return;
-          }
-          const next = URL.parse(location, url);
-          if (!next) {
-            reject(new Error('The connection redirected to an invalid address.'));
-            return;
-          }
-          if (prepared.redirect === 'error' && next.origin !== url.origin) {
-            reject(
-              new Error(
-                'The server redirected the request to another address, which this connection does not allow.',
+      Math.min(600_000, left),
+    );
+    timer.unref();
+  };
+  wait();
+  const signal = AbortSignal.any([prepared.signal, idle.signal]);
+  try {
+    signal.throwIfAborted();
+    const { url, address } = await new Promise<Awaited<ReturnType<typeof publicUrl>>>(
+      (resolve, reject) => {
+        let settled = false;
+        const finish = (operation: () => void) => {
+          if (settled) return;
+          settled = true;
+          signal.removeEventListener('abort', abort);
+          operation();
+        };
+        const abort = () => finish(() => reject(signal.reason));
+        signal.addEventListener('abort', abort, { once: true });
+        dependencies.validate(prepared.url).then(
+          (value) => finish(() => resolve(value)),
+          (error) => finish(() => reject(error)),
+        );
+        if (signal.aborted) abort();
+      },
+    );
+    signal.throwIfAborted();
+    if (url.protocol !== 'https:' && !(url.protocol === 'http:' && dependencies.plain))
+      throw new Error('The connection must use HTTPS.');
+    const body = Buffer.from(await prepared.arrayBuffer());
+    signal.throwIfAborted();
+    if (body.byteLength > maximumRequestBytes) throw new Error('The request is too large.');
+    return await new Promise<Response>((resolve, reject) => {
+      const send =
+        url.protocol === 'http:' && dependencies.plain ? dependencies.plain : dependencies.request;
+      const outbound = send(
+        url,
+        {
+          method: prepared.method,
+          headers: Object.fromEntries(prepared.headers),
+          signal,
+          lookup: (_host, options, callback) => {
+            if (options.all) callback(null, [{ address, family: isIP(address) }]);
+            else callback(null, address, isIP(address));
+          },
+        },
+        (incoming) => {
+          response = incoming;
+          if (
+            /text\/event-stream/i.test(prepared.headers.get('accept') ?? '') &&
+            /^text\/event-stream\b/i.test(incoming.headers['content-type'] ?? '')
+          )
+            deadline = Infinity;
+          wait();
+          if (incoming.statusCode && incoming.statusCode >= 300 && incoming.statusCode < 400) {
+            clearTimeout(timer);
+            incoming.destroy();
+            const location = incoming.headers.location;
+            if (!location || redirects <= 0) {
+              reject(new Error('The connection redirected too many times or without a location.'));
+              return;
+            }
+            const next = URL.parse(location, url);
+            if (!next) {
+              reject(new Error('The connection redirected to an invalid address.'));
+              return;
+            }
+            if (prepared.redirect === 'error' && next.origin !== url.origin) {
+              reject(
+                new Error(
+                  'The server redirected the request to another address, which this connection does not allow.',
+                ),
+              );
+              return;
+            }
+            const headers = new Headers(prepared.headers);
+            if (next.origin !== url.origin)
+              for (const name of [...headers.keys()])
+                if (!['accept', 'content-type', 'user-agent'].includes(name)) headers.delete(name);
+            const keep = !(
+              (incoming.statusCode === 303 && !['GET', 'HEAD'].includes(prepared.method)) ||
+              ([301, 302].includes(incoming.statusCode) && prepared.method === 'POST')
+            );
+            resolve(
+              safeRemoteFetch(
+                next,
+                {
+                  method: keep ? prepared.method : 'GET',
+                  headers,
+                  ...(keep && body.byteLength ? { body } : {}),
+                  signal,
+                },
+                dependencies,
+                maximumRequestBytes,
+                redirects - 1,
               ),
             );
             return;
           }
-          const headers = new Headers(prepared.headers);
-          if (next.origin !== url.origin)
-            for (const name of [...headers.keys()])
-              if (!['accept', 'content-type', 'user-agent'].includes(name)) headers.delete(name);
-          const keep = !(
-            (incoming.statusCode === 303 && !['GET', 'HEAD'].includes(prepared.method)) ||
-            ([301, 302].includes(incoming.statusCode) && prepared.method === 'POST')
-          );
+          let size = 0;
+          incoming.on('close', () => clearTimeout(timer));
+          incoming.on('data', (chunk: Buffer) => {
+            wait();
+            size += chunk.byteLength;
+            if (size > responseBytes)
+              incoming.destroy(new Error('The connection response is too large.'));
+          });
+          incoming.on('error', reject);
+          const responseHeaders = new Headers();
+          for (const [name, value] of Object.entries(incoming.headers)) {
+            if (typeof value === 'string') responseHeaders.set(name, value);
+            else if (Array.isArray(value))
+              for (const item of value) responseHeaders.append(name, item);
+          }
           resolve(
-            safeRemoteFetch(
-              next,
+            new Response(
+              [204, 205, 304].includes(incoming.statusCode ?? 0)
+                ? null
+                : (Readable.toWeb(incoming) as ReadableStream),
               {
-                method: keep ? prepared.method : 'GET',
-                headers,
-                ...(keep && body.byteLength ? { body } : {}),
-                signal,
+                status: incoming.statusCode ?? 502,
+                headers: responseHeaders,
               },
-              dependencies,
-              maximumRequestBytes,
-              redirects - 1,
             ),
           );
-          return;
-        }
-        let size = 0;
-        incoming.on('data', (chunk: Buffer) => {
-          size += chunk.byteLength;
-          if (size > responseBytes)
-            incoming.destroy(new Error('The connection response is too large.'));
-        });
-        incoming.on('error', reject);
-        const responseHeaders = new Headers();
-        for (const [name, value] of Object.entries(incoming.headers)) {
-          if (typeof value === 'string') responseHeaders.set(name, value);
-          else if (Array.isArray(value))
-            for (const item of value) responseHeaders.append(name, item);
-        }
-        resolve(
-          new Response(
-            [204, 205, 304].includes(incoming.statusCode ?? 0)
-              ? null
-              : (Readable.toWeb(incoming) as ReadableStream),
-            {
-              status: incoming.statusCode ?? 502,
-              headers: responseHeaders,
-            },
-          ),
-        );
-      },
-    );
-    outbound.on('error', reject);
-    outbound.end(body);
-  });
+        },
+      );
+      outbound.on('error', (cause) => reject(idle.signal.aborted ? idle.signal.reason : cause));
+      outbound.end(body);
+    });
+  } catch (cause) {
+    clearTimeout(timer);
+    throw cause;
+  }
 }
 
 type PooledClient = { ready: Promise<Client>; active: number; timer?: NodeJS.Timeout };
@@ -292,7 +329,9 @@ async function withRemoteMcp<T>(
     const result = await operation(client, {
       ...(signal ? { signal } : {}),
       timeout: requestTimeoutMs,
+      onprogress: () => {},
       resetTimeoutOnProgress: true,
+      maxTotalTimeout: 3_600_000,
     });
     signal?.throwIfAborted();
     return result;

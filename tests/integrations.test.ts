@@ -1348,6 +1348,40 @@ function fakeProvider(session: IntegrationSession): IntegrationProvider {
   };
 }
 
+test('remote MCP calls ask the server for progress so long calls can keep reporting', async (t) => {
+  const { McpServer } = await import('@modelcontextprotocol/sdk/server/mcp.js');
+  const { StreamableHTTPServerTransport } =
+    await import('@modelcontextprotocol/sdk/server/streamableHttp.js');
+  const server = createServer(async (request, response) => {
+    const mcp = new McpServer({ name: 'synthetic-jobs', version: '1' });
+    mcp.registerTool('long-job', { description: 'Run a long job' }, async (extra) => {
+      const progressToken = extra._meta?.progressToken;
+      if (progressToken === undefined)
+        return { content: [{ type: 'text', text: 'no progress token' }] };
+      for (const progress of [1, 2])
+        await extra.sendNotification({
+          method: 'notifications/progress',
+          params: { progressToken, progress, total: 3 },
+        });
+      return { content: [{ type: 'text', text: 'synthetic job result' }] };
+    });
+    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+    response.on('close', () => void transport.close());
+    await mcp.connect(transport);
+    await transport.handleRequest(request, response);
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(async () => {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+  const origin = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  const transport = createDiscoveredTransport(ownerFetch(origin), async (value) => value);
+  assert.deepEqual(await transport.callTool(`${origin}/mcp`, {}, 'long-job', {}), {
+    content: [{ type: 'text', text: 'synthetic job result' }],
+  });
+});
+
 test('remote MCP falls back to HTTP+SSE only when the server refuses Streamable HTTP', async (t) => {
   const { McpServer } = await import('@modelcontextprotocol/sdk/server/mcp.js');
   const { SSEServerTransport } = await import('@modelcontextprotocol/sdk/server/sse.js');
@@ -13544,6 +13578,106 @@ test('discovered requests identify Nod, follow redirects only to checked public 
     safeRemoteFetch('https://api.fixture.example/broken', {}, { validate, request }),
     /invalid address/,
   );
+});
+
+test('discovered requests stay open while data arrives and end after ten silent minutes', async (t) => {
+  const { PassThrough } = await import('node:stream');
+  const { EventEmitter } = await import('node:events');
+  t.mock.method(AbortSignal, 'timeout', (ms: number) => {
+    const controller = new AbortController();
+    setTimeout(
+      () =>
+        controller.abort(
+          new DOMException('The operation was aborted due to timeout', 'TimeoutError'),
+        ),
+      ms,
+    );
+    return controller.signal;
+  });
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const streams: InstanceType<typeof PassThrough>[] = [];
+  const request = ((
+    url: URL,
+    options: { signal: AbortSignal },
+    callback: (incoming: unknown) => void,
+  ) => {
+    const moved = url.pathname === '/moved';
+    const outbound = Object.assign(new EventEmitter(), { end() {} });
+    const incoming = Object.assign(new PassThrough(), {
+      statusCode: moved ? 307 : 200,
+      headers: moved
+        ? { location: '/' }
+        : {
+            'content-type':
+              url.pathname === '/export' ? 'application/octet-stream' : 'text/event-stream',
+          },
+    });
+    options.signal.addEventListener(
+      'abort',
+      () => outbound.emit('error', new DOMException('The operation was aborted', 'AbortError')),
+      { once: true },
+    );
+    if (url.pathname === '/hang') return outbound;
+    options.signal.addEventListener('abort', () => incoming.destroy(new Error('aborted')), {
+      once: true,
+    });
+    if (!moved) streams.push(incoming);
+    queueMicrotask(() => callback(incoming));
+    return outbound;
+  }) as unknown as NonNullable<Parameters<typeof safeRemoteFetch>[2]>['request'];
+  const validate = async (value: string) => ({ url: new URL(value), address: '93.184.216.34' });
+  const open = async (path: string, accept = 'application/json, text/event-stream') =>
+    (
+      await safeRemoteFetch(
+        `https://mcp.fixture.example${path}`,
+        { method: 'POST', body: '{}', headers: { accept } },
+        { validate, request },
+      )
+    ).body!.getReader();
+  const decoder = new TextDecoder();
+  for (const path of ['/', '/moved']) {
+    const progress = await open(path);
+    const stream = streams.at(-1)!;
+    for (let minute = 0; minute < 20; minute += 5) {
+      stream.write(`event: progress\ndata: ${minute}\n\n`);
+      assert.equal(
+        decoder.decode((await progress.read()).value),
+        `event: progress\ndata: ${minute}\n\n`,
+      );
+      t.mock.timers.tick(5 * 60_000);
+    }
+    stream.end('event: result\n\n');
+    assert.equal(decoder.decode((await progress.read()).value), 'event: result\n\n');
+    assert.equal((await progress.read()).done, true);
+  }
+  const silent = await open('/');
+  t.mock.timers.tick(10 * 60_000);
+  await assert.rejects(silent.read(), /sent nothing for 10 minutes/);
+  const hanging = open('/hang');
+  await new Promise((resolve) => setImmediate(resolve));
+  t.mock.timers.tick(10 * 60_000);
+  await assert.rejects(hanging, /sent nothing for 10 minutes/);
+  const events = await open('/');
+  const eventStream = streams.at(-1)!;
+  for (let minute = 0; minute < 90; minute += 5) {
+    eventStream.write('event: progress\n\n');
+    await events.read();
+    t.mock.timers.tick(5 * 60_000);
+  }
+  eventStream.end();
+  assert.equal((await events.read()).done, true);
+  for (const [path, accept] of [
+    ['/export', undefined],
+    ['/', 'application/json'],
+  ] as const) {
+    const trickle = await open(path, accept);
+    for (let minute = 0; minute < 60; minute += 5) {
+      streams.at(-1)!.write('x');
+      await trickle.read();
+      t.mock.timers.tick(5 * 60_000);
+    }
+    await assert.rejects(trickle.read(), /did not finish within an hour/);
+  }
 });
 
 test(
