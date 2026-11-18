@@ -1759,36 +1759,29 @@ test(
       );
 
       await t.test(
-        'retrying the requested calendar event does not ask about editor controls (LAB-1467)',
+        'only the prior task addressed by an unquoted retry keeps its request (LAB-1467)',
         async (t) => {
           const website = 'https://calendar.example.test';
           const event = 'Studio planning';
           const when = 'November 24, 2030, from 9 to 9:30 AM';
           const request = `Create an event called ${event} in my iCloud calendar at ${website} on ${when}.`;
-          const click = (path: string, name: string, selector: string) => ({
+          const create = {
             website,
-            page: `${website}${path}`,
+            page: `${website}/calendar`,
             step: 'click',
-            control: [{ role: 'button', name }],
+            control: [{ role: 'button', name: 'Create' }],
             submits: 'unknown',
-            command: { action: 'click', selector },
-          });
-          const create = click('/calendar', 'Create', '@e1');
-          const editorSteps = [create, click('/calendar/new', 'AM', '@e2')];
+            command: { action: 'click', selector: '@e1' },
+          };
           aligned = ({ action, userMessages }) => {
-            const args = action?.arguments;
-            const inScope =
-              action?.name === 'NOD_browser' &&
-              args?.website === website &&
-              args.step === 'click' &&
-              editorSteps.some(
-                ({ page, control }) =>
-                  args.page === page && args.control?.[0]?.name === control[0]!.name,
-              );
             const instruction = (
               userMessages as Array<{ text: string; canAuthorize?: boolean }> | undefined
             )?.find(({ text, canAuthorize }) => text === request && canAuthorize !== false);
-            return inScope && instruction ? { run: true, because: instruction.text } : false;
+            return action?.name === 'NOD_browser' &&
+              action.arguments?.control?.[0]?.name === 'Create' &&
+              instruction
+              ? { run: true, because: instruction.text }
+              : false;
           };
 
           const startAttempt = async (text: string, message: string) => {
@@ -1814,10 +1807,18 @@ test(
             );
             const worker = await running(rows[0]!.turn_id);
             await tasks.inherit(worker);
-            return worker;
+            return { task, worker };
           };
 
-          const first = await startAttempt(request, 'I’ll create the calendar event.');
+          const decoy = await startAttempt('Read the calendar only.', 'I’ll read the calendar.');
+          await thread.reply(decoy.worker, 'I read the calendar.');
+          await tasks.settle(decoy.worker, 'I read the calendar.');
+          await finish(decoy.worker.turnId, 'succeeded');
+
+          const { task, worker: first } = await startAttempt(
+            request,
+            'I’ll create the calendar event.',
+          );
           const beforeFirstClick = calls.length;
           await approvals.request(first, 'NOD_browser', create);
           assert.equal(calls.length, beforeFirstClick + 1);
@@ -1826,7 +1827,32 @@ test(
           await tasks.settle(first, unverified);
           await finish(first.turnId, 'succeeded');
 
-          const retry = await startAttempt('Then try it again', 'I’ll retry the same event.');
+          const submitted = await messages.submit('Then try it again');
+          const ownerRetry = await running(submitted.turnId);
+          assert.equal((await row(ownerRetry.turnId)).session_id, ownerRetry.threadId);
+          await assert.rejects(
+            tasks.execute(
+              ownerRetry,
+              { action: 'reply', ids: [decoy.task.id], retry: true },
+              submitted.messageId,
+            ),
+            /That task is closed/,
+          );
+          await tasks.execute(
+            ownerRetry,
+            { action: 'reply', ids: [task.id], retry: true },
+            submitted.messageId,
+          );
+          await finish(ownerRetry.turnId, 'succeeded');
+          const { rows } = await db.pool.query<{ turn_id: string }>(
+            'SELECT turn_id FROM tasks WHERE id=$1',
+            [task.id],
+          );
+          const retry = await running(rows[0]!.turn_id);
+          await tasks.inherit(retry);
+          const retryRow = await row(retry.turnId);
+          assert.equal(retryRow.session_id, task.id);
+          assert.equal(retryRow.message_id, submitted.messageId);
           t.after(async () => {
             await db.pool.query(
               "UPDATE approvals SET status='expired' WHERE turn_id=$1 AND status='pending'",
@@ -1835,22 +1861,20 @@ test(
             await tasks.settle(retry, 'Fixture finished.');
             await finish(retry.turnId, 'succeeded');
           });
-          const remove = click('/calendar/settings', 'Delete calendar', '@e3');
-          assert.equal((await trust.check(retry, 'NOD_browser', remove)).confirm, true);
+          const result = await trust.check(retry, 'NOD_browser', create);
+          assert.equal(result.confirm, false);
+          assert.equal(result.basis.kind, 'message');
+          assert.equal(result.basis.messageId, (await row(first.turnId)).message_id);
 
           const before = calls.length;
-          for (const step of editorSteps) {
-            await approvals.request(retry, 'NOD_browser', step);
-            assert.equal(
-              (await proposal(retry.turnId))?.status,
-              undefined,
-              `The retry should not ask before clicking ${step.control[0]!.name}.`,
-            );
-          }
-          assert.deepEqual(
-            calls.slice(before).map(({ args }) => args),
-            editorSteps,
-          );
+          await propose(retry, 'NOD_browser', {
+            ...create,
+            page: `${website}/calendar/settings`,
+            control: [{ role: 'button', name: 'Delete calendar' }],
+          });
+          assert.equal(calls.length, before);
+          await db.pool.query('UPDATE turns SET withdrawn=true WHERE id=$1', [first.turnId]);
+          assert.equal((await trust.check(retry, 'NOD_browser', create)).confirm, true);
         },
       );
 

@@ -29,6 +29,7 @@ import { personalSecret } from './memory-tree.ts';
 import { texts as codeTexts } from './chat-verification.ts';
 import { waitingTurnSql, withdrawnSql, workKindSql, workOriginSql } from './turn-chain.ts';
 import { resemblesTaskAcknowledgement } from '../shared/task-ack.ts';
+import { bareConfirmationAnswer } from './owner-instructions.ts';
 
 const now = z.string().trim().min(1);
 const waits = z.array(
@@ -38,7 +39,13 @@ const nextCheck = z.iso.datetime({ offset: true });
 const credentialUrl = /(?<![\w/])(?:[a-z][a-z\d+.-]*:)?\/\/[^/\s?#<>]*@/iu;
 const input = z.discriminatedUnion('action', [
   z.object({ action: z.literal('list') }).strict(),
-  z.object({ action: z.literal('reply'), ids: z.array(z.uuid()).min(1) }).strict(),
+  z
+    .object({
+      action: z.literal('reply'),
+      ids: z.array(z.uuid()).min(1),
+      retry: z.boolean().optional(),
+    })
+    .strict(),
   z.object({ action: z.literal('stop'), id: z.uuid().optional() }).strict(),
   z
     .object({
@@ -349,28 +356,18 @@ export function createTasks(options: {
     taskId: string,
     sourceMessageId: string,
     parentTurnId: string,
+    retry?: boolean,
   ) {
     const task = (
       await client.query(
         `SELECT t.*,u.thread_id,u.channel,u.channel_source_id FROM tasks t
-       JOIN turns u ON u.id=$3 AND u.owner_id=t.owner_id
-       JOIN turns first ON first.id=t.turn_id AND first.thread_id=u.thread_id
+        JOIN turns u ON u.id=$3 AND u.owner_id=t.owner_id
+        JOIN turns first ON first.id=t.turn_id AND first.thread_id=u.thread_id AND first.owner_id=t.owner_id
        WHERE t.id=$1 AND t.owner_id=$2 FOR NO KEY UPDATE OF t`,
         [taskId, ownerId, parentTurnId],
       )
     ).rows[0];
     if (!task) throw failure('Task not found.', 404);
-    if (task.state !== 'open')
-      throw failure(
-        'That task is closed. The owner can reopen it by replying to one of its messages; otherwise start a new task.',
-      );
-    const message = (
-      await client.query(
-        "SELECT text FROM messages WHERE id=$1 AND owner_id=$2 AND thread_id=$3 AND role='user'",
-        [sourceMessageId, ownerId, task.thread_id],
-      )
-    ).rows[0];
-    if (!message) throw failure('A task update needs an owner message.');
     const sourceId = `task-delivery:${task.session_id}:${sourceMessageId}`;
     const prior = (
       await client.query('SELECT id FROM turns WHERE owner_id=$1 AND source_id=$2', [
@@ -379,11 +376,51 @@ export function createTasks(options: {
       ])
     ).rows[0];
     if (prior) return;
+    const message = (
+      await client.query(
+        "SELECT text FROM messages WHERE id=$1 AND owner_id=$2 AND thread_id=$3 AND role='user'",
+        [sourceMessageId, ownerId, task.thread_id],
+      )
+    ).rows[0];
+    if (!message) throw failure('A task update needs an owner message.');
+    const closed = task.state !== 'open';
+    if (closed) {
+      const bound =
+        retry &&
+        task.state === 'done' &&
+        task.session_id === task.id &&
+        task.activity_key === null &&
+        task.source_message_id &&
+        message.text.trim() &&
+        !bareConfirmationAnswer(message.text) &&
+        (
+          await client.query(
+            `WITH answered AS (
+               SELECT a.id,a.owner_id,a.turn_id,a.role FROM messages m
+               JOIN turns u ON u.id=m.turn_id AND u.id=$5 AND u.owner_id=m.owner_id AND u.source='user'
+               JOIN messages a ON a.owner_id=m.owner_id AND a.thread_id=m.thread_id
+               LEFT JOIN turns r ON r.id=a.turn_id AND r.owner_id=a.owner_id
+               WHERE m.id=$3 AND m.owner_id=$1 AND m.thread_id=$2 AND m.hidden_at IS NULL
+                 AND m.approval_answer IS NULL AND NOT ${withdrawnSql('m')}
+                 AND a.hidden_at IS NULL
+                 AND a.created_at>m.created_at - interval '24 hours'
+                 AND (a.created_at,a.id)<(m.created_at,m.id)
+                 AND m.reply_to_message_id IS NULL AND COALESCE(r.channel,a.delivered_channel,'web')=u.channel
+               ORDER BY a.created_at DESC,a.id DESC LIMIT 1
+             ) SELECT 1 FROM answered WHERE role='assistant' AND turn_id=$4 AND NOT ${withdrawnSql('answered')}
+               AND NOT EXISTS (SELECT 1 FROM approvals p WHERE p.owner_id=$1 AND p.turn_id=$4
+                 AND (p.confirmation_message_id=answered.id OR p.status IN ('pending','confirmed','executing')))`,
+            [ownerId, task.thread_id, sourceMessageId, task.turn_id, parentTurnId],
+          )
+        ).rowCount;
+      if (!bound)
+        throw failure('That task is closed. To continue it, reply to one of its messages.');
+    }
     const turnId = await enqueueTurn(message.text, {
       source: 'task',
       sourceId,
       sessionId: task.session_id,
-      parentTurnId,
+      parentTurnId: closed ? task.turn_id : parentTurnId,
       background: true,
       channel: task.channel,
       channelSourceId: task.channel_source_id,
@@ -447,8 +484,9 @@ export function createTasks(options: {
     if (request.action === 'reply') {
       if (current.task_id || current.session_id !== turn.threadId || !sourceMessageId)
         throw failure('Only the main chat can send owner updates to tasks.');
-      for (const id of new Set(request.ids))
-        await deliver(client, id, sourceMessageId, turn.turnId);
+      const ids = new Set(request.ids);
+      if (request.retry && ids.size !== 1) throw failure('A retry must name one task.');
+      for (const id of ids) await deliver(client, id, sourceMessageId, turn.turnId, request.retry);
       return { tasks: await read(client) };
     }
     if (request.action === 'stop') {
