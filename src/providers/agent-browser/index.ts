@@ -1888,11 +1888,15 @@ export function createAgentBrowserComputer(options: {
           const ref = referenceOf(target);
           const observed = ref ? state.refs.get(ref) : undefined;
           if (ref && !observed) throw new BrowserActionError('browser_target_changed');
-          const control = await devtools.signInControl(
-            ref ? await pointOf(state, ref) : { selector: target },
-          );
+          const control = await devtools
+            .signInControl(ref ? await pointOf(state, ref) : { selector: target })
+            .catch((error: unknown) => {
+              throw error instanceof BrowserActionError
+                ? error
+                : new BrowserActionError('browser_sign_in_choice');
+            });
+          if (control.origin !== origin) throw new BrowserActionError('browser_sign_in_choice');
           if (
-            control.origin !== origin ||
             [...controls.values()].some(
               (previous) => previous.backendNodeId === control.backendNodeId,
             )

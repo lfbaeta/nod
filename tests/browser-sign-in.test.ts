@@ -850,11 +850,15 @@ test(
             { label: 'Ignored', selector: '@' + framedRef },
           ]);
         if (path === '/foreign') {
-          await assert.rejects(inspect());
+          const refused = (error: unknown) =>
+            error instanceof BrowserActionError && error.code === 'browser_sign_in_choice';
+          await assert.rejects(inspect(), refused);
+          await assert.rejects(inspectRef(), refused);
           await assert.rejects(
-            inspectRef(),
-            (error) =>
-              error instanceof BrowserActionError && error.code === 'browser_target_changed',
+            client.signInMethods!('fixture', origin, [
+              { label: 'Ignored', selector: '#frame-state' },
+            ]),
+            refused,
           );
           continue;
         }
