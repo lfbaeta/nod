@@ -6687,7 +6687,8 @@ test('chat reloads older history after hidden confirmations exceed the ID window
         await settle(() => hasDraft() && !document.querySelector('.composer-reply'));
         assert.equal(JSON.parse(localStorage.getItem(draftKey)).reply, null);
         await submit();
-        await settle(() => document.querySelector('[role="alert"]')?.textContent.includes('may have been sent'));
+        await settle(() => hasDraft() &&
+          document.querySelector('[role="alert"]')?.textContent.includes('may have been sent'));
         assert.equal(sends.length, 2);
         assert.ok(hasDraft());
         await submit();
