@@ -351,6 +351,7 @@ export function createModelService(options: {
     }
   }
   let rows: (ModelRecord & {
+    credentialTag?: string;
     keyEnding?: string;
     issue?: ModelIssue;
     issues?: Record<string, ModelIssue>;
@@ -431,11 +432,11 @@ export function createModelService(options: {
     const state = await store.read();
     rows = state.connections.map(({ credential: saved, ...row }) => {
       const value = row.managed ? options.bootstrap?.credentials[row.provider] : saved;
-      const failed = failures(row, credentialTag(value)).sort(
-        ([, a], [, b]) => b.retryAt - a.retryAt,
-      );
+      const tag = credentialTag(value);
+      const failed = failures(row, tag).sort(([, a], [, b]) => b.retryAt - a.retryAt);
       return {
         ...row,
+        credentialTag: tag,
         ...(value &&
         typeof value === 'object' &&
         'key' in value &&
@@ -528,7 +529,8 @@ export function createModelService(options: {
             !error &&
             row.id === selection?.connectionId &&
             requested(row, selection.modelId).includes(modelId) &&
-            checkIssue
+            checkIssue &&
+            rows.find((item) => item.id === row.id)?.credentialTag === tag
           ) {
             checkIssue = undefined;
             options.changed?.();

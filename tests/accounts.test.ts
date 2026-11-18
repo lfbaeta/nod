@@ -2817,6 +2817,27 @@ describe('model connections', { skip: !process.env.TEST_DATABASE_URL }, () => {
       await new Promise((resolve) => setImmediate(resolve));
       assert.equal(owner.current.checking, false);
       assert.equal(owner.current.issue, undefined);
+
+      const connectionId = owner
+        .view()
+        .connections.find((row) => row.provider === 'compatible')!.id;
+      await owner.select({ ...selection, connectionId });
+      const previous = await owner.resolve();
+      const completePrevious = await previous.prepareRequest!(selection.modelId, false);
+      assert.equal(
+        await owner.addEndpoint('http://localhost:11434/v1', 'fixture-replacement-endpoint-key'),
+        connectionId,
+      );
+      checks.at(-1)!.reject(new Error('Synthetic new credential failure.'));
+      await new Promise((resolve) => setImmediate(resolve));
+      const issue = owner.view().selectionIssue;
+      assert.match(issue!.reason, /Synthetic new credential failure/);
+      await completePrevious();
+      assert.deepEqual(owner.current.issue, issue);
+      const current = await owner.resolve();
+      const completeCurrent = await current.prepareRequest!(selection.modelId, false);
+      await completeCurrent();
+      assert.equal(owner.current.issue, undefined);
     },
   );
 
