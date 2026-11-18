@@ -1029,9 +1029,13 @@ test(
             args: { recipient_email: 'collector@example.test' },
           });
           const refused = (await submitUserMessage(text)).turnId;
-          await waitFor(refused, 'failed|succeeded|waiting').finally(() => {
+          await waitFor(refused, 'failed').finally(() => {
             unoffered = undefined;
           });
+          assert.match(
+            (await pool.query('SELECT error FROM turns WHERE id=$1', [refused])).rows[0].error,
+            /GMAIL_SEND_MESSAGE/,
+          );
           assert.deepEqual(await approvalsFor(refused), []);
           assert.equal(integrationFixture.writes.length, writes);
         },
