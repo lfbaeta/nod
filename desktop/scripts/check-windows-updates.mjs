@@ -179,7 +179,7 @@ else {
 app.on('second-instance', async (_event, argv) => {
   if (!argv.includes('--quit')) return;
   await record('stopped');
-  app.exit(0);
+  app.quit();
 });
 app.whenReady().then(async () => {
   const settingsPath = join(profile, 'settings.json');
@@ -345,6 +345,19 @@ app.whenReady().then(async () => {
   await run(executable, ['--quit'], { env: environment, timeout: 30_000 });
   await waitFor((entries) =>
     entries.find((entry) => entry.event === 'stopped' && entry.pid === openedByInstaller.pid),
+  );
+  await run(
+    powershell,
+    [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      "$ErrorActionPreference = 'Stop'; $process = Get-Process -Id ([int]$env:NOD_UPDATE_STOP_PID) -ErrorAction SilentlyContinue; if ($process) { Wait-Process -InputObject $process -Timeout 30 -ErrorAction Stop }; exit 0",
+    ],
+    {
+      env: { ...environment, NOD_UPDATE_STOP_PID: String(openedByInstaller.pid) },
+      timeout: 35_000,
+    },
   );
   receipt.stage = 'starting 1.0.0';
   const first = await start();
