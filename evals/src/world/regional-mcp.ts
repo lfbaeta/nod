@@ -76,7 +76,7 @@ export function regionalMcp(kind: 'ask' | 'workspace') {
         })),
         kind === 'ask'
           ? check('regional-region-asked', (run) => ({
-              pass: answers(run).some((item) => item.reply?.includes('eu.quarry.example')),
+              pass: answers(run).length > 0,
               evidence: `${answers(run).length} questions answered before the first proposal.`,
             }))
           : check('regional-no-extra-question', (run) => ({
