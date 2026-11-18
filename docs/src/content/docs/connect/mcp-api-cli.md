@@ -45,13 +45,13 @@ A failed tool request keeps the server's status and reason. Nod does not retry i
 
 Ask Nod to connect a service it can't find in the app catalog. Nod proposes a way in, called an access path, and sends you a link to a private setup page. There, you paste a token or sign in. The model never sees the token.
 
-Some services give each region or workspace its own address, such as a separate EU address. Each one has its own sign-in, so an account connects only through its own address. Nod uses the address you give it, or asks which region you use before it proposes one. If sign-in ends on the service's home page instead of returning to Nod, tell Nod your workspace address and start again.
-
 | Access path | What Nod calls                                                 | How it signs in                       |
 | ----------- | -------------------------------------------------------------- | ------------------------------------- |
 | MCP server  | Tools on a public HTTPS MCP server, or a private one you enter | A token in a header, or OAuth sign-in |
 | HTTP API    | A method and path on the API                                   | A token in a header                   |
 | CLI         | A command with arguments                                       | Tokens in environment variables       |
+
+Some services give each region or workspace its own MCP address, such as a separate EU address, each with its own sign-in. An account connects only through its own region's address. Nod picks the region from a workspace address you give it, or asks which region you use before it proposes a connection. If sign-in ends on the service's home page instead of returning to Nod, tell Nod your workspace address and start again, or select **Connect MCP** and enter your region's address.
 
 Nod keeps the token encrypted in Vault, and the server adds it to each call. Results and errors remove plaintext, JSON-escaped and URL- or form-encoded representations of the token. A returned file containing any of those representations is withheld.
 
