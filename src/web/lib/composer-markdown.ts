@@ -303,7 +303,8 @@ function parsesBack(checked: PhrasingContent[], heading?: Heading) {
     type: 'root',
     children: [{ ...(heading ?? { type: 'paragraph' }), children: checked } as Heading | Paragraph],
   });
-  const prefix = heading && source.startsWith('#') ? `${'#'.repeat(heading.depth)} ` : '';
+  const atx = heading && !source.slice(0, -1).includes('\n');
+  const prefix = atx ? `${'#'.repeat(heading.depth)} ` : '';
   const joined = prefix + parts.join('');
   const offsets: number[] = [];
   let at = 0;

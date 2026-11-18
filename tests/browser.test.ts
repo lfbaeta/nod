@@ -4745,6 +4745,7 @@ test('composer preserves keyboard shortcuts, upload retries, previews and failed
         for (const [draft, sent] of [
           ['# \u0060\u0060\u0060a *x* *', '# \u0060\u0060\u0060a *x* *'],
           ['**Note:**&#x73;ee_it', '**Note:**&#x73;ee_it'],
+          ['\\#tag a*b\nc **Q1**\n========', '#tag a*b\nc **Q1**\n========'],
         ]) {
           await act(async () => replaceText(draft));
           await submit();
