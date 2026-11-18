@@ -29,7 +29,7 @@ Version one supports a limited set of Agent Plugins features. Check these limits
 
 - Each app describes one service and one connection method. Fixed connections use one authentication method.
 - MCP apps use Streamable HTTP. The app format does not support stdio servers, legacy SSE servers, or static MCP headers.
-- Fixed MCP and HTTP API addresses must use public HTTPS. Only n8n's app setup permits local or private instance addresses.
+- Fixed MCP addresses, HTTP API addresses, and CLI download addresses must use public HTTPS on port 80 or 443. OAuth endpoints must use port 443. Only n8n's app setup permits local or private instance addresses.
 - CLI apps must run without interaction in Nod's Linux workspace on every host platform.
 - App folders cannot add install scripts or hooks. Bundled skills can contain Markdown guides and references, but Nod does not execute their scripts.
 
