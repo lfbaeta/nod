@@ -47,7 +47,12 @@ import { registerArtifactFileHandlers } from './artifact-file-handlers.mjs';
 import { saveArtifactDownload } from './downloads.mjs';
 import { createDesktopLifecycle, startupErrorDetails } from './lifecycle.mjs';
 import { createMacEncryption } from './mac-encryption.mjs';
-import { createDesktopUpdater, createUpdateSource, startDesktopUpdateChecks } from './updates.mjs';
+import {
+  createDesktopUpdater,
+  createUpdateSource,
+  macInstallerRunning,
+  startDesktopUpdateChecks,
+} from './updates.mjs';
 import { startWindowsInstall } from './windows-update.mjs';
 import { appOpenPath } from './app-links.mjs';
 import { trustSystemCertificates } from './system-certificates.mjs';
@@ -165,6 +170,7 @@ let nativePreferencesPending = false;
 let guidedStartup = false;
 let quitting = false;
 let installingUpdate = false;
+let macInstallerBusy = false;
 let updateSource;
 let updates;
 let checkingUpdates;
@@ -2190,6 +2196,19 @@ async function rememberState(window) {
     .catch(() => {});
 }
 
+async function openedDuringUpdateRestart() {
+  macInstallerBusy =
+    process.platform === 'darwin' &&
+    app.isPackaged &&
+    !testInstall &&
+    (await macInstallerRunning('dev.nod.desktop.ShipIt'));
+  if (!macInstallerBusy) return false;
+  const version = await resumeRead.then((text) => JSON.parse(text).version).catch(() => undefined);
+  const restart = typeof version === 'string' && version !== app.getVersion();
+  await updateEvent('installer-running', { restart });
+  return restart;
+}
+
 async function resumeState() {
   const text = await resumeRead;
   if (text === undefined) return;
@@ -2673,6 +2692,7 @@ async function importRuntime() {
 
 if (!app.requestSingleInstanceLock()) app.quit();
 else if (process.argv.includes('--quit')) app.exit();
+else if (await openedDuringUpdateRestart()) app.exit();
 else {
   if (testInstall) process.on('SIGTERM', () => app.quit());
   app.on('second-instance', (_event, argv) => {
@@ -2837,6 +2857,7 @@ else {
         stopUpdateChecks = startDesktopUpdateChecks({
           check: () => checkForUpdates(false),
           powerMonitor,
+          defer: macInstallerBusy,
         });
       }
       nativeTheme.on('updated', publishPreferences);

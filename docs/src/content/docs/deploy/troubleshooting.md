@@ -83,6 +83,10 @@ macOS can ask again after Nod is re-signed. Approve it in the macOS dialog. Neve
 
 While the keychain unlocks, Nod keeps the startup screen and **Connect to a server** available. If it keeps waiting, check for a macOS prompt, unlock your keychain, then quit and reopen Nod.
 
+### macOS opens the old version after an update
+
+After **Restart to update**, macOS needs a minute or two to install the new app before it opens. Nod 0.8.4 and earlier cancel the update if you open them during that time. Select **Restart to update** again and wait until Nod opens by itself. If it still opens on the old version, quit Nod and run the [Terminal installer](/get-started/install-desktop/#install-nod). It keeps your profile, keys and data.
+
 ### Nod could not unlock your saved server token
 
 Select **Reconnect to server** and enter the same server address and `NOD_AUTH_TOKEN`. The app checks the connection before saving the token again in your computer's secure storage. If macOS asks for Keychain access, allow it there.
