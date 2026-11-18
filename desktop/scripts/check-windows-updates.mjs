@@ -7,6 +7,7 @@ import {
   mkdtemp,
   readFile,
   realpath,
+  rename,
   rm,
   stat,
   writeFile,
@@ -38,6 +39,11 @@ const events = join(root, 'events.jsonl');
 const stop = join(root, 'stop');
 const output = join(repository, '.local/windows-update-acceptance');
 const executable = join(installation, 'nod.exe');
+const resources = join(installation, 'resources');
+const previousResources = join(installation, 'resources.previous');
+const nextResources = join(installation, 'resources.next');
+const oldSkill = join(resources, 'engine', 'src', 'runtime', 'skills', 'n8n', 'SKILL.md');
+const newSkill = join(resources, 'engine', 'src', 'apps', 'n8n', 'skills', 'n8n', 'SKILL.md');
 const powershell = join(process.env.SYSTEMROOT, 'System32/WindowsPowerShell/v1.0/powershell.exe');
 const nsis = process.env.NOD_NSIS || join(process.env['ProgramFiles(x86)'], 'NSIS/makensis.exe');
 const configuration = JSON.parse(await readFile(join(repository, 'desktop/package.json')));
@@ -286,6 +292,17 @@ app.whenReady().then(async () => {
       win32metadata: { CompanyName: 'n8n GmbH', ProductName: 'Nod', FileDescription: 'Nod' },
       overwrite: true,
     });
+    const skillPath = join(
+      application,
+      'resources',
+      'engine',
+      'src',
+      ...(version === '1.0.0' ? ['runtime', 'skills'] : ['apps', 'n8n', 'skills']),
+      'n8n',
+      'SKILL.md',
+    );
+    await mkdir(dirname(skillPath), { recursive: true });
+    await writeFile(skillPath, 'Windows update fixture skill ' + version + '\n');
     const stage = join(root, `stage-${version}`);
     await mkdir(stage);
     installers[version] = join(stage, 'nod-Setup-x64.exe');
@@ -362,6 +379,8 @@ app.whenReady().then(async () => {
   installed = true;
   await stat(executable);
   await stat(join(installation, 'Uninstall.exe'));
+  await stat(oldSkill);
+  await assert.rejects(stat(newSkill), { code: 'ENOENT' });
   const openedByInstaller = await waitFor((entries) =>
     entries.find((entry) => entry.event === 'ready' && entry.version === '1.0.0'),
   );
@@ -382,6 +401,20 @@ app.whenReady().then(async () => {
       timeout: 35_000,
     },
   );
+  receipt.stage = 'recovering an interrupted resources swap';
+  await rename(resources, previousResources);
+  await mkdir(nextResources);
+  await writeFile(join(nextResources, 'partial'), 'incomplete staged resources');
+  await run(installers['1.0.0'], ['/S', `/D=${installation}`], {
+    env: environment,
+    timeout: 180_000,
+    windowsVerbatimArguments: true,
+    argv0: `"${installers['1.0.0']}"`,
+  });
+  await stat(oldSkill);
+  await assert.rejects(stat(newSkill), { code: 'ENOENT' });
+  await assert.rejects(stat(previousResources), { code: 'ENOENT' });
+  await assert.rejects(stat(nextResources), { code: 'ENOENT' });
   receipt.stage = 'starting 1.0.0';
   const first = await start();
   const identityPublicKey = createPublicKey({
@@ -453,6 +486,10 @@ app.whenReady().then(async () => {
   assert.deepEqual(updated.files, first.files);
   assert.equal(updated.keyHash, first.keyHash);
   assert.deepEqual(updated.preferences, first.preferences);
+  await stat(newSkill);
+  await assert.rejects(stat(oldSkill), { code: 'ENOENT' });
+  await assert.rejects(stat(previousResources), { code: 'ENOENT' });
+  await assert.rejects(stat(nextResources), { code: 'ENOENT' });
   verifyIdentity(updated);
   receipt.stage = 'installing on quit without relaunch';
   const runningUpdated = await start({ hold: true });
@@ -488,6 +525,8 @@ app.whenReady().then(async () => {
     failedInstallPreserved: true,
     runningAppQuitByInstaller: true,
     updateStartedByApp: true,
+    staleSkillRemoved: true,
+    interruptedResourcesSwapRecovered: true,
     foreignInstallerRefused: true,
     windowsCatalogInstallerRefused: true,
     encryptedProfilePreserved: true,
