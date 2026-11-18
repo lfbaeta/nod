@@ -4729,6 +4729,7 @@ test('composer preserves keyboard shortcuts, upload retries, previews and failed
           'a\\~~~x~~ ~~y~~\\~b',
           'a\\**x* *y*\\*b',
           'a\\***x**\\*b',
+          '\\*\\**x*',
           'a\\\u0060\u0060x\u0060\\\u0060b',
           '| a        |\n| -------- |\n| b\\\\<br>c |',
         ]) {

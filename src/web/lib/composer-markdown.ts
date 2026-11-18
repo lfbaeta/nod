@@ -229,22 +229,22 @@ function tableInline(nodes: PhrasingContent[]): PhrasingContent[] {
 function serializeComposerMarkdown(document: ProseMirrorNode, display = false) {
   const content: JSONContent[] = document.toJSON().content ?? [];
   const tree: Root = { type: 'root', children: blocks(content, display) };
+  const escape = (run: string) => run.replace(/./g, '\\$&');
   visit(tree, (node) => {
     if (!('children' in node)) return;
     node.children.forEach((child, index) => {
       if (child.type !== 'html') return;
       const previous = delimiters[node.children[index - 1]?.type ?? ''];
       const next = node.children[index + 1];
-      if (previous && child.value.startsWith(previous)) child.value = '\\' + child.value;
+      if (previous) child.value = child.value.replace(new RegExp(`^\\${previous}+`), escape);
       if (!next) return;
-      const [, slashes, last] = child.value.match(/(\\*)([^\\]?)$/)!;
-      if (
-        last
-          ? slashes.length % 2 === 0 &&
-            (last === delimiters[next.type] || (last === '!' && next.type === 'link'))
-          : slashes.length % 2 === 1
-      )
-        child.value = `${child.value.slice(0, -1)}\\${child.value.at(-1)}`;
+      const delimiter = next.type === 'link' ? '!' : delimiters[next.type];
+      const run = delimiter ? child.value.match(new RegExp(`\\${delimiter}*$`))![0] : '';
+      const head = child.value.slice(0, child.value.length - run.length);
+      const escaped = head.match(/\\*$/)![0].length % 2;
+      child.value = run
+        ? head + run.slice(0, escaped) + escape(run.slice(escaped))
+        : head + (escaped ? '\\' : '');
     });
   });
   const last = content.at(-1);
