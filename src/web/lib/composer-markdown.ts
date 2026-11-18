@@ -23,12 +23,7 @@ const markdown = unified()
     listItemIndent: 'one',
   });
 const linkify = new LinkifyIt({ fuzzyLink: true });
-const delimiters: Record<string, string> = {
-  delete: '~',
-  emphasis: '*',
-  inlineCode: '`',
-  strong: '*',
-};
+const formatted = ['delete', 'emphasis', 'inlineCode', 'link', 'strong'];
 
 function literal(value: string): PhrasingContent[] {
   if (!value.startsWith('/') && safeMessageLink(value, window.location.origin))
@@ -229,26 +224,71 @@ function tableInline(nodes: PhrasingContent[]): PhrasingContent[] {
     );
 }
 
+function phrasingMarkdown(children: PhrasingContent[]) {
+  return markdown.stringify({ type: 'root', children: [{ type: 'paragraph', children }] });
+}
+
+function isFormatted(node: { type: string; value?: unknown }) {
+  return formatted.includes(node.type) || (node.type === 'html' && node.value === '<u>');
+}
+
+function keepsFormatting(children: PhrasingContent[]) {
+  const expected = children
+    .filter(isFormatted)
+    .map((child) => phrasingMarkdown([child]).slice(0, -1));
+  if (!expected.length) return true;
+  let source = phrasingMarkdown(children);
+  if (source.length > 5000)
+    source = phrasingMarkdown(
+      children.map((child, index) => {
+        if (child.type !== 'html' || !child.value.includes('\n')) return child;
+        const lines = child.value.split('\n');
+        return {
+          ...child,
+          value: lines
+            .filter(
+              (line, number) =>
+                (number === 0 && index > 0) ||
+                (number === lines.length - 1 && index < children.length - 1) ||
+                /^ {0,3}(```|~~~|<)/.test(line),
+            )
+            .join('\n'),
+        };
+      }),
+    );
+  let matched = 0;
+  visit(markdown.parse(source), (node, _, parent) => {
+    if (
+      isFormatted(node) &&
+      (parent?.type === 'paragraph' || parent?.type === 'heading') &&
+      source.slice(node.position!.start.offset, node.position!.end.offset) === expected[matched]
+    )
+      matched++;
+  });
+  return matched === expected.length;
+}
+
 function serializeComposerMarkdown(document: ProseMirrorNode, display = false) {
   const content: JSONContent[] = document.toJSON().content ?? [];
   const tree: Root = { type: 'root', children: blocks(content, display) };
   const escape = (run: string) => run.replace(/./g, '\\$&');
   visit(tree, (node) => {
-    if (!('children' in node)) return;
-    node.children.forEach((child, index) => {
-      if (child.type !== 'html') return;
-      const previous = delimiters[node.children[index - 1]?.type ?? ''];
-      const next = node.children[index + 1];
-      if (previous) child.value = child.value.replace(new RegExp(`^\\${previous}+`), escape);
-      if (!next) return;
-      const delimiter = next.type === 'link' ? '!' : delimiters[next.type];
-      const run = delimiter ? child.value.match(new RegExp(`\\${delimiter}*$`))![0] : '';
-      const head = child.value.slice(0, child.value.length - run.length);
-      const escaped = head.match(/\\*$/)![0].length % 2;
-      child.value = run
-        ? head + run.slice(0, escaped) + escape(run.slice(escaped))
-        : head + (escaped ? '\\' : '');
+    if (display || !('children' in node) || !node.children.some((child) => child.type === 'html'))
+      return;
+    const children = node.children as PhrasingContent[];
+    children.forEach((child, index) => {
+      if (child.type !== 'html' || !children[index + 1]) return;
+      if (children[index + 1].type === 'link')
+        child.value = child.value.replace(
+          /(?<!\\)((?:\\\\)*)(!+)$/,
+          (_, slashes: string, run: string) => slashes + escape(run),
+        );
+      if (child.value.match(/\\*$/)![0].length % 2) child.value += '\\';
     });
+    if (!keepsFormatting(children))
+      for (const child of children)
+        if (child.type === 'html')
+          child.value = child.value.replace(/(?<!\\)((?:\\\\)*)([*~`])/g, '$1\\$2');
   });
   const last = content.at(-1);
   const trailingBreak = last?.type === 'paragraph' && last.content?.at(-1)?.type === 'hardBreak';
