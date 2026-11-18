@@ -73,13 +73,13 @@ For a small run, add `--tier pr --repeat 1`. To cap the spend at $20, add `--bud
 
 ### Run the release suite
 
-The release suite adds 252 cases: 205 of everyday work across every connected app, the browser, computer use, Vault and payments, files, memory, schedules, background events and the trust check, and 47 generated proactivity cases: 45 stress and population cases and two attention cases. Run it on your computer before a release. CI never runs it, because a full pass is several hundred attempts.
+The release suite adds 253 cases: 206 of everyday work across every connected app, the browser, computer use, Vault and payments, files, memory, schedules, background events and the trust check, and 47 generated proactivity cases: 45 stress and population cases and two attention cases. Run it on your computer before a release. CI never runs it, because a full pass is several hundred attempts.
 
 ```sh title="Terminal"
 pnpm run eval:capability run --tier release --repeat 3 --concurrency 3 --budget 500
 ```
 
-`--tier release` runs the release cases together with every controlled case, 360 attempts per repeat before time-window skips. Each attempt starts its own workspace and browser containers; `--concurrency 6` fits in 8 GB of Docker memory. Database connections are a separate limit. Start with concurrency two when you use a standard disposable database. Each attempt starts several connection pools. Parallel campaigns add their load. Increase concurrency only when the database has spare connections. To run one area, add `--capability vault`, or name cases with `--scenario`.
+`--tier release` runs the release cases together with every controlled case. Each attempt starts its own workspace and browser containers; `--concurrency 6` fits in 8 GB of Docker memory. Database connections are a separate limit. Start with concurrency two when you use a standard disposable database. Each attempt starts several connection pools. Parallel campaigns add their load. Increase concurrency only when the database has spare connections. To run one area, add `--capability vault`, or name cases with `--scenario`.
 
 Results go to `.local/capability-evals/<label>/`. Open `report.html` to read every transcript and check. A label never overwrites an earlier run. If a worker fails before it can save checks, its log records the phase: start, prepare, play, collect, or grade.
 
@@ -218,7 +218,7 @@ The branch's code runs with the eval keys.
 
 With a baseline, the run summary shows the verdict and both sides' scores. Without one, it shows this run's scores. The `capability-evals` artifact, kept for 14 days, has a `report.html` for each run. A low score doesn't fail the workflow. It fails only when nothing could be scored.
 
-The release cases `owner-warm-mail-work` and `owner-day-unchanged-source` check session reuse and idle model cost. `owner-long-context-recall` supplies six large temporary reports and checks their facts after context growth. `returning-user-po-detail` and `returning-user-two-gaps-decision` wait six minutes of real time between requests, so the prompt cache goes cold, and check that details read before the break stay correct, drafts include them and no action repeats. Saved attempt metrics include actual Pi compaction counts and each cost row's foreground, observer, background or housekeeping role. Agent-category cost includes all agent roles; it does not mean foreground chat only. The source case advances 48 half-hour poll deadlines against fixed records and tokens; it is a simulated owner-day, not a real 24-hour soak. `gmail-filter-website-fallback` checks a definite API denial followed by the same requested website change. `browser-flight-search-no-confirmation` checks search controls without a booking.
+The release cases `owner-warm-mail-work` and `owner-day-unchanged-source` check session reuse and idle model cost. `owner-long-context-recall` supplies six large temporary reports and checks their facts after context growth. `returning-user-po-detail` and `returning-user-two-gaps-decision` wait six minutes of real time between requests, so the prompt cache goes cold, and check that details read before the break stay correct, drafts include them and no action repeats. Saved attempt metrics include actual Pi compaction counts and each cost row's foreground, observer, background or housekeeping role. Agent-category cost includes all agent roles; it does not mean foreground chat only. The source case advances 48 half-hour poll deadlines against fixed records and tokens; it is a simulated owner-day, not a real 24-hour soak. `gmail-filter-website-fallback` checks a definite API denial followed by the same requested website change. `browser-flight-search-no-confirmation` checks search controls without a booking. `browser-calendar-retry-uncertain-save` checks that a retry finds an event saved without a receipt and creates no duplicate.
 
 ## Read the scores
 
@@ -286,7 +286,7 @@ flowchart TD
 
 ## The suite
 
-The suite has 364 cases: 108 controlled cases, 252 release cases, three live web cases and the harness canary.
+The suite has 365 cases: 108 controlled cases, 253 release cases, three live web cases and the harness canary.
 
 | Status      | Meaning                                                                                                                    |
 | ----------- | -------------------------------------------------------------------------------------------------------------------------- |
