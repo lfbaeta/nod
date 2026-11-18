@@ -73,6 +73,8 @@ sequenceDiagram
 
 Nod picks the account, the fields and the submit button. The server enters and submits in one private step that Nod can't watch, then Nod carries on with the live page.
 
+Some websites disable the submit button while they check a field. Nod waits up to 30 seconds for the button to become enabled. If it stays disabled, the page changes or the browser closes, Nod stops the private step. It does not activate the disabled control or repeat the submission. A failed private entry can keep the page unreadable until you reload it.
+
 | Item               | What the model receives                                                                |
 | ------------------ | -------------------------------------------------------------------------------------- |
 | Saved login        | Its name, its website and the first two characters of the username                     |

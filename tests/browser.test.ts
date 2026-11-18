@@ -945,6 +945,8 @@ test('a card goes only into the approved fields on the approved sites and stays 
       }
       if (command[0] === 'get' && command[1] === 'url') data = { url };
       if (command[0] === 'get' && command[1] === 'cdp-url') data = { cdpUrl: devtools.url };
+      if (command[0] === 'is' && command[1] === 'enabled')
+        data = { enabled: Boolean(model.frameOf[command[2]!]) };
       if (command[0] === 'get' && command[1] === 'attr')
         data = {
           value: command[3] === 'autocomplete' ? (autocomplete[command[2]!] ?? null) : null,
@@ -6068,12 +6070,15 @@ test('failed private entry holds every Pi action until the filled document chang
   const directory = await mkdtemp(join(tmpdir(), 'nod-private-cleanup-'));
   const fixture = stagedLoginBrowser();
   let failSubmit = true;
+  let failedSubmissions = 0;
   const computer = createBrowserFixture({
     dataRoot: directory,
     run: async (...args) => {
       const command = args[1].slice(args[1].indexOf('--idle-timeout') + 2);
-      if (command[0] === 'click' && failSubmit)
+      if (command[0] === 'click' && failSubmit) {
+        failedSubmissions++;
         return { stdout: '{"success":false}', stderr: '', exitCode: 1 };
+      }
       return fixture.run(...args);
     },
   });
@@ -6089,6 +6094,7 @@ test('failed private entry holds every Pi action until the filled document chang
         submitSelector: 'button',
       }),
     );
+    assert.equal(failedSubmissions, 1);
     const before = fixture.pages.get('private')!.entered.length;
     for (const input of [
       { action: 'snapshot' as const },

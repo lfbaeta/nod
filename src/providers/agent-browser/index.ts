@@ -1372,6 +1372,10 @@ export function createAgentBrowserComputer(options: {
     submitOrigins: string[] = [],
   ): Promise<T> {
     if (state.injecting) throw new BrowserLockedError();
+    const assertOpen = () => {
+      if (state.closed || state.closing)
+        throw new Error('The browser session has expired. Open the URL again.');
+    };
     state.injecting = true;
     try {
       return await serialize(state, async () => {
@@ -1381,23 +1385,42 @@ export function createAgentBrowserComputer(options: {
           state.privateDocument = document;
           state.saved.sensitive = true;
           await saveState(state);
+          assertOpen();
           const result = await operation(devtools, document);
           if (submitSelector && (await devtools.document()) !== document)
             throw new BrowserActionError('browser_card_changed');
           if ((await devtools.document()) === document) {
             if (submitSelector) {
-              const field = await focusField(state, devtools, selector(submitSelector));
+              const control = selector(submitSelector);
+              assertOpen();
+              await devtools.blur();
+              const readyBy = performance.now() + 30_000;
+              for (;;) {
+                assertOpen();
+                if ((await devtools.document()) !== document)
+                  throw new BrowserActionError('browser_card_changed');
+                const { enabled } = z
+                  .object({ enabled: z.boolean() })
+                  .parse(await command(state, { action: 'isenabled', selector: control }));
+                if (enabled) break;
+                if (performance.now() >= readyBy)
+                  throw new BrowserActionError('browser_card_disabled');
+                await delay(100);
+              }
+              const field = await focusField(state, devtools, control);
               const origin = new URL(await currentUrl(state)).origin;
               if (
                 (field.origin !== origin && !submitOrigins.includes(field.origin)) ||
                 (await devtools.document()) !== document
               )
                 throw new Error('The submit control is not on this page.');
+              assertOpen();
               await command(state, {
                 action: 'scrollintoview',
-                selector: selector(submitSelector),
+                selector: control,
               });
-              await command(state, { action: 'click', selector: selector(submitSelector) });
+              assertOpen();
+              await command(state, { action: 'click', selector: control });
             }
           }
           state.privateDocument = undefined;

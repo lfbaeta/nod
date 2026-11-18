@@ -471,12 +471,151 @@ test(
 );
 
 test(
+  'private submission stops before a click when its browser closes',
+  { timeout: 20_000 },
+  async () => {
+    let submissions = 0;
+    const server = createHttpServer((request, response) => {
+      response.setHeader('content-type', 'text/html');
+      if (request.url === '/submit') {
+        submissions++;
+        response.end('<h1>Unexpected submission</h1>');
+      } else
+        response.end(`<form action="/submit" method="post"><input id="password" type="password"><button id="submit" disabled>Continue</button></form><script>
+        document.querySelector('input').oninput=()=>{clearTimeout(window.validation);window.validation=setTimeout(()=>document.querySelector('button').disabled=false,1500)};
+      </script>`);
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const origin = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+    const directory = await mkdtemp(join(tmpdir(), 'nod-private-close-'));
+    let disabled!: () => void;
+    const waiting = new Promise<void>((resolve) => {
+      disabled = resolve;
+    });
+    const computer = createAgentBrowserComputer({
+      dataRoot: directory,
+      browserExecutable: process.env.NOD_TEST_BROWSER_EXECUTABLE,
+      privateNetwork: true,
+      headless: true,
+      daemonCommand: async (path, command, signal, timeout, maxBytes) => {
+        const result = await existingDaemonCommand(path, command, signal, timeout, maxBytes);
+        if (command.action === 'isenabled' && result.enabled === false) disabled();
+        return result;
+      },
+    });
+    try {
+      await computer.act('closing', { action: 'open', url: origin });
+      const outcome = computer
+        .injectCredentials({
+          threadId: 'closing',
+          origin,
+          kind: 'password',
+          password: 'Synthetic close password',
+          passwordSelector: '#password',
+          submitSelector: '#submit',
+        })
+        .then(
+          () => true,
+          () => false,
+        );
+      await waiting;
+      const [submitted] = await Promise.all([outcome, computer.discard('closing')]);
+      assert.equal(submitted, false);
+      assert.equal(submissions, 0);
+    } finally {
+      await computer.dispose();
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  'private submission refuses a disabled control and a page change without submission',
+  { timeout: 60_000 },
+  async () => {
+    let submissions = 0;
+    const secret = 'Synthetic disabled-submit password';
+    const server = createHttpServer((request, response) => {
+      response.setHeader('content-type', 'text/html');
+      if (request.url === '/submit') {
+        submissions++;
+        response.end('<h1>Unexpected submission</h1>');
+      } else if (request.url === '/changed') {
+        response.end('<h1>Changed page</h1>');
+      } else {
+        response.end(`<h1>Private entry fixture</h1><form action="/submit" method="post"><input id="password" type="password"><button id="submit" disabled>Continue</button></form><script>
+          document.querySelector('input').oninput=()=>{${request.url === '/moving' ? "if (!window.moving) { window.moving=true; setTimeout(()=>location.assign('/changed'),500); }" : ''}};
+        </script>`);
+      }
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const origin = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+    const directory = await mkdtemp(join(tmpdir(), 'nod-private-disabled-'));
+    const computer = createAgentBrowserComputer({
+      dataRoot: directory,
+      browserExecutable: process.env.NOD_TEST_BROWSER_EXECUTABLE,
+      privateNetwork: true,
+      headless: true,
+    });
+    try {
+      for (const moving of [false, true]) {
+        await computer.act('disabled', {
+          action: 'open',
+          url: `${origin}/${moving ? 'moving' : 'disabled'}`,
+        });
+        await assert.rejects(
+          computer.injectCredentials({
+            threadId: 'disabled',
+            origin,
+            kind: 'password',
+            password: secret,
+            passwordSelector: '#password',
+            submitSelector: '#submit',
+          }),
+          (error: unknown) => {
+            assert.ok(error instanceof BrowserActionError);
+            assert.equal(error.code, moving ? 'browser_card_changed' : 'browser_card_disabled');
+            assert.equal(error.message.includes(secret), false);
+            return true;
+          },
+        );
+        assert.equal(submissions, 0);
+        if (moving) {
+          const page = await computer.act('disabled', { action: 'snapshot' });
+          assert.match(page.text, /Changed page/);
+          assert.equal(page.text.includes(secret), false);
+        } else {
+          await assert.rejects(
+            computer.act('disabled', { action: 'snapshot' }),
+            (error: unknown) =>
+              error instanceof BrowserActionError && error.code === 'browser_card_paused',
+          );
+          await computer.act('disabled', { action: 'reload' });
+          assert.match(
+            (await computer.act('disabled', { action: 'snapshot' })).text,
+            /Private entry fixture/,
+          );
+        }
+      }
+    } finally {
+      await computer.dispose();
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
   'private submission keeps SPA state, delayed requests and field formats, and pauses scripts while a value stays',
   { timeout: 60_000 },
   async () => {
     const submitted = deferred<string>();
     const cardSubmitted = deferred<string>();
     let submissions = 0;
+    let identifierSubmissions = 0;
     const server = createHttpServer(async (request, response) => {
       response.setHeader('content-type', 'text/html');
       if (request.url === '/record') {
@@ -484,6 +623,12 @@ test(
         for await (const bytes of request) body += bytes;
         submissions++;
         submitted.resolve(body);
+        response.end('Accepted');
+      } else if (request.url === '/identifier-record') {
+        let body = '';
+        for await (const bytes of request) body += bytes;
+        assert.equal(body, 'synthetic@example.test');
+        identifierSubmissions++;
         response.end('Accepted');
       } else if (request.url === '/card-record') {
         let body = '';
@@ -499,8 +644,10 @@ test(
           '<h2>Order total EUR 30</h2><input id="number"><select id="month"><option value="">Choose month</option><option value="aug">August</option></select><input id="year"><input id="expiry"><button id="submit">Pay</button><script>document.querySelector("button").onclick = () => fetch("/card-record", {method:"POST", body:JSON.stringify({month:document.querySelector("#month").value, year:document.querySelector("#year").value, expiry:document.querySelector("#expiry").value})});</script>',
         );
       } else {
-        response.end(`<input id="username"><button id="submit">Continue</button><script>
-        document.querySelector('button').onclick = () => { document.body.innerHTML = '<h1>Password step</h1><input type="password" id="password">'; };
+        response.end(`<button id="login">Log in</button><dialog><input id="username" aria-label="Email"><button id="submit" disabled>Continue</button></dialog><script>
+        document.querySelector('#login').onclick = () => document.querySelector('dialog').showModal();
+        document.querySelector('#username').${request.url === '/blur' ? 'onblur' : 'oninput'} = () => { clearTimeout(window.validation); document.querySelector('#submit').disabled = true; window.validation = setTimeout(() => document.querySelector('#submit').disabled = false, 1500); };
+        document.querySelector('#submit').onclick = async () => { await fetch('/identifier-record', {method: 'POST', body: document.querySelector('#username').value}); document.querySelector('dialog').innerHTML = '<h1>Password step</h1><input type="password" id="password">'; };
       </script>`);
       }
     });
@@ -514,16 +661,33 @@ test(
       headless: true,
     });
     try {
-      await computer.act('state', { action: 'open', url: origin });
-      await computer.injectCredentials({
-        threadId: 'state',
-        origin,
-        kind: 'identifier',
-        username: 'synthetic@example.test',
-        usernameSelector: '#username',
-        submitSelector: '#submit',
-      });
-      assert.match((await computer.act('state', { action: 'snapshot' })).text, /Password step/);
+      for (const trigger of ['input', 'blur']) {
+        for (const refs of [false, true]) {
+          const before = identifierSubmissions;
+          await computer.act('state', {
+            action: 'open',
+            url: trigger === 'blur' ? `${origin}/blur` : origin,
+          });
+          await computer.act('state', { action: 'click', selector: '#login' });
+          const page = (await computer.act('state', { action: 'snapshot' })).text;
+          const ref = (name: string) => {
+            const value = new RegExp(`"${name}"[^\\n]*ref=(e\\d+)`).exec(page)?.[1];
+            assert.ok(value);
+            return `@${value}`;
+          };
+          await computer.injectCredentials({
+            threadId: 'state',
+            origin,
+            kind: 'identifier',
+            username: 'synthetic@example.test',
+            usernameSelector: refs ? ref('Email') : '#username',
+            submitSelector: refs ? ref('Continue') : '#submit',
+          });
+          await computer.act('state', { action: 'wait', text: 'Password step' });
+          assert.match((await computer.act('state', { action: 'snapshot' })).text, /Password step/);
+          assert.equal(identifierSubmissions, before + 1);
+        }
+      }
       await computer.act('state', { action: 'open', url: `${origin}/delayed` });
       await computer.act('state', {
         action: 'fill',
