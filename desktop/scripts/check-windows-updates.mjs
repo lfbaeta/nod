@@ -305,7 +305,11 @@ app.whenReady().then(async () => {
           bytes: bytes.length,
           sha256: createHash('sha256').update(bytes).digest('hex'),
         },
-        runtime: { file: 'nod-Runtime-win32-x64.tar.gz' },
+        runtime: {
+          file: 'nod-Runtime-win32-x64.tar.gz',
+          bytes: 1,
+          sha256: 'a'.repeat(64),
+        },
       },
       {
         directory: join(root, 'staged'),
@@ -321,7 +325,8 @@ app.whenReady().then(async () => {
   assert.deepEqual(await unsignedWindowsFiles([system], { release: true }), []);
   assert.equal((await unsignedWindowsFiles([system])).length, 1);
   receipt.stage = 'installing 1.0.0';
-  await run(installers['1.0.0'], ['/S', `/D=${installation}`], {
+  await run(installers['1.0.0'], [`/D=${installation}`], {
+    env: environment,
     timeout: 180_000,
     windowsVerbatimArguments: true,
     argv0: `"${installers['1.0.0']}"`,
@@ -329,6 +334,13 @@ app.whenReady().then(async () => {
   installed = true;
   await stat(executable);
   await stat(join(installation, 'Uninstall.exe'));
+  const openedByInstaller = await waitFor((entries) =>
+    entries.find((entry) => entry.event === 'ready' && entry.version === '1.0.0'),
+  );
+  await run(executable, ['--quit'], { env: environment, timeout: 30_000 });
+  await waitFor((entries) =>
+    entries.find((entry) => entry.event === 'stopped' && entry.pid === openedByInstaller.pid),
+  );
   receipt.stage = 'starting 1.0.0';
   const first = await start();
   const identityPublicKey = createPublicKey({
@@ -361,10 +373,14 @@ app.whenReady().then(async () => {
   );
   await run(nsis, [rejectedSource]);
   receipt.stage = 'rejecting failed update';
+  const readyBeforeRejection = (await recorded()).filter((entry) => entry.event === 'ready').length;
   const rejectedUpdate = await replace(rejected);
   assert.equal(rejectedUpdate.ok, false, 'A rejected installer must fail without opening Nod.');
   await delay(500);
-  assert.equal((await recorded()).filter((entry) => entry.event === 'ready').length, 1);
+  assert.equal(
+    (await recorded()).filter((entry) => entry.event === 'ready').length,
+    readyBeforeRejection,
+  );
   receipt.stage = 'restarting 1.0.0';
   const recovered = await start();
   assert.equal(recovered.version, '1.0.0');
@@ -397,6 +413,34 @@ app.whenReady().then(async () => {
   assert.equal(updated.keyHash, first.keyHash);
   assert.deepEqual(updated.preferences, first.preferences);
   verifyIdentity(updated);
+  receipt.stage = 'installing on quit without relaunch';
+  const readyBeforeQuitInstall = (await recorded()).filter(
+    (entry) => entry.event === 'ready',
+  ).length;
+  const quitInstall = windowsInstallCommand({
+    directory: dirname(installers['1.0.1']),
+    appPath: executable,
+    pid: updated.pid,
+    systemRoot: process.env.SYSTEMROOT,
+    relaunch: false,
+  });
+  await run(quitInstall.command, quitInstall.args, {
+    env: { ...environment, ...quitInstall.env },
+    timeout: 180_000,
+  });
+  await delay(500);
+  assert.equal(
+    (await recorded()).filter((entry) => entry.event === 'ready').length,
+    readyBeforeQuitInstall,
+  );
+  const reopened = await start();
+  assert.equal(reopened.version, '1.0.1');
+  assert.deepEqual(reopened.files, first.files);
+  assert.equal(reopened.keyHash, first.keyHash);
+  verifyIdentity(reopened);
+  await waitFor((entries) =>
+    entries.find((entry) => entry.event === 'stopped' && entry.pid === reopened.pid),
+  );
   Object.assign(receipt, {
     passed: true,
     stage: 'completed',
@@ -404,6 +448,8 @@ app.whenReady().then(async () => {
     realPowerShell: true,
     realNsis: true,
     realElectron: true,
+    installerOpenedApp: true,
+    quitInstallStayedClosed: true,
     failedInstallPreserved: true,
     runningAppQuitByInstaller: true,
     updateStartedByApp: true,

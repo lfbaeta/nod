@@ -39,7 +39,7 @@ export function DesktopUpdateToast() {
       <div className="desktop-update-toast-content">
         <strong>Nod {version} is ready</strong>
         <p>
-          Restart to use the new version.{' '}
+          Nod will update when you quit. You can also restart now.{' '}
           <a
             href={`https://github.com/n8n-io/nod/releases/tag/nod-v${encodeURIComponent(version)}`}
             target="_blank"
