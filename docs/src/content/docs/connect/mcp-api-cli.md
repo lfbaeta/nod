@@ -51,7 +51,7 @@ Ask Nod to connect a service it can't find in the app catalog. Nod proposes a wa
 | HTTP API    | A method and path on the API                                   | A token in a header                   |
 | CLI         | A command with arguments                                       | Tokens in environment variables       |
 
-Some services give each region or workspace its own MCP address, such as a separate EU address, each with its own sign-in. An account connects only through its own address. Nod picks the address from a workspace address you give it, or asks for your workspace address or region before it proposes a connection. If sign-in ends on the service's home page instead of returning to Nod, tell Nod your workspace address and start again, or select **Connect MCP** and enter the address for your region.
+Some services give each region or workspace its own MCP address, such as a separate EU address, each with its own sign-in. On those services, an account can only sign in through its own address. Nod picks the address from a workspace address you give it, or asks for your workspace address or region before it proposes a connection. If sign-in ends on the service's home page instead of returning to Nod, tell Nod your workspace address and start again, or select **Connect MCP** and enter the address for your region.
 
 Nod keeps the token encrypted in Vault, and the server adds it to each call. Results and errors remove plaintext, JSON-escaped and URL- or form-encoded representations of the token. A returned file containing any of those representations is withheld.
 
