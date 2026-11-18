@@ -1758,6 +1758,102 @@ test(
         },
       );
 
+      await t.test(
+        'retrying the requested calendar event does not ask about editor controls (LAB-1467)',
+        async (t) => {
+          const website = 'https://calendar.example.test';
+          const event = 'Studio planning';
+          const when = 'November 24, 2030, from 9 to 9:30 AM';
+          const request = `Create an event called ${event} in my iCloud calendar at ${website} on ${when}.`;
+          const click = (path: string, name: string, selector: string) => ({
+            website,
+            page: `${website}${path}`,
+            step: 'click',
+            control: [{ role: 'button', name }],
+            submits: 'unknown',
+            command: { action: 'click', selector },
+          });
+          const create = click('/calendar', 'Create', '@e1');
+          const editorSteps = [create, click('/calendar/new', 'AM', '@e2')];
+          aligned = ({ action, userMessages }) => {
+            const args = action?.arguments;
+            const inScope =
+              action?.name === 'NOD_browser' &&
+              args?.website === website &&
+              args.step === 'click' &&
+              editorSteps.some(
+                ({ page, control }) =>
+                  args.page === page && args.control?.[0]?.name === control[0]!.name,
+              );
+            const instruction = (
+              userMessages as Array<{ text: string; canAuthorize?: boolean }> | undefined
+            )?.find(({ text, canAuthorize }) => text === request && canAuthorize !== false);
+            return inScope && instruction ? { run: true, because: instruction.text } : false;
+          };
+
+          const startAttempt = async (text: string, message: string) => {
+            const submitted = await messages.submit(text);
+            const parent = await running(submitted.turnId);
+            const task = await tasks.execute(
+              parent,
+              {
+                action: 'start',
+                title: `Create ${event}`,
+                message,
+                doneWhen: `${event} is verified on the calendar on ${when}.`,
+                brief: `Add ${event} on ${when} at ${website}.`,
+                now: 'Checking the calendar',
+              },
+              submitted.messageId,
+            );
+            assert.ok('id' in task);
+            await finish(parent.turnId, 'succeeded');
+            const { rows } = await db.pool.query<{ turn_id: string }>(
+              'SELECT turn_id FROM tasks WHERE id=$1',
+              [task.id],
+            );
+            const worker = await running(rows[0]!.turn_id);
+            await tasks.inherit(worker);
+            return worker;
+          };
+
+          const first = await startAttempt(request, 'I’ll create the calendar event.');
+          const beforeFirstClick = calls.length;
+          await approvals.request(first, 'NOD_browser', create);
+          assert.equal(calls.length, beforeFirstClick + 1);
+          const unverified = `I couldn’t verify that ${event} was saved.`;
+          await thread.reply(first, unverified);
+          await tasks.settle(first, unverified);
+          await finish(first.turnId, 'succeeded');
+
+          const retry = await startAttempt('Then try it again', 'I’ll retry the same event.');
+          t.after(async () => {
+            await db.pool.query(
+              "UPDATE approvals SET status='expired' WHERE turn_id=$1 AND status='pending'",
+              [retry.turnId],
+            );
+            await tasks.settle(retry, 'Fixture finished.');
+            await finish(retry.turnId, 'succeeded');
+          });
+          const remove = click('/calendar/settings', 'Delete calendar', '@e3');
+          assert.equal((await trust.check(retry, 'NOD_browser', remove)).confirm, true);
+
+          const before = calls.length;
+          for (const step of editorSteps) {
+            await approvals.request(retry, 'NOD_browser', step);
+            assert.equal(
+              (await proposal(retry.turnId))?.status,
+              undefined,
+              `The retry should not ask before clicking ${step.control[0]!.name}.`,
+            );
+          }
+          assert.deepEqual(
+            calls.slice(before).map(({ args }) => args),
+            editorSteps,
+          );
+        },
+      );
+
       await t.test('a newer chat correction before action handoff prevents the write', async () => {
         aligned = true;
         const action = 'GMAIL_SEND_EMAIL';
