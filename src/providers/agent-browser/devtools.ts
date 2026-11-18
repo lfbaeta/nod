@@ -943,7 +943,7 @@ export async function openDevtools(url: string, targetId: string, signal?: Abort
         });
         if (!controls[0]?.name || !['button', 'link'].includes(controls[0].role))
           throw new BrowserActionError('browser_sign_in_choice');
-        if ((await controlSnapshot(result.objectId, found.session)) !== snapshot)
+        if ((await snapshotOf(result.objectId, found.session)) !== snapshot)
           throw new BrowserActionError('browser_target_changed');
         const details = JSON.parse(snapshot) as {
           origin: string;
