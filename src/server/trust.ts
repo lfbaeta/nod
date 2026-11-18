@@ -367,31 +367,26 @@ export function createTrust(options: {
     return value === 'yes' ? true : value === 'no' ? false : undefined;
   }
 
-  async function classifyRetiredReply(
-    reply: string,
-    expiredConfirmation: string,
-  ): Promise<'new' | 'stale' | 'uncertain'> {
+  async function classifyReply<Value extends string>(
+    name: string,
+    instructions: string,
+    choices: Array<{ value: Value; description: string }>,
+    input: Record<string, unknown>,
+    signal?: AbortSignal,
+  ): Promise<Value | 'uncertain'> {
     const minProbability = 0.99;
     const question: DecisionQuestion = {
       minProbability,
       uncertainValue: 'uncertain',
-      name: 'retiredReply',
-      choices: [
-        { value: 'new', description: 'A substantive new question or replacement instruction.' },
-        { value: 'stale', description: 'An old decision or reply without a clear new request.' },
-      ],
+      name,
+      choices,
     };
-    const result = await review(
-      retiredReplyInstructions,
-      { reply, expiredConfirmation },
-      AbortSignal.timeout(10_000),
-      question,
-    );
+    const timeout = AbortSignal.timeout(10_000);
+    const deadline = signal ? AbortSignal.any([signal, timeout]) : timeout;
+    const result = await review(instructions, input, deadline, question);
+    deadline.throwIfAborted();
     if (!result || typeof result !== 'object') return 'uncertain';
-    const { retiredReply, probability } = result as {
-      retiredReply?: unknown;
-      probability?: unknown;
-    };
+    const { probability } = result as { probability?: unknown };
     if (
       typeof probability !== 'number' ||
       !Number.isFinite(probability) ||
@@ -399,19 +394,33 @@ export function createTrust(options: {
       probability > 1
     )
       return 'uncertain';
-    return retiredReply === 'new' || retiredReply === 'stale' ? retiredReply : 'uncertain';
+    const value = (result as Record<string, unknown>)[name];
+    return choices.find((choice) => choice.value === value)?.value ?? 'uncertain';
   }
 
-  async function classifyRepeatedAction(
+  function classifyRetiredReply(
+    reply: string,
+    expiredConfirmation: string,
+  ): Promise<'new' | 'stale' | 'uncertain'> {
+    return classifyReply(
+      'retiredReply',
+      retiredReplyInstructions,
+      [
+        { value: 'new', description: 'A substantive new question or replacement instruction.' },
+        { value: 'stale', description: 'An old decision or reply without a clear new request.' },
+      ],
+      { reply, expiredConfirmation },
+    );
+  }
+
+  function classifyRepeatedAction(
     input: ApprovalRepeat,
     signal?: AbortSignal,
   ): Promise<'new' | 'same' | 'uncertain'> {
-    const minProbability = 0.99;
-    const question: DecisionQuestion = {
-      minProbability,
-      uncertainValue: 'uncertain',
-      name: 'repeatedAction',
-      choices: [
+    return classifyReply(
+      'repeatedAction',
+      repeatedActionInstructions,
+      [
         {
           value: 'new',
           description: 'The owner explicitly requests this action again on this target.',
@@ -421,24 +430,9 @@ export function createTrust(options: {
           description: 'The reply does not clearly request another occurrence of this action.',
         },
       ],
-    };
-    const timeout = AbortSignal.timeout(10_000);
-    const deadline = signal ? AbortSignal.any([signal, timeout]) : timeout;
-    const result = await review(repeatedActionInstructions, input, deadline, question);
-    deadline.throwIfAborted();
-    if (!result || typeof result !== 'object') return 'uncertain';
-    const { repeatedAction, probability } = result as {
-      repeatedAction?: unknown;
-      probability?: unknown;
-    };
-    if (
-      typeof probability !== 'number' ||
-      !Number.isFinite(probability) ||
-      probability < minProbability ||
-      probability > 1
-    )
-      return 'uncertain';
-    return repeatedAction === 'new' || repeatedAction === 'same' ? repeatedAction : 'uncertain';
+      { ...input },
+      signal,
+    );
   }
 
   return { check, readOnly, answer, classifyRetiredReply, classifyRepeatedAction, inNod };

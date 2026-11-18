@@ -372,6 +372,7 @@ export async function createApprovals(
     const allowed = options.allowed === true;
     let needsConfirmation = !allowed;
     let renewal: { id: string; key: string; messageId: string } | undefined;
+    let checkedRepeat: typeof renewal;
     const expectedRevision = options.expectedRevision;
     options.signal?.throwIfAborted();
     await options.admit?.(!allowed);
@@ -479,19 +480,20 @@ export async function createApprovals(
           input: { action, args: snapshot, reply: reply.text, question: reply.question },
         };
       };
-      if (renewal) {
+      if (checkedRepeat) {
         const previous = (
           await client.query<{ id: string }>(
             "SELECT id FROM approvals WHERE id=$1 AND owner_id=$2 AND thread_id=$3 AND action=$4 AND args=$5::jsonb AND status='completed'",
-            [renewal.id, ownerId, turn.threadId, action, snapshot],
+            [checkedRepeat.id, ownerId, turn.threadId, action, snapshot],
           )
         ).rows[0];
         const candidate = previous && (await repeatCandidate(previous));
-        if (!candidate || candidate.key !== renewal.key)
+        if (!candidate || candidate.key !== checkedRepeat.key)
           throw conflict(
             'The repeat request changed while it was being checked. This action did not run.',
           );
         if (
+          renewal &&
           (
             await client.query(
               `SELECT 1 FROM approvals a JOIN approvals original ON original.id=$1 AND original.owner_id=a.owner_id AND original.thread_id=a.thread_id
@@ -632,12 +634,13 @@ export async function createApprovals(
           options.signal,
         ).catch(() => 'uncertain' as const);
         options.signal?.throwIfAborted();
+        checkedRepeat = candidate;
         if (decision === 'new') {
           renewal = candidate;
           needsConfirmation = true;
           await options.admit?.(true);
-          existing = await withTurnLock(turn.turnId, (client) => inspect(client, true));
         }
+        existing = await withTurnLock(turn.turnId, (client) => inspect(client, true));
       }
       if ('cached' in existing) {
         if (existing.cached) return existing.result;

@@ -5107,6 +5107,50 @@ test(
           repeatedAction = 'same';
         }
       });
+      await t.test('changed workflow arguments keep the current permission decision', async () => {
+        for (const allowed of [true, false]) {
+          const fixture = await repeatFixture('Run the synthetic workflow with threshold 7.');
+          const before = calls.length;
+          const classified = repeatedInputs.length;
+          const original = (await stored(fixture.firstId)).result;
+          const args = { ...fixture.args, threshold: 7 };
+          const fresh = { executionId: 'synthetic-changed-input', threshold: 7 };
+          executionResult = () => fresh;
+          repeatedAction = 'new';
+          try {
+            const result = await approvals.request(fixture.turn, fixture.action, args, {
+              allowed,
+              prepareConfirmation: async () => {
+                assert.equal(allowed, false);
+                return { account: { identity: 'Synthetic account' } };
+              },
+            });
+            if (allowed) {
+              assert.deepEqual(result, fresh);
+              assert.equal(await proposal(fixture.turn.turnId), undefined);
+            } else {
+              assert.ok(result && typeof result === 'object' && appConfirmation in result);
+              assert.equal(calls.length, before);
+              const pending = await proposal(fixture.turn.turnId);
+              assert.deepEqual(pending.args, args);
+              assert.equal(pending.status, 'pending');
+              await finish(fixture.turn.turnId);
+              const answer = await confirm(pending.id, true);
+              assert.ok(answer && 'turnId' in answer);
+              await execute(pending.id);
+              assert.deepEqual((await stored(pending.id)).result, fresh);
+              await finish(answer.turnId, 'succeeded');
+            }
+            assert.equal(calls.length, before + 1);
+            assert.deepEqual(calls.at(-1)?.args, args);
+            assert.equal(repeatedInputs.length, classified);
+            assert.deepEqual((await stored(fixture.firstId)).result, original);
+          } finally {
+            executionResult = undefined;
+            await finishRepeat(fixture);
+          }
+        }
+      });
       await t.test('a repeated action keeps its new request after expiry and restart', async () => {
         const fixture = await repeatFixture();
         const before = calls.length;
@@ -5213,61 +5257,66 @@ test(
       await t.test(
         'a repeated action rechecks Stop, withdrawal and changed evidence after classification',
         async () => {
-          for (const change of [
-            'stop',
-            'signal',
-            'withdraw',
-            'parent withdrawal',
-            'reply',
-            'question',
-            'outcome',
-            'chat',
-          ] as const) {
-            const fixture = await repeatFixture();
-            const before = calls.length;
-            const controller = new AbortController();
-            repeatedAction = 'new';
-            duringRepeat = async () => {
-              if (change === 'stop') await finish(fixture.turn.turnId, 'cancelled');
-              if (change === 'signal') controller.abort(new Error('Synthetic Stop.'));
-              if (change === 'withdraw')
-                await db.pool.query('UPDATE turns SET withdrawn=true WHERE id=$1', [
-                  fixture.turn.turnId,
-                ]);
-              if (change === 'parent withdrawal')
-                await db.pool.query('UPDATE turns SET withdrawn=true WHERE id=$1', [
-                  fixture.accepted.turnId,
-                ]);
-              if (change === 'reply')
-                await db.pool.query("UPDATE messages SET text='Do not run it again.' WHERE id=$1", [
-                  fixture.renewed.messageId,
-                ]);
-              if (change === 'question')
-                await db.pool.query("UPDATE messages SET text='A changed question.' WHERE id=$1", [
-                  fixture.questionId,
-                ]);
-              if (change === 'outcome')
-                await db.pool.query("UPDATE approvals SET status='uncertain' WHERE id=$1", [
-                  fixture.firstId,
-                ]);
-              if (change === 'chat') {
-                const later = await thread.submitUserMessage(
-                  'Do not run the synthetic workflow again.',
+          for (const decision of ['new', 'same', 'uncertain', 'failure'] as const) {
+            for (const change of [
+              'stop',
+              'signal',
+              'withdraw',
+              'parent withdrawal',
+              'reply',
+              'question',
+              'outcome',
+              'chat',
+            ] as const) {
+              const fixture = await repeatFixture();
+              const before = calls.length;
+              const controller = new AbortController();
+              repeatedAction = decision === 'failure' ? 'new' : decision;
+              duringRepeat = async () => {
+                if (change === 'stop') await finish(fixture.turn.turnId, 'cancelled');
+                if (change === 'signal') controller.abort(new Error('Synthetic Stop.'));
+                if (change === 'withdraw')
+                  await db.pool.query('UPDATE turns SET withdrawn=true WHERE id=$1', [
+                    fixture.turn.turnId,
+                  ]);
+                if (change === 'parent withdrawal')
+                  await db.pool.query('UPDATE turns SET withdrawn=true WHERE id=$1', [
+                    fixture.accepted.turnId,
+                  ]);
+                if (change === 'reply')
+                  await db.pool.query(
+                    "UPDATE messages SET text='Do not run it again.' WHERE id=$1",
+                    [fixture.renewed.messageId],
+                  );
+                if (change === 'question')
+                  await db.pool.query(
+                    "UPDATE messages SET text='A changed question.' WHERE id=$1",
+                    [fixture.questionId],
+                  );
+                if (change === 'outcome')
+                  await db.pool.query("UPDATE approvals SET status='uncertain' WHERE id=$1", [
+                    fixture.firstId,
+                  ]);
+                if (change === 'chat') {
+                  const later = await thread.submitUserMessage(
+                    'Do not run the synthetic workflow again.',
+                  );
+                  await finish(later.turnId, 'succeeded');
+                }
+                if (decision === 'failure') throw new Error('Synthetic classifier failure.');
+              };
+              try {
+                await assert.rejects(
+                  approvals.request(fixture.turn, fixture.action, fixture.args, {
+                    allowed: true,
+                    signal: controller.signal,
+                  }),
                 );
-                await finish(later.turnId, 'succeeded');
+                assert.equal(await proposal(fixture.turn.turnId), undefined);
+                assert.equal(calls.length, before);
+              } finally {
+                await finishRepeat(fixture);
               }
-            };
-            try {
-              await assert.rejects(
-                approvals.request(fixture.turn, fixture.action, fixture.args, {
-                  allowed: true,
-                  signal: controller.signal,
-                }),
-              );
-              assert.equal(await proposal(fixture.turn.turnId), undefined);
-              assert.equal(calls.length, before);
-            } finally {
-              await finishRepeat(fixture);
             }
           }
         },
