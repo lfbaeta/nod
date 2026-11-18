@@ -974,7 +974,7 @@ async function runningDesktop(
       launch: async () => { ${source.slice(source.lastIndexOf('      try {\n        const saved = await settings.get();'), source.indexOf('    })', source.lastIndexOf('      try {\n        const saved = await settings.get();')))} },
       settle: () => preparing ?? Promise.resolve(),
       installRuntime: (installer) => lifecycle.install(installer, { warmup: false }),
-      close: async () => { quitting = true; await lifecycle.close(); },
+      close: async () => { quitting = true; await lifecycle.close(); await diagnosticWrites; },
       profileRoot,
       profileOwner,
       nativeOpening: () => freshAppOpenCapture,
