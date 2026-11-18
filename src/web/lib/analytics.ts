@@ -89,7 +89,7 @@ type AnalyticsEvents = {
   chat_stop_requested: undefined;
   task_card_started: {
     kind?: 'immediate' | 'ongoing';
-    origin: 'learned' | 'common';
+    origin: 'learned' | 'common' | 'fixed';
     position: number;
   };
   setup_link_clicked: { setup: 'app' | 'vault' | 'browser' };
@@ -237,7 +237,7 @@ const eventProperties: Record<keyof AnalyticsEvents, Record<string, readonly unk
   chat_stop_requested: {},
   task_card_started: {
     kind: ['immediate', 'ongoing'],
-    origin: ['learned', 'common'],
+    origin: ['learned', 'common', 'fixed'],
     position: [0, 1, 2, 3, 4, 5],
   },
   setup_link_clicked: { setup: ['app', 'vault', 'browser'] },

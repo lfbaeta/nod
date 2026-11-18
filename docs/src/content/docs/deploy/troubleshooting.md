@@ -83,6 +83,10 @@ macOS can ask again after Nod is re-signed. Approve it in the macOS dialog. Neve
 
 While the keychain unlocks, Nod keeps the startup screen and **Connect to a server** available. If it keeps waiting, check for a macOS prompt, unlock your keychain, then quit and reopen Nod.
 
+### macOS opens the old version after an update
+
+After **Restart to update**, macOS needs a minute or two to install the new app before it opens. Nod 0.8.4 and earlier cancel the update if you open them during that time. Select **Restart to update** again and wait until Nod opens by itself. If it still opens on the old version, quit Nod and run the [Terminal installer](/get-started/install-desktop/#install-nod). It keeps your profile, keys and data.
+
 ### Nod could not unlock your saved server token
 
 Select **Reconnect to server** and enter the same server address and `NOD_AUTH_TOKEN`. The app checks the connection before saving the token again in your computer's secure storage. If macOS asks for Keychain access, allow it there.
@@ -251,7 +255,7 @@ The redactor omits individual strings longer than 32,000 characters before scann
 
 The report includes a coverage record for each database section and the runtime journal: collection status, entry count, and omitted-entry indicators. These markers do not count entries dropped or expired from the app activity and error buffers. The final attachment is capped at 512 KiB. Older entries are removed if needed, and their sections mark that truncation. Failures, the startup log and settings are removed last. An empty or incomplete section doesn't prove that no problem occurred.
 
-A model ID is included only when every word in it is a known public model, vendor or variant name. Any other ID is left out, and the model family stays. A stack frame keeps its file only when the file is inside Nod's own source folders or a dependency. Every other file path is masked.
+A model ID is included only when every word in it is a known public model, vendor or variant name. Any other ID is left out, and the model family stays. A stack frame keeps its file only when the file is inside Nod's own source folders or a dependency. Every other file path is masked, including paths on removable drives. A web address with a scheme, such as `https://`, `wss://`, `ftp://` or `file://`, is masked in full, including its query and fragment. An address without a scheme is masked in full, with its port, path, query and fragment, when Nod recognizes its domain. Encoded text that contains such a link is masked before decoded spaces, tabs or line breaks can split it. Phone numbers written without a country code are recognized by the region of your locale, or of your time zone when no locale is set.
 
 The desktop app writes the startup log to `logs/startup.log` in its profile folder. When the file passes 64 KiB, the app keeps its newest half before the next entry. Reports read the final 48 KB and include up to its last 200 lines after redaction. The section is marked when older lines were left out.
 

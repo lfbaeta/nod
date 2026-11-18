@@ -746,13 +746,19 @@ export function createWhatsAppLinkedTransport(options: {
           );
           continue;
         }
+        const opus = 27 + (bytes[26] ?? 0);
         const media = file.mimeType.startsWith('image/')
           ? { image: bytes, mimetype: file.mimeType }
           : file.mimeType.startsWith('video/')
             ? { video: bytes, mimetype: file.mimeType }
-            : file.mimeType.startsWith('audio/')
-              ? { audio: bytes, mimetype: file.mimeType, ptt: file.mimeType === 'audio/ogg' }
-              : { document: bytes, mimetype: file.mimeType, fileName: file.name };
+            : file.mimeType.startsWith('audio/') &&
+                bytes.subarray(0, 4).toString('latin1') === 'OggS' &&
+                bytes.subarray(opus, opus + 8).toString('latin1') === 'OpusHead' &&
+                bytes[opus + 9] === 1
+              ? { audio: bytes, mimetype: 'audio/ogg; codecs=opus', ptt: true }
+              : /^audio\/(?:mpeg|mp4|aac|amr)\s*(?:;|$)/i.test(file.mimeType)
+                ? { audio: bytes, mimetype: file.mimeType }
+                : { document: bytes, mimetype: file.mimeType, fileName: file.name };
         ids.push(await send(input.threadId, { ...media, ...(caption ? { caption } : {}) }, quote));
       }
       if (unsent.length) {

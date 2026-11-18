@@ -208,7 +208,7 @@ function assembled(checked: Checked, fallback: PreparedSuggestions, sources: rea
   let replaced = 0;
   const tasks = fallback.tasks.map((spare, index) => {
     const pick = checked.picks[index];
-    if (pick) return pick;
+    if (pick) return { ...pick, origin: 'learned' as const };
     replaced++;
     const chosen =
       [spare, ...spares].find(
@@ -254,10 +254,10 @@ const commonTasks: Task[] = [
   { kind: 'now', title: 'Find a cheaper plan for a bill I pay', source: 'web' },
 ];
 
-function withCommonTasks(tasks: Task[], learned: boolean) {
+function withCommonTasks(tasks: Task[]) {
   const seen = new Set(tasks.map((task) => task.title.toLowerCase()));
   return [
-    ...tasks.map((task) => ({ ...task, ...(learned ? { origin: 'learned' as const } : {}) })),
+    ...tasks,
     ...commonTasks
       .filter((task) => !seen.has(task.title.toLowerCase()))
       .slice(0, 3)
@@ -266,9 +266,9 @@ function withCommonTasks(tasks: Task[], learned: boolean) {
 }
 
 const extraTasks: Task[] = [
-  { kind: 'now', title: 'Plan my next two weeks', source: 'web' },
-  { kind: 'ongoing', title: 'Send me a recap every Friday', source: 'web' },
-  { kind: 'ongoing', title: 'Scan news in my field every Monday', source: 'web' },
+  { kind: 'now', title: 'Plan my next two weeks', source: 'web', origin: 'fixed' },
+  { kind: 'ongoing', title: 'Send me a recap every Friday', source: 'web', origin: 'fixed' },
+  { kind: 'ongoing', title: 'Scan news in my field every Monday', source: 'web', origin: 'fixed' },
 ];
 
 function fallbackSuggestions(options: { gmail: boolean; telegram: boolean }): PreparedSuggestions {
@@ -276,17 +276,19 @@ function fallbackSuggestions(options: { gmail: boolean; telegram: boolean }): Pr
     accounts: [],
     intro:
       'Here’s one thing I can do right now and two I can keep doing for you, followed by a few popular ideas. Tap one and I’ll get going.',
-    tasks: [
-      options.gmail
-        ? { kind: 'now', title: 'Draft replies waiting on me', source: 'gmail' }
-        : { kind: 'now', title: 'Plan my next two weeks', source: 'web' },
-      options.gmail
-        ? { kind: 'ongoing', title: 'Brief me on new email every morning', source: 'gmail' }
-        : { kind: 'ongoing', title: 'Scan news in my field every Monday', source: 'web' },
-      options.telegram
-        ? { kind: 'ongoing', title: 'Check in with me every Friday', source: 'telegram' }
-        : { kind: 'ongoing', title: 'Send me a recap every Friday', source: 'web' },
-    ],
+    tasks: (
+      [
+        options.gmail
+          ? { kind: 'now', title: 'Draft replies waiting on me', source: 'gmail' }
+          : { kind: 'now', title: 'Plan my next two weeks', source: 'web' },
+        options.gmail
+          ? { kind: 'ongoing', title: 'Brief me on new email every morning', source: 'gmail' }
+          : { kind: 'ongoing', title: 'Scan news in my field every Monday', source: 'web' },
+        options.telegram
+          ? { kind: 'ongoing', title: 'Check in with me every Friday', source: 'telegram' }
+          : { kind: 'ongoing', title: 'Send me a recap every Friday', source: 'web' },
+      ] satisfies Task[]
+    ).map((task) => ({ ...task, origin: 'fixed' as const })),
   };
 }
 
@@ -637,7 +639,7 @@ export function createOnboardingSuggestions(options: {
           [owner],
         );
         if (!claimed.rowCount) return;
-        const tasks = withCommonTasks(prepared.tasks, prepared.accounts.length > 0).map((task) => ({
+        const tasks = withCommonTasks(prepared.tasks).map((task) => ({
           id: randomUUID(),
           ...task,
         }));

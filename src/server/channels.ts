@@ -676,6 +676,8 @@ export async function createChannels(pool: Pool, options: ChannelOptions) {
           if (text.length > 100_000) throw new ChannelMediaFailure('text_too_long');
         } catch (error) {
           if (closed || replacing || receiveSignal.aborted || !permitted(identity)) return;
+          if (error instanceof ChannelMediaFailure && error.cause)
+            logFailure('channel_attachment_unavailable', error.cause);
           if (modelMissingAtIntake || options.modelConfigured?.() === false) {
             await requestModelSetup();
             return;

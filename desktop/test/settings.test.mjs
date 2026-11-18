@@ -7346,6 +7346,37 @@ test('automatic update checks retry failures sooner and return to the normal int
   }
 });
 
+test('a start during a Mac update install leaves the staged update alone until one retry interval passes', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const powerMonitor = new EventEmitter();
+  let calls = 0;
+  const stop = startDesktopUpdateChecks({
+    powerMonitor,
+    defer: true,
+    interval: 60_000,
+    retry: 5,
+    check: async () => {
+      calls++;
+    },
+  });
+  t.after(stop);
+  const settle = () => new Promise((resolve) => setImmediate(resolve));
+  await settle();
+  powerMonitor.emit('resume');
+  t.mock.timers.tick(4);
+  await settle();
+  assert.equal(calls, 0);
+  t.mock.timers.tick(1);
+  await settle();
+  assert.equal(calls, 1);
+  t.mock.timers.tick(59_999);
+  await settle();
+  assert.equal(calls, 1);
+  t.mock.timers.tick(1);
+  await settle();
+  assert.equal(calls, 2);
+});
+
 test('first installation resolves its exact published runtime without a newer app and rejects changed identities', async () => {
   for (const sourceUrl of [undefined, 'https://updates.example.invalid/nod-desktop']) {
     const f = updateReleaseFixture(sourceUrl);

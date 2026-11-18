@@ -37,7 +37,7 @@ Replies keep their bold text, lists, links, quotes, and code. A table arrives as
 
 Open **Channels** in the sidebar, then select **Connect** on Telegram or WhatsApp. Nod checks your details before it saves them, and keeps them encrypted, outside the chat.
 
-If Telegram or the WhatsApp Cloud API rejects setup, Nod shows the service's HTTP status and reason. Submitted tokens and secrets are replaced with `[redacted]`. If webhook registration fails after setup was saved, the error also states that message delivery is unconfirmed.
+If Telegram or the WhatsApp Cloud API rejects setup, Nod shows the service's HTTP status and reason. If Nod can't reach the service, it says so, and names the network error when it recognizes one, such as `ECONNREFUSED` or a timeout after 15 seconds. Submitted tokens and secrets are replaced with `[redacted]`. If webhook registration fails after setup was saved, the error also states that message delivery is unconfirmed.
 
 On a self-hosted server, leave that channel's environment variables blank or unset to use this setup. A channel configured through the environment is server-managed: edit its settings in `.env` and [apply the configuration](/deploy/configuration/#apply-configuration-changes).
 
@@ -134,7 +134,7 @@ Use text to approve an action. A file or voice attachment does not approve it.
 
 When Nod drafts a bug report, reply "send" to share its summary. A diagnostic report can only be added from the card in Nod on your computer. See [Report a bug](/use/chat/#report-a-bug).
 
-Ask Nod for a voice reply to get a native voice note. Choose a voice in **Settings → Voice & audio**, using a connected OpenAI, OpenRouter or ElevenLabs account, or downloaded free voices. `TTS_MODEL` and `TTS_VOICE` set the default OpenAI speech model and voice. Speech calls have usage records. Voice replies stop at the monthly spending limit; transcribing your own voice message doesn't, so you can still ask Nod to change the limit by voice. OpenRouter reports the transcription cost. Where OpenAI returns supported usage, Nod calculates an API-price estimate. A speech response without a known price shows **No price** in Usage.
+Ask Nod for a voice reply to get the answer as audio. On the WhatsApp QR connection, OpenAI voices arrive as a voice note and OpenRouter or ElevenLabs voices as an audio message. WhatsApp can't play WAV in the chat, so free local voices and other audio formats arrive as a file you can open. Choose a voice in **Settings → Voice & audio**, using a connected OpenAI, OpenRouter or ElevenLabs account, or downloaded free voices. `TTS_MODEL` and `TTS_VOICE` set the default OpenAI speech model and voice. Speech calls have usage records. Voice replies stop at the monthly spending limit; transcribing your own voice message doesn't, so you can still ask Nod to change the limit by voice. OpenRouter reports the transcription cost. Where OpenAI returns supported usage, Nod calculates an API-price estimate. A speech response without a known price shows **No price** in Usage.
 
 Nod sends files up to 50 MB each. Large or unavailable files stay available in Nod. Long replies are split into messages. Nod shows typing status while work runs.
 

@@ -1,3 +1,6 @@
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+
 const defaultRepository = 'n8n-io/nod';
 const hash = /^[a-f0-9]{64}$/;
 const sourceHash = /^[a-f0-9]{40}$/;
@@ -494,9 +497,20 @@ export function createDesktopUpdater({
   };
 }
 
+export async function macInstallerRunning(label) {
+  const { stdout } = await promisify(execFile)('/bin/launchctl', ['list', label], {
+    timeout: 5_000,
+  }).catch((error) => {
+    if (error.code === 113) return { stdout: '' };
+    throw error;
+  });
+  return /^\t"PID" = \d+;$/m.test(stdout);
+}
+
 export function startDesktopUpdateChecks({
   check,
   powerMonitor,
+  defer = false,
   interval = 6 * 60 * 60 * 1000,
   retry = 15 * 60 * 1000,
 }) {
@@ -536,7 +550,11 @@ export function startDesktopUpdateChecks({
     else void run();
   };
   powerMonitor.on('resume', resume);
-  void run();
+  if (defer) {
+    due = Date.now() + retry;
+    timer = setTimeout(run, retry);
+    timer.unref?.();
+  } else void run();
   return () => {
     stopped = true;
     clearTimeout(timer);

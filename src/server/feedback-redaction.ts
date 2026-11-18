@@ -18,6 +18,33 @@ const opening = /\{(?=\s*["}])|\[(?=\s*(?:[\[\]{"\d-]|true\b|false\b|null\b))/g;
 const appFile =
   /^(?:src\/(?:server|providers|ports|shared|web|runtime)|dist|desktop\/main|node_modules)\/[\w@.+-]+(?:\/[\w@.+-]+)*$/;
 const className = /^[A-Za-z][A-Za-z0-9_$]{0,80}$/;
+const hostPattern =
+  /\b((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,24})\b(?:\.(?=[:/?#]))?(?::\d{1,5})?/gi;
+const linkTail = /[/?#][^\s<>"']*/y;
+
+function hosts(text: string, encodedToken = false) {
+  let result = '';
+  let last = 0;
+  hostPattern.lastIndex = 0;
+  for (let match = hostPattern.exec(text); match; match = hostPattern.exec(text)) {
+    const domain = parse(match[1], { allowPrivateDomains: true });
+    if (
+      !domain.isIcann &&
+      !domain.isPrivate &&
+      !/\.(?:internal|local|localhost|test|invalid)$/i.test(match[1])
+    )
+      continue;
+    linkTail.lastIndex = hostPattern.lastIndex;
+    const tail = linkTail.exec(text)?.[0] ?? '';
+    if (encodedToken) {
+      if (tail) return '[url]';
+      continue;
+    }
+    result += text.slice(last, match.index) + (tail ? '[url]' : '[host]');
+    last = hostPattern.lastIndex += tail.length;
+  }
+  return result + text.slice(last);
+}
 
 function normalize(key: string) {
   return key.replace(/[^a-z0-9]/gi, '').toLowerCase();
@@ -90,7 +117,7 @@ export function createFeedbackRedactor(options: { secrets: string[]; profile: Pe
   function text(value: string, stack = false) {
     const decoded = value.replace(/[^\s<>"']*%[0-9a-f]{2}[^\s<>"']*/gi, (encoded) => {
       try {
-        return decodeURIComponent(encoded);
+        return hosts(decodeURIComponent(encoded), true);
       } catch {
         return encoded;
       }
@@ -124,7 +151,7 @@ export function createFeedbackRedactor(options: { secrets: string[]; profile: Pe
     }
     const location = (value: string, marker: string) =>
       marker + (stack ? (value.match(/:\d+:\d+[),;]*$/)?.[0] ?? '') : '');
-    return safe
+    const masked = safe
       .replace(/\bdata:[^\s"'<>]+/gi, '[binary omitted]')
       .replace(/(["'])(?:https?|wss?|ftp|file):\/\/[^\r\n]*?\1/gi, '[url]')
       .replace(/\b(?:https?|wss?|ftp|file):\/\/[^\r\n]+/gi, (value) => location(value, '[url]'))
@@ -133,7 +160,7 @@ export function createFeedbackRedactor(options: { secrets: string[]; profile: Pe
       )
       .replace(/(["'])(?:[A-Za-z]:[\\/]|~?\/)[^\r\n]*?\1/g, '[path]')
       .replace(
-        /(?:[A-Za-z]:[\\/]|(?:~\/|\/(?:Users|home)\/[^/\r\n]+\/|\/(?:root|private|var|tmp|Volumes|mnt|workspace|app|data)\/))[^\r\n]*/g,
+        /(?:[A-Za-z]:[\\/]|(?:~\/|\/(?:Users|home)\/[^/\r\n]+\/|\/(?:root|private|var|tmp|Volumes|mnt|media|run\/media|workspace|app|data)\/))[^\r\n]*/g,
         (value) => location(value, '[path]'),
       )
       .replace(
@@ -146,16 +173,11 @@ export function createFeedbackRedactor(options: { secrets: string[]; profile: Pe
         /\b(?:\d{6,}(?![ -]?(?:tokens?|bytes?|characters?|chars|ms|[KMG]B|[KM]iB|items|rows)\b)|(?:rec|cus|msg|acct|usr)[_-][A-Za-z0-9_-]{6,})\b/g,
         '[identifier]',
       )
-      .replace(/\b[A-Za-z0-9+/=_-]{128,}\b/g, '[encoded data omitted]')
-      .replace(/\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,24}\b/gi, (host) => {
-        const domain = parse(host, { allowPrivateDomains: true });
-        return domain.isIcann ||
-          domain.isPrivate ||
-          /\.(?:internal|local|localhost|test|invalid)$/i.test(host)
-          ? '[host]'
-          : host;
-      })
-      .replace(/\0(\d+)\0/g, (_, index: string) => frames[Number(index)] ?? '[path]');
+      .replace(/\b[A-Za-z0-9+/=_-]{128,}\b/g, '[encoded data omitted]');
+    return hosts(masked).replace(
+      /\0(\d+)\0/g,
+      (_, index: string) => frames[Number(index)] ?? '[path]',
+    );
   }
 
   function value(input: unknown): unknown {

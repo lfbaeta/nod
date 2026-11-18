@@ -27,6 +27,7 @@ import { fileURLToPath } from 'node:url';
 import { packager } from '@electron/packager';
 import { transformWithEsbuild } from 'vite';
 import { withAppleSigning } from '../../.github/scripts/with-apple-signing.mjs';
+import { macInstallerRunning } from '../main/updates.mjs';
 import { run, signApplication, signingConfiguration } from './release-tools.mjs';
 
 const source = fileURLToPath(import.meta.url);
@@ -97,7 +98,17 @@ app.setPath('temp', fixture.temporary);
 const receipt = (event, fields = {}) => appendFileSync(fixture.events,
   JSON.stringify({ event, version: app.getVersion(), at: Date.now(), pid: process.pid, executable: process.execPath,
     dataHash: createHash('sha256').update(readFileSync(fixture.data)).digest('hex'), ...fields }) + '\\n');
+const opening = import('./updates.mjs').then(async ({ macInstallerRunning }) => {
+  if (!(await macInstallerRunning(fixture.identifier + '.ShipIt'))) return true;
+  let version;
+  try { version = JSON.parse(readFileSync(fixture.restartMarker, 'utf8')).version; } catch {}
+  if (typeof version !== 'string' || version === app.getVersion()) return true;
+  receipt('installer-running');
+  app.exit(0);
+  return false;
+});
 app.whenReady().then(async () => {
+  if (!(await opening)) return;
   app.setName(fixture.displayName);
   const { createSettingsStore } = await import('./settings.mjs');
   const { createMacEncryption } = await import('./mac-encryption.mjs');
@@ -228,7 +239,8 @@ app.whenReady().then(async () => {
         checkForUpdates: () => autoUpdater.checkForUpdates(),
       },
       prepareRuntime: async () => {},
-      restart: async () => {
+      restart: async (ready) => {
+        writeFileSync(fixture.restartMarker, JSON.stringify({ version: ready.version }));
         await disposeArtifactFiles();
         receipt('files-closed', { artifactRemoved: !artifactRoot || !existsSync(artifactRoot) });
         autoUpdater.quitAndInstall();
@@ -378,8 +390,16 @@ async function main() {
       receipt.completed = true;
     });
     if (route.file) {
+      let sent = 0;
+      response.on('close', () => {
+        if (sent === route.bytes) receipt.completed = true;
+      });
       response.writeHead(200, { 'content-type': 'application/zip', 'content-length': route.bytes });
-      createReadStream(route.file).pipe(response);
+      createReadStream(route.file)
+        .on('data', (chunk) => {
+          sent += chunk.length;
+        })
+        .pipe(response);
     } else if (typeof route.text === 'string') {
       response.writeHead(200, { 'content-type': 'text/plain' });
       response.end(route.text);
@@ -428,6 +448,7 @@ async function main() {
           ? {
               nextArchive: join(root, `${kind}-latest.zip`),
               nextFeed: `${origin}/${kind}/latest-feed`,
+              restartMarker: join(root, `${kind}-restart.json`),
             }
           : {}),
         installed: kind === 'downgrade' ? '1.0.2' : '1.0.0',
@@ -529,7 +550,7 @@ async function main() {
       const archive = await readFile(fixture.archive);
       const entry = {
         id: {
-          install: 'UPD-NATIVE.v6',
+          install: 'UPD-NATIVE.v7',
           reject: 'UPD-SIGNATURE.v5',
           downgrade: 'UPD-DOWNGRADE.v3',
           migrate: 'UPD-KEYCHAIN-MIGRATION.v2',
@@ -586,8 +607,19 @@ async function main() {
           )
         )
           break;
+        if (
+          fixture.restartMarker &&
+          !entry.reopenedAt &&
+          events.some((event) => event.event === 'files-closed') &&
+          (await macInstallerRunning(`${fixture.identifier}.ShipIt`))
+        ) {
+          entry.reopenedAt = new Date().toISOString();
+          spawn(executable, [], { stdio: 'ignore' }).on('error', (error) => {
+            entry.launchError = error.message;
+          });
+        }
         if (entry.launchError) break;
-        await delay(500);
+        await delay(100);
       }
       entry.events = events;
       const check = (id, pass) => entry.checks.push({ id, pass });
@@ -664,6 +696,19 @@ async function main() {
               sha256(
                 await readFile(join(fixture.application, 'Contents/_CodeSignature/CodeResources')),
               ),
+        );
+      }
+      if (fixture.kind === 'install') {
+        const closed = events.findIndex((event) => event.event === 'files-closed');
+        const waits = events.filter((event) => event.event === 'installer-running');
+        check(
+          'UPD-OPEN-DURING-INSTALL',
+          Boolean(entry.reopenedAt) &&
+            closed >= 0 &&
+            waits.length === 1 &&
+            events.indexOf(waits[0]) > closed &&
+            waits[0].version === fixture.installed &&
+            !events.some((event) => event.event === 'ready' && event.pid === waits[0].pid),
         );
       }
       if (fixture.kind === 'install')
@@ -866,7 +911,7 @@ async function main() {
   }
   if (failure) throw failure;
   process.stdout.write(
-    'Native restart, pending update replacement and installation, signature and downgrade rejection, encrypted profile, remote token and integration identity preservation passed.\n',
+    'Native restart, pending update replacement and installation, reopening during installation, signature and downgrade rejection, encrypted profile, remote token and integration identity preservation passed.\n',
   );
 }
 

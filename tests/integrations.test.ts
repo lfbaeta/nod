@@ -490,6 +490,18 @@ test('app access paths reject inconsistent API reads and more than 16 CLI fields
     false,
   );
   assert.throws(() => appRequestUrl(path.endpoint, 'account#private'), /path/);
+  assert.equal(
+    appRequestUrl(path.endpoint, '/images:annotate'),
+    'https://api.synthetic-nod.dev/v1/images:annotate',
+  );
+  for (const escape of [
+    '/../x',
+    '/%2e%2e/x',
+    '/x:y/../../z',
+    'http://evil.synthetic-nod.dev/x',
+    '//evil.synthetic-nod.dev/x',
+  ])
+    assert.throws(() => appRequestUrl(path.endpoint, escape), /saved API address/);
 });
 
 test(

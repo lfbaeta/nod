@@ -149,6 +149,31 @@ test('channel verification keeps service failures specific and removes submitted
     { status: 503, description: 'Service unavailable', code: 503 },
     { status: 200, description: 'Unauthorized', code: 401 },
     { provider: 'whatsapp', status: 403, description: 'Access denied', code: 190 },
+    {
+      thrown: new TypeError(`fetch failed for bot${token}`, {
+        cause: Object.assign(new Error(`connect ECONNREFUSED bot${token}`), {
+          code: 'ECONNREFUSED',
+        }),
+      }),
+      error: 'Telegram getMe could not be reached: ECONNREFUSED.',
+    },
+    {
+      thrown: new DOMException('The operation was aborted due to timeout', 'TimeoutError'),
+      error: 'Telegram getMe could not be reached: timed out after 15 seconds.',
+    },
+    {
+      broken: new DOMException('The operation was aborted due to timeout', 'TimeoutError'),
+      error: 'Telegram getMe could not be reached: timed out after 15 seconds.',
+    },
+    {
+      provider: 'whatsapp',
+      thrown: new TypeError(`fetch failed ${whatsapp.accessToken}`, {
+        cause: Object.assign(new Error(`getaddrinfo ENOTFOUND ${whatsapp.accessToken}`), {
+          code: 'ENOTFOUND',
+        }),
+      }),
+      error: 'WhatsApp Cloud API could not be reached: ENOTFOUND.',
+    },
   ]) {
     const provider = scenario.provider ?? 'telegram';
     const payload = provider === 'telegram' ? { botToken: token } : whatsapp;
@@ -183,6 +208,7 @@ test('channel verification keeps service failures specific and removes submitted
             const proof = target.searchParams.get('appsecret_proof')!;
             assert.ok(proof);
             secrets.push(proof);
+            if (scenario.thrown) throw scenario.thrown;
             return Response.json(
               {
                 error: {
@@ -195,6 +221,12 @@ test('channel verification keeps service failures specific and removes submitted
             );
           }
           assert.equal(String(url), `https://api.telegram.org/bot${token}/getMe`);
+          if (scenario.thrown) throw scenario.thrown;
+          if (scenario.broken)
+            return new Response(
+              new ReadableStream({ start: (controller) => controller.error(scenario.broken) }),
+              { headers: { 'content-type': 'application/json' } },
+            );
           return Response.json(
             {
               ok: false,
@@ -215,9 +247,12 @@ test('channel verification keeps service failures specific and removes submitted
         payload,
       });
       assert.equal(response.statusCode, 400);
-      assert.match(response.json().error, new RegExp(`HTTP ${scenario.status}`));
-      assert.ok(response.json().error.includes(scenario.description));
-      assert.ok(response.json().error.includes(String(scenario.code)));
+      if (scenario.error) assert.equal(response.json().error, scenario.error);
+      else {
+        assert.match(response.json().error, new RegExp(`HTTP ${scenario.status}`));
+        assert.ok(response.json().error.includes(scenario.description));
+        assert.ok(response.json().error.includes(String(scenario.code)));
+      }
       for (const secret of secrets) {
         assert.ok(!response.body.includes(secret));
         assert.ok(!response.body.includes(encodeURIComponent(secret)));

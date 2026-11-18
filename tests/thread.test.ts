@@ -6122,6 +6122,12 @@ test(
           await failing.complete('Sam');
           await failing.delivered();
           assert.deepEqual(await ownerCards(ownerId), before);
+          assert.deepEqual(
+            (await ownerCards('synthetic-other-owner'))[0].suggestions.tasks.map(
+              (task: { origin?: string }) => task.origin,
+            ),
+            ['fixed', 'fixed', 'fixed', 'common', 'common'],
+          );
           const firstGreeting = (
             await db.pool.query(
               'SELECT greeting_message_id FROM onboarding_suggestions WHERE owner_id=$1',
