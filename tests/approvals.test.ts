@@ -1774,11 +1774,15 @@ test(
             command: { action: 'click', selector: '@e1' },
           };
           aligned = ({ action, userMessages }) => {
+            const args = action?.arguments;
             const instruction = (
               userMessages as Array<{ text: string; canAuthorize?: boolean }> | undefined
             )?.find(({ text, canAuthorize }) => text === request && canAuthorize !== false);
             return action?.name === 'NOD_browser' &&
-              action.arguments?.control?.[0]?.name === 'Create' &&
+              args?.website === website &&
+              args.page === `${website}/calendar` &&
+              args.step === 'click' &&
+              args.control?.[0]?.name === 'Create' &&
               instruction
               ? { run: true, because: instruction.text }
               : false;
@@ -1870,7 +1874,6 @@ test(
           await propose(retry, 'NOD_browser', {
             ...create,
             page: `${website}/calendar/settings`,
-            control: [{ role: 'button', name: 'Delete calendar' }],
           });
           assert.equal(calls.length, before);
           await db.pool.query('UPDATE turns SET withdrawn=true WHERE id=$1', [first.turnId]);
