@@ -2272,6 +2272,7 @@ test('waiting scheduled runs open their pending question without starting anothe
     baselineObservation: null,
     watch: null,
     monthlyUsd: null,
+    model: null,
   };
   const historyPath = `/api/schedule-runs?scheduleId=${schedule.id}&limit=10`;
   let history: ScheduleHistory = { runs: [completed], nextCursor: null };
