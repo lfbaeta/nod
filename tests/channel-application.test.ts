@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { EventEmitter } from 'node:events';
 import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -7,6 +8,9 @@ import test from 'node:test';
 import Fastify from 'fastify';
 import pg from 'pg';
 import { createChannelSettings } from '../src/server/channel-settings.ts';
+import { createChannelSessionStore } from '../src/server/channel-session.ts';
+import { createChatSdkSetupVerifier } from '../src/providers/chat-sdk/settings.ts';
+import { createWhatsAppLinkedTransport } from '../src/providers/chat-sdk/whatsapp.ts';
 import type { ApplicationAdapters } from '../src/server/composition.ts';
 import type { MessagingTransport } from '../src/ports/messaging.ts';
 import type { SpeechProvider } from '../src/ports/speech.ts';
@@ -1066,8 +1070,10 @@ test(
       assert.equal(cloud.channels.find((item) => item.id === 'whatsapp')?.accountId, '555000');
       await cloud.close();
     }
-    const verifier = {
-      verify: async () => {
+    const channelVerifier = createChatSdkSetupVerifier();
+    const verifier: ReturnType<typeof createChatSdkSetupVerifier> = {
+      verify: async (provider, input) => {
+        if (provider === 'whatsapp') return channelVerifier.verify(provider, input);
         return {
           environment: {
             TELEGRAM_ENABLED: 'true',
@@ -1104,6 +1110,9 @@ test(
     await seedApp.close();
     const applied: Record<string, string>[] = [];
     const sent: string[] = [];
+    const whatsapp = new EventEmitter();
+    const whatsappReplies: { jid: string; text: string }[] = [];
+    const allowedNumber = '12025550101';
     let incomingFile: MessagingAttachment | undefined;
     let voiceCalls = 0;
     let modelConfigured = false;
@@ -1203,6 +1212,34 @@ test(
         verifier,
         create: (environment) => {
           applied.push(environment);
+          if (environment.WHATSAPP_MODE === 'bot') {
+            type Factory = NonNullable<
+              Parameters<typeof createWhatsAppLinkedTransport>[0]['createSocket']
+            >;
+            return createWhatsAppLinkedTransport({
+              mode: 'bot',
+              allowedNumber: environment.WHATSAPP_ALLOWED_NUMBER,
+              store: createChannelSessionStore({ pool, ownerId, keyStore }),
+              createSocket: () =>
+                ({
+                  ev: whatsapp,
+                  user: { id: '12025550102@s.whatsapp.net' },
+                  signalRepository: {
+                    lidMapping: { getPNForLID: async () => null, getLIDForPN: async () => null },
+                  },
+                  end: () => {},
+                  sendPresenceUpdate: async () => {},
+                  sendMessage: async (
+                    jid: string,
+                    content: { text?: string },
+                    { messageId }: { messageId: string },
+                  ) => {
+                    if (content.text) whatsappReplies.push({ jid, text: content.text });
+                    return { key: { id: messageId } };
+                  },
+                }) as unknown as ReturnType<Factory>,
+            });
+          }
           const transport: MessagingTransport = {
             channels: [
               {
@@ -1589,6 +1626,49 @@ test(
       assert.equal(disabled.statusCode, 200);
       assert.deepEqual(applied.at(-1), { TELEGRAM_ENABLED: 'false' });
       assert.equal((await send(3, 'New task')).statusCode, 404);
+      await t.test('WhatsApp private-ID messages appear in chat and receive replies', async () => {
+        const linked = await application.app.inject({
+          method: 'PUT',
+          url: '/api/channel-settings/whatsapp',
+          headers,
+          payload: { mode: 'bot', allowedNumber, policyConfirmed: true },
+        });
+        assert.equal(linked.statusCode, 200, linked.body);
+        const channels = application.channels!;
+        await channels.pairing();
+        whatsapp.emit('connection.update', { connection: 'open' });
+        assert.equal((await channels.pairing()).state, 'connected');
+        const lid = '77777777@lid';
+        const text = 'A request from WhatsApp';
+        whatsapp.emit('lid-mapping.update', { lid, pn: `${allowedNumber}@s.whatsapp.net` });
+        whatsapp.emit('messages.upsert', {
+          type: 'notify',
+          messages: [
+            {
+              key: { id: 'private-request', remoteJid: lid, fromMe: false, addressingMode: 'lid' },
+              messageTimestamp: Math.floor(Date.now() / 1000),
+              message: { conversation: text },
+            },
+          ],
+        });
+        await channels.drain();
+        const history = await application.app.inject({ url: '/api/messages', headers });
+        assert.equal(history.statusCode, 200);
+        const message = history
+          .json()
+          .messages.find(
+            (item: { role: string; text: string }) => item.role === 'user' && item.text === text,
+          );
+        assert.ok(message);
+        const reply = 'A reply from Nod';
+        await pool.query(
+          `INSERT INTO messages(id,owner_id,role,text,thread_id,turn_id)
+           SELECT $1,owner_id,'assistant',$2,thread_id,turn_id FROM messages WHERE id=$3`,
+          [randomUUID(), reply, message.id],
+        );
+        await channels.drain();
+        assert.deepEqual(whatsappReplies, [{ jid: lid, text: reply }]);
+      });
     } finally {
       try {
         await application.app.close();
