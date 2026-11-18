@@ -17,7 +17,7 @@ import { createIntegrationFixture } from '../scripts/e2e-fixtures.ts';
 import { fakeComputer, fakeWorkspace } from './runtime-fixtures.ts';
 import { accessCookie, accessKey } from '../src/server/access.ts';
 import { createDecisionModel } from '../src/providers/decisions.ts';
-import { BrowserActionError, type CredentialInput } from '../src/ports/computer.ts';
+import { BrowserActionError, type Computer, type CredentialInput } from '../src/ports/computer.ts';
 import { authenticatorKey } from '../src/shared/authenticator-key.ts';
 import { authenticatorCode } from '../src/server/authenticator.ts';
 import { transaction } from '../src/server/transaction.ts';
@@ -121,6 +121,7 @@ test(
       string,
       { tool?: string; action: string; args: Record<string, unknown> }
     >();
+    type FixtureCall = { tool?: string; action: string; args: Record<string, unknown> };
     const activePlan = new AsyncLocalStorage<string>();
     const batches = new Map<
       string,
@@ -128,7 +129,9 @@ test(
         subagents: boolean;
         sequential?: boolean;
         chatOnly?: boolean;
-        calls: Array<{ tool?: string; action: string; args: Record<string, unknown> }>;
+        calls: FixtureCall[];
+        taskCalls?: FixtureCall[];
+        taskResult?: string;
       }
     >();
     const batchErrors: string[] = [];
@@ -158,6 +161,8 @@ test(
     const injected: CredentialInput[] = [];
     let browserUrl = 'https://bank.example.test/transfer';
     let browserControls = [{ role: 'button', name: 'Authorize payment' }];
+    let calendarBrowser: Pick<Computer, 'act' | 'currentPage'> | undefined;
+    let calendarReview: ((input: object) => unknown) | undefined;
     let allowMethodBrowser = false;
     let methodBindings = 0;
     let dialogOpen = false;
@@ -212,6 +217,13 @@ test(
         }
         if (task === 'review' && !('purpose' in input) && !('reply' in input))
           fallbackChecks.push(input);
+        if (
+          task === 'review' &&
+          calendarReview &&
+          'action' in input &&
+          Object(input.action).name === 'NOD_browser'
+        )
+          return calendarReview(input);
         if (task === 'review' && 'reply' in input) {
           smallReplies.push(input);
           report?.({
@@ -346,23 +358,27 @@ test(
                           .currentInstruction,
                       )
                     : undefined;
-                const batch =
-                  planned?.chatOnly && options.sessionId !== options.threadId ? undefined : planned;
-                if (batch) {
-                  if (batch.sequential) {
-                    for (const call of batch.calls)
+                const calls =
+                  planned?.chatOnly && options.sessionId !== options.threadId
+                    ? planned.taskCalls
+                    : planned?.calls;
+                if (planned && calls) {
+                  if (planned.sequential) {
+                    for (const call of calls)
                       await (call.tool
                         ? tool(call.tool).execute({ action: call.action, ...call.args })
                         : tool('apps').execute(call));
+                    if (calls === planned.taskCalls && planned.taskResult)
+                      options.onEvent({ type: 'final', text: planned.taskResult });
                     return;
                   }
                   await Promise.allSettled(
-                    batch.calls.map((call, index) => {
+                    calls.map((call, index) => {
                       if (call.tool)
                         return tool(call.tool)
                           .execute({ action: call.action, ...call.args })
                           .catch((error: Error) => batchErrors.push(error.message));
-                      if (!batch.subagents) return tool('apps').execute(call);
+                      if (!planned.subagents) return tool('apps').execute(call);
                       const title = `${options.turnId}-${index}`;
                       parts.set(title, call);
                       return tool('delegate').execute({ title, instruction: 'Run this part.' });
@@ -441,6 +457,7 @@ test(
             return { status: 'submitted' };
           },
           act: async (_id, input) => {
+            if (calendarBrowser) return calendarBrowser.act(_id, input);
             browserActs.push({ ...input });
             return { text: 'Synthetic bank page', url: 'https://bank.example.test/transfer' };
           },
@@ -454,6 +471,7 @@ test(
             };
           },
           currentPage: async (_id, step) => {
+            if (calendarBrowser) return calendarBrowser.currentPage(_id, step);
             if (dialogOpen && step?.action !== 'accept_dialog')
               throw new Error('A JavaScript dialog blocks the page.');
             return {
@@ -656,6 +674,155 @@ test(
         [],
       );
     }
+    const calendarRetry = () =>
+      t.test(
+        'an iCloud calendar retry checks the app and saves the requested event once (LAB-1467)',
+        async (t) => {
+          const origin = 'https://calendar.example.test';
+          const title = 'Studio planning';
+          const time = 'November 24, 2030, 9:00–9:30 AM';
+          const ownerRequest = `Create “${title}” in my iCloud calendar at ${origin} on ${time}.`;
+          const retry = 'Then try it again';
+          const unverified = `I could not verify that ${title} was saved.`;
+          const verified = `${title} is on the calendar on ${time}.`;
+          const calendar = `${origin}/calendar`;
+          const editor = [
+            ['Create', { action: 'click', selector: '@e1' }],
+            ['AM', { action: 'click', selector: '@e2' }],
+            ['Add', { action: 'click', selector: '@e3' }],
+            ['Enter', { action: 'press', key: 'Enter' }],
+          ] as const;
+          const checks: string[] = [];
+          const actions: string[] = [];
+          const events: Array<{ title?: string; time?: string }> = [];
+          const fields: { title?: string; time?: string } = {};
+          let index = 0;
+          const url = () => (index > 0 && index < editor.length ? `${calendar}/new` : calendar);
+          calendarBrowser = {
+            currentPage: async (_id, step) => ({
+              origin,
+              url: url(),
+              ...(step && editor[index]
+                ? { controls: [{ role: 'button', name: editor[index][0] }], submits: 'unknown' }
+                : {}),
+            }),
+            act: async (_id, step) => {
+              if (step.action === 'open') index = 0;
+              else if (step.action === 'snapshot') actions.push('snapshot');
+              else if (step.action === 'fill') {
+                if (step.selector === '#title') fields.title = step.text;
+                if (step.selector === '#time') fields.time = step.text;
+              } else if (step.action === 'click' || step.action === 'press') {
+                const [name, command] = editor[index++]!;
+                assert.equal(step.action, command.action);
+                assert.equal(
+                  step.selector ?? step.key,
+                  'selector' in command ? command.selector : command.key,
+                );
+                actions.push(name);
+                if (index === editor.length) events.push({ ...fields });
+              }
+              return { url: url(), text: JSON.stringify(events) };
+            },
+          };
+          calendarReview = (input) => {
+            const { action, userMessages } = input as {
+              action: { arguments: { website: string; control?: { name: string }[] } };
+              userMessages?: { text: string; canAuthorize?: boolean }[];
+            };
+            const label = action.arguments.control?.[0]?.name ?? '';
+            checks.push(label);
+            return action.arguments.website === origin &&
+              editor.some(([name]) => label === name) &&
+              userMessages?.some(
+                ({ text, canAuthorize }) => text === ownerRequest && canAuthorize !== false,
+              )
+              ? { run: true, because: ownerRequest }
+              : { run: false };
+          };
+          t.after(() => {
+            calendarBrowser = undefined;
+            calendarReview = undefined;
+            batches.delete(ownerRequest);
+            batches.delete(retry);
+          });
+          const browser = ({ action, ...args }: { action: string } & Record<string, unknown>) => ({
+            tool: 'browser',
+            action,
+            args,
+          });
+          const snapshot = browser({ action: 'snapshot' });
+          const inspect = [browser({ action: 'open', url: calendar }), snapshot];
+          const [create, am, add, enter] = editor.map(([, command]) => browser(command));
+          const taskOf = async () =>
+            (
+              await pool.query<{ id: string; turn_id: string; result: string }>(
+                'SELECT id,turn_id,result FROM tasks WHERE owner_id=$1 AND title=$2',
+                [ownerId, title],
+              )
+            ).rows[0]!;
+          const submit = async (
+            text: string,
+            call: FixtureCall,
+            taskCalls: FixtureCall[],
+            taskResult: string,
+          ) => {
+            batches.set(text, {
+              subagents: false,
+              sequential: true,
+              chatOnly: true,
+              calls: [call],
+              taskCalls,
+              taskResult,
+            });
+            await waitFor((await submitUserMessage(text)).turnId, 'succeeded');
+            const task = await taskOf();
+            await waitFor(task.turn_id, 'succeeded');
+            assert.deepEqual(await approvalsFor(task.turn_id), []);
+            return task;
+          };
+          const first = await submit(
+            ownerRequest,
+            {
+              tool: 'task',
+              action: 'start',
+              args: {
+                title,
+                message: `I’ll create ${title}.`,
+                doneWhen: verified,
+                now: 'Checking the calendar',
+              },
+            },
+            [...inspect, create!],
+            unverified,
+          );
+          assert.equal((await taskOf()).result, unverified);
+          assert.deepEqual(events, []);
+          const resumed = await submit(
+            retry,
+            { tool: 'task', action: 'reply', args: { ids: [first.id], retry: true } },
+            [
+              ...inspect,
+              create!,
+              am!,
+              browser({ action: 'fill', selector: '#title', text: title }),
+              browser({ action: 'fill', selector: '#time', text: time }),
+              add!,
+              enter!,
+              snapshot,
+            ],
+            verified,
+          );
+          assert.equal(resumed.id, first.id);
+          assert.notEqual(resumed.turn_id, first.turn_id);
+          const controls = editor.map(([name]) => name);
+          assert.deepEqual(checks, ['Create', ...controls]);
+          assert.deepEqual(actions, ['snapshot', 'Create', 'snapshot', ...controls, 'snapshot']);
+          assert.deepEqual(events, [{ title, time }]);
+          assert.equal((await taskOf()).result, verified);
+        },
+      );
+
     try {
       await t.test(
         'model settings use the trust check and save only the approved selection',
@@ -3820,6 +3987,7 @@ test(
           assert.equal(await readFile(source, 'utf8'), 'Synthetic local report');
         },
       );
+      await calendarRetry();
       await t.test('shutdown saves usage from the last provider before it returns', async () => {
         await pool.query(`
           CREATE FUNCTION delay_closing_usage() RETURNS trigger LANGUAGE plpgsql AS $$

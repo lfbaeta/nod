@@ -22,6 +22,11 @@ export const withdrawnSql = (message: string) =>
   `EXISTS(SELECT 1 FROM turns w WHERE w.owner_id=${message}.owner_id AND w.withdrawn
     AND (w.id=${message}.turn_id OR w.message_id=${message}.id))`;
 
+export const reactionReplySql = (message: string) =>
+  `EXISTS (SELECT 1 FROM turns reaction_turn
+    WHERE reaction_turn.owner_id=${message}.owner_id AND reaction_turn.message_id=${message}.id
+      AND starts_with(reaction_turn.source_id,'reaction-reply:'))`;
+
 export function turnChainSql() {
   return `WITH RECURSIVE chain(id,next,thread_id) AS (
     SELECT u.id,u.parent_turn_id,u.thread_id FROM turns u WHERE u.id=$1 AND u.owner_id=$2 AND u.thread_id=$3

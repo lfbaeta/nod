@@ -55,7 +55,11 @@ The progress indicator shows the task title above its current step. Both wrap so
 
 ## Reply or stop one task
 
-Reply to a task message to continue that task. You can reply to its first message, a question or a result. Telegram and WhatsApp use their reply controls. A message without a reply target goes to the main chat. Nod can send that message to one or more open tasks when your intent is clear. If the target is unclear, Nod asks. To pick up a finished or stopped task, reply to one of its messages.
+Reply to a task message to continue that task. You can reply to its first message, a question or a result, even after the task finishes or stops. Telegram and WhatsApp use their reply controls.
+
+A message without a reply target goes to the main chat. Nod can send that message to one or more open tasks when your intent is clear.
+
+Say "Try again" just after Nod reports the result of a task you requested. In web or desktop chat, this also works for a result from Telegram or WhatsApp. In a chat app, the result must be in that chat. Nod continues the task with your original request and checks whether an action already happened before repeating it. If the target is unclear, Nod asks.
 
 When a task waits for you in its browser, its preview in chat and on **Scheduled** shows **Open browser**, which takes you to the live page. See [Take over the browser](/use/browser/#take-over-the-browser).
 
