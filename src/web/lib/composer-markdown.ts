@@ -23,6 +23,12 @@ const markdown = unified()
     listItemIndent: 'one',
   });
 const linkify = new LinkifyIt({ fuzzyLink: true });
+const delimiters: Record<string, string> = {
+  delete: '~',
+  emphasis: '*',
+  inlineCode: '`',
+  strong: '*',
+};
 
 function literal(value: string): PhrasingContent[] {
   if (!value.startsWith('/') && safeMessageLink(value, window.location.origin))
@@ -209,7 +215,10 @@ function tableInline(nodes: PhrasingContent[]): PhrasingContent[] {
                 /(\\*)\|/g,
                 (_, slashes: string) => `${'\\'.repeat(slashes.length * 2 + 1)}|`,
               )
-              .replaceAll('\n', '<br>'),
+              .replace(
+                /(\\*)\n/g,
+                (_, slashes: string) => `${slashes}${slashes.length % 2 ? '\\' : ''}<br>`,
+              ),
           }
         : 'children' in node
           ? { ...node, children: tableInline(node.children) }
@@ -220,6 +229,24 @@ function tableInline(nodes: PhrasingContent[]): PhrasingContent[] {
 function serializeComposerMarkdown(document: ProseMirrorNode, display = false) {
   const content: JSONContent[] = document.toJSON().content ?? [];
   const tree: Root = { type: 'root', children: blocks(content, display) };
+  visit(tree, (node) => {
+    if (!('children' in node)) return;
+    node.children.forEach((child, index) => {
+      if (child.type !== 'html') return;
+      const previous = delimiters[node.children[index - 1]?.type ?? ''];
+      const next = node.children[index + 1];
+      if (previous && child.value.startsWith(previous)) child.value = '\\' + child.value;
+      if (!next) return;
+      const [, slashes, last] = child.value.match(/(\\*)([^\\]?)$/)!;
+      if (
+        last
+          ? slashes.length % 2 === 0 &&
+            (last === delimiters[next.type] || (last === '!' && next.type === 'link'))
+          : slashes.length % 2 === 1
+      )
+        child.value = `${child.value.slice(0, -1)}\\${child.value.at(-1)}`;
+    });
+  });
   const last = content.at(-1);
   const trailingBreak = last?.type === 'paragraph' && last.content?.at(-1)?.type === 'hardBreak';
   const value = markdown.stringify(tree);
