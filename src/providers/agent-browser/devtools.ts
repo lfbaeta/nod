@@ -647,7 +647,7 @@ export async function openDevtools(url: string, targetId: string, signal?: Abort
     return object.objectId;
   };
 
-  const controlSnapshot = async (objectId: string, session: string) => {
+  const snapshotOf = async (objectId: string, session: string) => {
     const { result, exceptionDetails } = (await send(
       'Runtime.callFunctionOn',
       {
@@ -657,9 +657,14 @@ export async function openDevtools(url: string, targetId: string, signal?: Abort
       },
       session,
     )) as { result?: { value?: string | null }; exceptionDetails?: unknown };
-    if (exceptionDetails || !result?.value)
-      throw new Error('The sign-in control is no longer available.');
-    return result.value;
+    if (exceptionDetails) throw new Error('The sign-in control is no longer available.');
+    return result?.value || null;
+  };
+
+  const controlSnapshot = async (objectId: string, session: string) => {
+    const value = await snapshotOf(objectId, session);
+    if (!value) throw new Error('The sign-in control is no longer available.');
+    return value;
   };
 
   return {
@@ -913,8 +918,7 @@ export async function openDevtools(url: string, targetId: string, signal?: Abort
             break;
           }
         }
-        if (!frame?.loaderId || !objectId)
-          throw new Error('The sign-in document is no longer available.');
+        if (!frame?.loaderId || !objectId) throw new BrowserActionError('browser_target_changed');
         const { result, exceptionDetails } = (await send(
           'Runtime.callFunctionOn',
           {
@@ -931,7 +935,8 @@ export async function openDevtools(url: string, targetId: string, signal?: Abort
           { objectId: result.objectId },
           found.session,
         )) as { node: { backendNodeId: number } };
-        const snapshot = await controlSnapshot(result.objectId, found.session);
+        const snapshot = await snapshotOf(result.objectId, found.session);
+        if (!snapshot) throw new BrowserActionError('browser_sign_in_choice');
         const controls = await controlsFor({
           backendNodeId: node.backendNodeId,
           session: found.session,
@@ -939,7 +944,7 @@ export async function openDevtools(url: string, targetId: string, signal?: Abort
         if (!controls[0]?.name || !['button', 'link'].includes(controls[0].role))
           throw new BrowserActionError('browser_sign_in_choice');
         if ((await controlSnapshot(result.objectId, found.session)) !== snapshot)
-          throw new Error('The sign-in control changed during inspection.');
+          throw new BrowserActionError('browser_target_changed');
         const details = JSON.parse(snapshot) as {
           origin: string;
           url: string;

@@ -1896,9 +1896,9 @@ export function createAgentBrowserComputer(options: {
           const control = await (async () =>
             devtools.signInControl(ref ? await pointOf(state, ref) : { selector: target }))().catch(
             (error: unknown) => {
-              if (!(error instanceof BrowserActionError))
-                throw new BrowserActionError('browser_target_changed');
-              throw error.code === 'browser_sign_in_choice' ? refused() : error;
+              throw error instanceof BrowserActionError && error.code === 'browser_sign_in_choice'
+                ? refused()
+                : error;
             },
           );
           if (control.origin !== origin) throw refused();
