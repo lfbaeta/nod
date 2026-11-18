@@ -4737,6 +4737,7 @@ test('composer preserves keyboard shortcuts, upload retries, previews and failed
           '\\\u0060a \u0060x\u0060',
           'a\\\u0060\u0060x\u0060\\\u0060b',
           '| a          |\n| ---------- |\n| b\\\\\\\\<br>c |',
+          '&#x61;~~<u>x</u>~~&#x61;',
         ]) {
           await act(async () => replaceText(draft));
           await submit();
