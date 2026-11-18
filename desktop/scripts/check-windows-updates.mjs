@@ -286,6 +286,8 @@ app.whenReady().then(async () => {
       win32metadata: { CompanyName: 'n8n GmbH', ProductName: 'Nod', FileDescription: 'Nod' },
       overwrite: true,
     });
+    await mkdir(join(application, 'resources/engine/windows-runtime'), { recursive: true });
+    await writeFile(join(application, 'resources/engine/windows-runtime/manifest.json'), '{}');
     const stage = join(root, `stage-${version}`);
     await mkdir(stage);
     installers[version] = join(stage, 'nod-Setup-x64.exe');

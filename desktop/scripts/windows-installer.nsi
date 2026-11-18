@@ -114,7 +114,10 @@ Section "nod"
     Abort
   directory_marked:
   WriteUninstaller "$INSTDIR\Uninstall.exe"
+  Rename "$INSTDIR\resources\engine\windows-runtime\guest.tar.gz" "$INSTDIR\guest.tar.gz"
+  RMDir /r "$INSTDIR\resources"
   File /r "${APP_DIR}\*"
+  Rename "$INSTDIR\guest.tar.gz" "$INSTDIR\resources\engine\windows-runtime\guest.tar.gz"
   IfFileExists "$EXEDIR\nod-Runtime-win32-x64.tar.gz" 0 runtime_copied
     ClearErrors
     CopyFiles /SILENT "$EXEDIR\nod-Runtime-win32-x64.tar.gz" "$INSTDIR\resources\engine\windows-runtime\guest.tar.gz"
