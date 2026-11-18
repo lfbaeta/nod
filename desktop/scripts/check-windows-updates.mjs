@@ -172,6 +172,13 @@ const root = process.env.NOD_UPDATE_FIXTURE_ROOT;
 const profile = join(root, 'profile');
 const hash = (value) => createHash('sha256').update(value).digest('hex');
 const record = (event, fields = {}) => appendFile(join(root, 'events.jsonl'), JSON.stringify({ event, pid: process.pid, version: app.getVersion(), ...fields }) + '\\n');
+let decryptionReason;
+const storageState = async () => Promise.all(['userData', 'sessionData'].map(async (scope) => {
+  try {
+    const state = JSON.parse(await readFile(join(app.getPath(scope), 'Local State'), 'utf8'));
+    return { scope, keys: Object.fromEntries(['encrypted_key', 'app_bound_encrypted_key'].map((name) => [name, typeof state.os_crypt?.[name] === 'string' ? hash(state.os_crypt[name]) : 'missing'])) };
+  } catch (error) { return { scope, error: error.code || error.name }; }
+}));
 app.setPath('userData', join(root, 'electron'));
 if (!app.requestSingleInstanceLock()) app.quit();
 else if (process.argv.includes('--quit')) app.exit();
@@ -185,7 +192,16 @@ app.whenReady().then(async () => {
   const settingsPath = join(profile, 'settings.json');
   const fresh = await stat(settingsPath).then(() => false, (error) => { if (error.code === 'ENOENT') return true; throw error; });
   if (fresh) await writeFile(settingsPath, JSON.stringify({ version: 1, theme: 'system', onboardingCompleted: true, notifications: false, launchAtLogin: true, secrets: {} }), { mode: 0o600 });
-  const store = createSettingsStore(settingsPath, safeStorage);
+  await record('storage-open', { storage: await storageState() });
+  const encryption = {
+    isEncryptionAvailable: () => safeStorage.isEncryptionAvailable(),
+    encryptString: (value) => safeStorage.encryptString(value),
+    decryptString: (value) => {
+      try { return safeStorage.decryptString(value); }
+      catch (error) { decryptionReason = error.message; throw error; }
+    },
+  };
+  const store = createSettingsStore(settingsPath, encryption);
   const key = Buffer.from((await store.environment()).NOD_VAULT_KEY, 'base64');
   const owner = JSON.parse(await readFile(join(profile, 'profile.json'), 'utf8')).ownerId;
   const identity = await loadIntegrationIdentity({
@@ -214,7 +230,7 @@ app.whenReady().then(async () => {
   assert.equal(saved.onboardingPreferenceStep, 'complete');
   const files = {};
   for (const name of ['settings.json', 'profile.json', 'vault', 'identity-checkpoint', 'integration-identity/' + hash(owner) + '.encrypted', 'integration-identity/' + hash(owner) + '.public']) files[name] = hash(await readFile(join(profile, name)));
-  await record('ready', { files, keyHash: hash(key), preferences: saved, publicKey: identity.publicKey, managedOwner: identity.userId,
+  await record('ready', { files, keyHash: hash(key), storage: await storageState(), preferences: saved, publicKey: identity.publicKey, managedOwner: identity.userId,
     identityProof: sign(null, Buffer.from(${JSON.stringify(challenge)} + ':' + app.getVersion()), identity.key).toString('base64url') });
   if (app.getVersion() === '1.0.1' && process.env.NOD_UPDATE_FIXTURE_HOLD !== '1') { await record('stopped'); app.exit(0); }
   else {
@@ -232,7 +248,7 @@ app.whenReady().then(async () => {
     }, 100);
   }
 }).catch(async (error) => {
-  await record('error', { message: error.message });
+  await record('error', { message: error.message, decryptionReason, storage: await storageState() });
   app.exit(1);
 });
 }
