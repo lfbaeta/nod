@@ -319,7 +319,7 @@ export function Apps({
         }
         if (event.data.connection === 'failed') {
           failed = true;
-          void check().then((settled) => settled || settle('failed'));
+          void read().then((settled) => settled || settle('failed'));
           return;
         }
         settle(event.data.connection === 'cancelled' ? 'cancelled' : 'unavailable');
