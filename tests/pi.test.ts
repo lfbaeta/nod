@@ -116,6 +116,7 @@ test('models and routers complete tool discovery inside the endpoint context', a
     { provider: 'compatible', id: 'fixture-mcp', window: 8192, limit: 8192 },
     { provider: 'compatible', id: 'fixture-mcp-large', window: 131_072, limit: 131_072 },
     { provider: 'compatible', id: 'fixture-followup', window: 8192, limit: 8192 },
+    { provider: 'compatible', id: 'fixture-background', window: 8192, limit: 8192 },
   ] as const)
     await t.test(id, async (test) => {
       const directory = await mkdtemp(join(tmpdir(), 'nod-small-context-'));
@@ -197,8 +198,12 @@ test('models and routers complete tool discovery inside the endpoint context', a
                   name: id.startsWith('fixture-mcp') ? 'mcp__fixture' : 'artifacts',
                 },
               ],
-              ['nod_tool_search', { query: 'share_file', limit: 1 }],
-              ['share_file', { path: 'report.txt' }],
+              ...(id === 'fixture-background'
+                ? ([['send_message', { text: 'Synthetic scheduled result.' }]] as const)
+                : ([
+                    ['nod_tool_search', { query: 'share_file', limit: 1 }],
+                    ['share_file', { path: 'report.txt' }],
+                  ] as const)),
             ] as const);
       const serve = async (url: RequestInfo | URL, init?: RequestInit) => {
         assert.equal(String(url), `${access.definition.spec.baseUrl}/chat/completions`);
@@ -263,16 +268,11 @@ test('models and routers complete tool discovery inside the endpoint context', a
             assert.ok(JSON.stringify(body).includes('Synthetic retained recent turn.'));
           }
         }
-        if (!summarizing) {
+        if (!summarizing)
           assert.ok(
             body.tools.some((tool: any) => tool.function.name === 'apps'),
             'Connected apps are unreachable without the apps tool.',
           );
-          assert.ok(
-            body.tools.some((tool: any) => tool.function.name === 'send_message'),
-            'Results cannot be delivered without the send_message tool.',
-          );
-        }
         const call = summarizing ? undefined : calls[requests++];
         if (call) assert.ok(body.tools.some((tool: any) => tool.function.name === call[0]));
         const chunk = {
@@ -316,6 +316,7 @@ test('models and routers complete tool discovery inside the endpoint context', a
       };
       let fetchMocked = false;
       const published: Buffer[] = [];
+      const delivered: string[] = [];
       const failures: unknown[] = [];
       const started: string[] = [];
       const runtime = createAgentRuntime({
@@ -352,6 +353,8 @@ test('models and routers complete tool discovery inside the endpoint context', a
         turnId: randomUUID(),
         prompt: 'Return the text report named report.txt.',
         rules: 'Do not contact anyone.',
+        ...(id === 'fixture-background' ? { background: true } : {}),
+        reply: async (text) => void delivered.push(text),
         memory: 'Synthetic earlier memory. '.repeat(2000),
         ...(['fixture-memory-small', 'fixture-docs-small'].includes(id)
           ? {
@@ -443,10 +446,14 @@ test('models and routers complete tool discovery inside the endpoint context', a
         started,
         id === 'fixture-docs-small'
           ? ['tool_search', 'nod_docs', 'nod_docs', 'tool_search', 'share_file']
-          : ['tool_search', 'skills', 'tool_search', 'share_file'],
+          : id === 'fixture-background'
+            ? ['tool_search', 'skills', 'send_message']
+            : ['tool_search', 'skills', 'tool_search', 'share_file'],
       );
-      assert.equal(published.length, 1);
-      assert.equal(published[0].toString(), 'Synthetic report bytes');
+      const files = id === 'fixture-background' ? 0 : 1;
+      assert.equal(published.length, files);
+      if (files) assert.equal(published[0].toString(), 'Synthetic report bytes');
+      else assert.deepEqual(delivered, ['Synthetic scheduled result.']);
       if (id === 'fixture-resumed')
         assert.ok((await localText(join(directory, 'sessions/fixture'))).includes(earlier));
       if (!['fixture-large', 'fixture-mcp-large'].includes(id)) {
@@ -462,7 +469,7 @@ test('models and routers complete tool discovery inside the endpoint context', a
           'succeeded',
         );
         assert.ok(bodies.length > before);
-        assert.equal(published.length, 1);
+        assert.equal(published.length, files);
       }
     });
 });
