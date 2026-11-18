@@ -1,5 +1,13 @@
 import { Tooltip } from '../components/tooltip';
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import {
+  Fragment,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type SetStateAction,
+} from 'react';
 import { createPortal, flushSync } from 'react-dom';
 import { ArrowDown, Check, CornerUpLeft, LoaderCircle, Repeat } from '../components/icons';
 import type {
@@ -367,7 +375,11 @@ export function Chat({
       ),
     [connections],
   );
-  const [text, setText] = useState('');
+  const [text, setDraftText] = useState('');
+  function setText(value: SetStateAction<string>) {
+    setDraftText(value);
+    setReplyNotice('');
+  }
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
   const [recovering, setRecovering] = useState(false);
@@ -379,7 +391,6 @@ export function Chat({
   const [replyTo, setReplyTo] = useState<ComposerReply | null | undefined>(null);
   const [replyNotice, setReplyNotice] = useState('');
   const [unavailableQuestions, setUnavailableQuestions] = useState<ReadonlySet<string>>(new Set());
-  useEffect(() => setReplyNotice(''), [text, state.threadId]);
   const taskReply = useRef<string | null>(null);
   const [focusTarget, setFocusTarget] = useState<{
     id: string;
