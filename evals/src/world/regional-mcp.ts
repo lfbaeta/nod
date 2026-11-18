@@ -71,13 +71,23 @@ export function regionalMcp(kind: 'ask' | 'workspace') {
           evidence: JSON.stringify(run.visits.map(({ host, path }) => `${host}${path}`)),
         })),
         check('regional-endpoint', (run) => ({
-          pass: hosts(run).length > 0 && hosts(run).every((host) => host === 'eu.quarry.example'),
-          evidence: `Proposed MCP hosts: ${hosts(run).join(', ') || 'none'}.`,
+          pass:
+            hosts(run).every((host) => host === 'eu.quarry.example') &&
+            proposals(run).some(
+              (tool) =>
+                !tool.isError &&
+                (tool.input?.proposal?.paths ?? []).some(
+                  (path: { kind?: string; endpoint?: string }) =>
+                    path.kind === 'mcp' &&
+                    path.endpoint?.replace(/\/$/, '') === 'https://eu.quarry.example/mcp',
+                ),
+            ),
+          evidence: `Proposed MCP hosts: ${hosts(run).join(', ') || 'none'}; ${proposals(run).filter((tool) => !tool.isError).length} accepted proposals.`,
         })),
         kind === 'ask'
           ? check('regional-region-asked', (run) => ({
-              pass: answers(run).length > 0,
-              evidence: `${answers(run).length} questions answered before the first proposal.`,
+              pass: answers(run).some((item) => /region|workspace|address|\beu\b/i.test(item.text)),
+              evidence: `Questions answered before the first proposal: ${JSON.stringify(answers(run).map((item) => item.text.slice(0, 200)))}.`,
             }))
           : check('regional-no-extra-question', (run) => ({
               pass: answers(run).length === 0,
