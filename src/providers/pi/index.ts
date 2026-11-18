@@ -681,14 +681,17 @@ export function createPiAgent(options: {
         ...sandboxTools.map((definition): ToolDefinition => ({
           ...definition,
           execute: async (id, params, signal, onUpdate, context) => {
+            params = structuredClone(params);
             const result = await input.runTool(
               definition.name,
               params,
-              async () => {
-                const output = await definition.execute(id, params, signal, onUpdate, context);
+              async (operation = signal) => {
+                const callSignal =
+                  operation && signal ? AbortSignal.any([signal, operation]) : operation;
+                const output = await definition.execute(id, params, callSignal, onUpdate, context);
                 const bounded = id.includes('/')
                   ? output
-                  : await boundedOutput(definition.name, async () => output, signal);
+                  : await boundedOutput(definition.name, async () => output, callSignal);
                 if (definition.name !== 'bash') return bounded;
                 const exitCode = (output.structuredContent as { exit_code?: unknown } | undefined)
                   ?.exit_code;

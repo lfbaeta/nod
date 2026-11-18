@@ -2138,10 +2138,22 @@ async function hostSandbox(t: test.TestContext) {
     exec(command: string, options: WorkspaceExecOptions = {}) {
       calls.push(command);
       return new Promise((resolve) => {
-        const child = spawn('bash', ['-c', command.replaceAll(prefix, root)], {
-          cwd,
-          env: { PATH: `${bin}:/usr/bin:/bin` },
-        });
+        const child = spawn(
+          'bash',
+          [
+            '-c',
+            command
+              .replaceAll(prefix, root)
+              .replaceAll(
+                '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+                `${bin}:/usr/bin:/bin`,
+              ),
+          ],
+          {
+            cwd,
+            env: { PATH: `${bin}:/usr/bin:/bin` },
+          },
+        );
         const deliver = (chunk: Buffer) =>
           options.onData?.(
             chunk.includes(root)
@@ -2362,6 +2374,7 @@ function context(directory: string): RuntimeContext {
       url: '/api/artifacts/fixture',
     }),
     requestCredential: async () => ({ filled: true }),
+    checkWorkspaceCommand: async () => ({ record: async () => {} }),
     integration: async () => ({}),
     manage: async () => ({}),
   };
@@ -3075,6 +3088,68 @@ test('trust mode selects available Jev, Decider and OpenAI before the small LLM'
     );
 });
 
+test('checked workspace command arguments and both cancellation signals reach the native executor', async (t) => {
+  for (const cancel of ['original', 'checked'] as const)
+    await t.test(cancel, async () => {
+      const directory = await mkdtemp(join(tmpdir(), 'nod-command-dispatch-'));
+      const command = { command: 'printf synthetic-checked-command' };
+      const checked = new AbortController();
+      const original = new AbortController();
+      const scripts: string[] = [];
+      const signals: Array<AbortSignal | undefined> = [];
+      let definition: ToolDefinition | undefined;
+      const agent = createPiAgent({
+        provider: 'openai',
+        apiKey: 'fixture-key',
+        sessionRoot: join(directory, 'sessions'),
+        createSession: async (options) => {
+          definition = options!.customTools!.find((tool) => tool.name === 'bash');
+          return createAgentSession(options);
+        },
+      });
+      try {
+        await agent.open({
+          ...fakeExecution(randomUUID(), randomUUID()),
+          systemPrompt: 'Synthetic checked command fixture',
+          workspace: {
+            path: '/synthetic-workspace',
+            instructions: 'Synthetic workspace',
+            exec: async (script, options) => {
+              scripts.push(script);
+              signals.push(options?.signal);
+              return { exitCode: 0 };
+            },
+          },
+          runTool: async (name, args, run) => {
+            assert.equal(name, 'bash');
+            assert.equal((args as typeof command).command, 'printf synthetic-checked-command');
+            command.command = 'printf synthetic-unchecked-change';
+            return run(checked.signal);
+          },
+          tools: [],
+          shouldStop: () => false,
+          onEvent() {},
+        });
+        await definition!.execute(
+          'synthetic-checked-command',
+          command,
+          original.signal,
+          undefined,
+          {} as never,
+        );
+        assert.equal(scripts.length, 1);
+        assert.ok(scripts[0].includes('printf synthetic-checked-command'));
+        assert.equal(scripts[0].includes('synthetic-unchecked-change'), false);
+        assert.equal(signals[0]?.aborted, false);
+        (cancel === 'original' ? original : checked).abort();
+        assert.equal(signals[0]?.aborted, true);
+      } finally {
+        await agent.dispose();
+        await rm(directory, { recursive: true, force: true });
+      }
+    });
+});
+
 test('codemode heldout output preserves UTF-8 bytes and fails closed through the guard', async (t) => {
   const expected =
     Array.from(
@@ -3124,11 +3199,11 @@ test('codemode heldout output preserves UTF-8 bytes and fails closed through the
             exec: async (script, options) => {
               workspaceCommands += 1;
               if ((await spills()).length) observedSpill = true;
-              if (script.startsWith('base64 -d ')) {
+              if (/^base64 -d /m.test(script)) {
                 transferAttempts += 1;
                 if (mode === 'transfer-cleanup-failed') return { exitCode: 73 };
               }
-              if (script.startsWith('rm -f --')) {
+              if (/^rm -f --/m.test(script)) {
                 cleanupAttempts += 1;
                 if (mode === 'transfer-cleanup-failed')
                   throw new Error('Synthetic workspace cleanup failure.');

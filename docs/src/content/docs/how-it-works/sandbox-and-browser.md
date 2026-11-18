@@ -62,6 +62,16 @@ For source installs, `pnpm start` uses the Docker daemon's CPU count when it is 
 
 The self-hosted server reaches Docker through a restricted proxy for its workspace and browser containers. The proxy hands each running command's stream over as a raw connection, so its HTTP time limits don't close commands that run longer. Its Compose configuration allows separate memory limits through `NOD_WORKSPACE_MEMORY` and `NOD_BROWSER_MEMORY`.
 
+## Command permission
+
+Every model-issued Bash command passes the same Trust checker as app and browser actions. The runtime supplies the exact command, its actual folder and its effective time limit, including for delegates and nested calls. It waits behind an earlier app confirmation and checks Stop and application shutdown again before dispatch. The same cancellation signal reaches the command process. A failed check or a command that needs confirmation is refused. No pending shell approval is saved. A command that is allowed still passes the current turn and owner-request checks before it runs.
+
+Generated file helpers and command wrappers use an absolute shell and a fixed path of system programs. Python helpers run `/usr/bin/python3 -I`, so workspace modules and user startup files cannot replace them. Only the checked model command receives the normal path for installed tools. File reads, output capture and cleanup stay in the helper environment.
+
+Successful commands record the Trust basis in Usage. The action target contains no command text or file content. Existing command records keep their separate redaction rules below.
+
+The checker is a model and can make mistakes. Mutable scripts, imports and program settings can have indirect effects. This check does not inspect each network connection or prevent all data transfer. Public internet access remains available.
+
 ## The command supervisor
 
 Every command goes through a small supervisor inside the container, in [`src/providers/docker/command.ts`](https://github.com/n8n-io/nod/blob/main/src/providers/docker/command.ts).

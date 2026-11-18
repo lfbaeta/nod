@@ -313,6 +313,7 @@ const dollarsOrNone = (value: unknown, label: string) =>
 
 export function recordedTitle(action: string) {
   if (action === 'NOD_browser') return 'Browser';
+  if (action === 'NOD_workspace_command') return 'Run a workspace command';
   if (action === 'NOD_notification_preferences_update') return 'Change settings';
   if (action.startsWith('NOD_') && action !== 'NOD_read_source') return approvalTitle(action).title;
   const { app, label } = actionTitle(action);

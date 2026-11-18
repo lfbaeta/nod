@@ -12,6 +12,7 @@ import type {
   AgentEvent,
   AgentImage,
   AgentSession,
+  AgentSessionOptions,
   AgentTool,
   AgentToolOutcome,
   AgentToolResult,
@@ -59,7 +60,7 @@ function toolProgress() {
       for (const result of results) {
         if (result.error === undefined) failures.delete(result.name);
         else if (
-          /^(?:Validation failed for tool |Invalid (?:arguments for tool |[\w ]+ (?:input[.:]|arguments(?: at|[.:])))|Tool \S+ not found|This source (?:failed during this check|check has reached its read limit)|Nod could not confirm it was still on the page and control it checked|(?:This connected|The selected) account changed\.|The trust check couldn|The action review model is unavailable|Nod could not write an accurate confirmation)/.test(
+          /^(?:Validation failed for tool |Invalid (?:arguments for tool |[\w ]+ (?:input[.:]|arguments(?: at|[.:])))|Tool \S+ not found|This source (?:failed during this check|check has reached its read limit)|Nod could not confirm it was still on the page and control it checked|(?:This connected|The selected) account changed\.|The trust check couldn|The action review model is unavailable|Nod could not write an accurate confirmation|The workspace command did not run)/.test(
             result.error,
           )
         ) {
@@ -719,6 +720,50 @@ export function createAgentRuntime(dependencies: {
         };
         return { gate, settle: () => decide(gate.asked) };
       };
+      const sandboxTool =
+        (source: ExecutionScope, cwd: string): AgentSessionOptions['runTool'] =>
+        (name, params, run, options) => {
+          const admitted = name === 'bash' ? admission() : undefined;
+          const pending = guard(
+            name,
+            params,
+            async () => {
+              if (!admitted) return run();
+              await admitted.gate.admit(false);
+              assertActive();
+              const input = params as { command?: unknown; timeout?: unknown };
+              if (
+                typeof input?.command !== 'string' ||
+                (input.timeout !== undefined &&
+                  (typeof input.timeout !== 'number' || !Number.isFinite(input.timeout)))
+              )
+                throw new Error('The workspace command or timeout is invalid.');
+              if (!context.checkWorkspaceCommand)
+                throw new Error(
+                  'Workspace command checks are unavailable. The command did not run.',
+                );
+              const checked = await context.checkWorkspaceCommand(
+                {
+                  command: input.command,
+                  cwd,
+                  timeoutSeconds: Math.max(
+                    1,
+                    Math.ceil((input.timeout as number | undefined) ?? 3540),
+                  ),
+                },
+                signal,
+              );
+              assertActive();
+              const operation = checked.signal ? AbortSignal.any([signal, checked.signal]) : signal;
+              operation.throwIfAborted();
+              const result = await untilAborted(run(operation), operation);
+              await checked.record();
+              return result;
+            },
+            { ...options, execution: source },
+          );
+          return admitted ? pending.finally(admitted.settle) : pending;
+        };
       const bind = (turn: Turn, take: () => Promise<unknown>): AgentTool[] =>
         [
           ...nodTools(turn, skills, dependencies.documentation),
@@ -900,8 +945,7 @@ export function createAgentRuntime(dependencies: {
             }).filter((tool) => !parentTools.has(tool.name)),
             workspace: { ...workspace, path: childPath },
             timeZone: context.timeZone,
-            runTool: (name, params, run, options) =>
-              guard(name, params, run, { ...options, execution: source }),
+            runTool: sandboxTool(source, childPath),
             shouldStop: (results) => stopped || overBudget() || childProgress.stopped(results),
             onEvent: (event) => {
               countUsage(event);
@@ -1062,7 +1106,7 @@ export function createAgentRuntime(dependencies: {
         workspace,
         ...(context.readAudio ? { readAudio: context.readAudio } : {}),
         timeZone: context.timeZone,
-        runTool: guard,
+        runTool: sandboxTool(execution, workspace.path),
         shouldStop: (results) => {
           if (stopped || finalDelivered) return true;
           if (progress.stopped(results)) return true;

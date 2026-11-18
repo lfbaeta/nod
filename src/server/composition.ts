@@ -1731,7 +1731,12 @@ async function initializeApplication(
       return result;
     },
     async (action, args, expectedRevision, client) => {
-      if (['NOD_browser', 'NOD_vault_allow', 'NOD_bug_report_send'].includes(action)) return;
+      if (
+        ['NOD_browser', 'NOD_vault_allow', 'NOD_bug_report_send', 'NOD_workspace_command'].includes(
+          action,
+        )
+      )
+        return;
       if (action === 'NOD_limits_update') limitsInput.parse(args);
       else if (action.startsWith('NOD_')) {
         if (
@@ -2268,6 +2273,48 @@ async function initializeApplication(
           );
         }
         return tasks.execute(turn, raw, sourceMessageId, priorMessageId, priorHandoff);
+      },
+      checkWorkspaceCommand: async (turn, input, signal) => {
+        signal = AbortSignal.any([signal, closing.signal]);
+        signal.throwIfAborted();
+        const verdict = await trust
+          .check(turn, 'NOD_workspace_command', input, signal)
+          .catch((error: unknown) => {
+            signal.throwIfAborted();
+            throw Object.assign(
+              new Error(
+                `The workspace command did not run because its Trust check failed: ${safeIntegrationFailure(error)}`,
+              ),
+              { notRun: true },
+            );
+          });
+        signal.throwIfAborted();
+        if (verdict.confirm)
+          throw Object.assign(
+            new Error(
+              'The workspace command did not run. Trust could not verify permission for all of its effects. Use a connected app or browser action when an approval is needed.',
+            ),
+            { notRun: true },
+          );
+        const allowed = await approvals.request(turn, 'NOD_workspace_command', input, {
+          allowed: true,
+          basis: verdict.basis,
+          expectedChatRevision: verdict.basis.kind === 'read' ? undefined : verdict.chatRevision,
+          signal,
+          run: async () => true,
+        });
+        if (allowed !== true)
+          throw Object.assign(
+            new Error(
+              'The workspace command did not run because its permission is no longer current.',
+            ),
+            { notRun: true },
+          );
+        signal.throwIfAborted();
+        return {
+          signal,
+          record: () => ledger.action(turn.turnId, 'NOD_workspace_command', verdict.basis),
+        };
       },
       startTurn: async (turn) => {
         const origin = await turnOrigin(turn.turnId);
