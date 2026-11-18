@@ -45,7 +45,7 @@ export function createSkillLibrary(
       `The skill metadata is invalid${diagnostics
         .map(
           ({ path, message, collision }, index) =>
-            `${index ? ';' : ':'} ${path} ${message}${collision ? ` with ${collision.winnerPath}` : ''}`,
+            `${index ? ';' : ':'} ${message} in ${collision ? `${collision.winnerPath} and ${collision.loserPath}` : path}`,
         )
         .join('')}.`,
     );
