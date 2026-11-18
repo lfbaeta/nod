@@ -2197,12 +2197,12 @@ async function rememberState(window) {
 }
 
 async function openedDuringUpdateRestart() {
-  macInstallerBusy =
-    process.platform === 'darwin' &&
-    app.isPackaged &&
-    !testInstall &&
-    (await macInstallerRunning('dev.nod.desktop.ShipIt'));
-  if (!macInstallerBusy) return false;
+  if (process.platform !== 'darwin' || !app.isPackaged || testInstall) return false;
+  const running = await macInstallerRunning('dev.nod.desktop.ShipIt').catch(async (error) => {
+    await updateEvent('installer-check-failed', { code: error.code, signal: error.signal });
+  });
+  macInstallerBusy = running !== false;
+  if (!running) return false;
   const version = await resumeRead.then((text) => JSON.parse(text).version).catch(() => undefined);
   const restart = typeof version === 'string' && version !== app.getVersion();
   await updateEvent('installer-running', { restart });

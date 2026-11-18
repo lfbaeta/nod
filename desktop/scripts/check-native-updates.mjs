@@ -27,6 +27,7 @@ import { fileURLToPath } from 'node:url';
 import { packager } from '@electron/packager';
 import { transformWithEsbuild } from 'vite';
 import { withAppleSigning } from '../../.github/scripts/with-apple-signing.mjs';
+import { macInstallerRunning } from '../main/updates.mjs';
 import { run, signApplication, signingConfiguration } from './release-tools.mjs';
 
 const source = fileURLToPath(import.meta.url);
@@ -601,7 +602,8 @@ async function main() {
         if (
           fixture.restartMarker &&
           !entry.reopenedAt &&
-          events.some((event) => event.event === 'files-closed')
+          events.some((event) => event.event === 'files-closed') &&
+          (await macInstallerRunning(`${fixture.identifier}.ShipIt`))
         ) {
           entry.reopenedAt = new Date().toISOString();
           spawn(executable, [], { stdio: 'ignore' }).on('error', (error) => {

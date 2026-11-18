@@ -498,12 +498,13 @@ export function createDesktopUpdater({
 }
 
 export async function macInstallerRunning(label) {
-  const { stdout } = await promisify(execFile)(
-    '/bin/launchctl',
-    ['print', `gui/${process.getuid()}/${label}`],
-    { timeout: 5_000 },
-  ).catch(() => ({ stdout: '' }));
-  return /^\tstate = running$/m.test(stdout);
+  const { stdout } = await promisify(execFile)('/bin/launchctl', ['list', label], {
+    timeout: 5_000,
+  }).catch((error) => {
+    if (error.code === 113) return { stdout: '' };
+    throw error;
+  });
+  return /^\t"PID" = \d+;$/m.test(stdout);
 }
 
 export function startDesktopUpdateChecks({
