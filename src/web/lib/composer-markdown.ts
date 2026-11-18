@@ -1,7 +1,15 @@
 import type { JSONContent } from '@tiptap/core';
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
 import type { Root as HtmlRoot } from 'hast';
-import type { BlockContent, Heading, Paragraph, PhrasingContent, Root, RootContent } from 'mdast';
+import type {
+  BlockContent,
+  Heading,
+  Html,
+  Paragraph,
+  PhrasingContent,
+  Root,
+  RootContent,
+} from 'mdast';
 import { LinkifyIt } from 'linkify-it';
 import { unified } from 'unified';
 import remarkParse from 'remark-parse';
@@ -24,7 +32,6 @@ const markdown = unified()
   });
 const linkify = new LinkifyIt({ fuzzyLink: true });
 const formatted = ['delete', 'emphasis', 'inlineCode', 'link', 'strong'];
-const paragraph: Paragraph = { type: 'paragraph', children: [] };
 
 function literal(value: string): PhrasingContent[] {
   if (!value.startsWith('/') && safeMessageLink(value, window.location.origin))
@@ -225,50 +232,79 @@ function tableInline(nodes: PhrasingContent[]): PhrasingContent[] {
     );
 }
 
-function phrasingMarkdown(children: PhrasingContent[], block: Heading | Paragraph = paragraph) {
-  return markdown.stringify({ type: 'root', children: [{ ...block, children }] });
+function phrasingMarkdown(children: PhrasingContent[]) {
+  return markdown
+    .stringify({ type: 'root', children: [{ type: 'paragraph', children }] })
+    .slice(0, -1);
 }
 
 function isFormatted(node: { type: string; value?: unknown }) {
   return formatted.includes(node.type) || (node.type === 'html' && node.value === '<u>');
 }
 
-function keepsFormatting(children: PhrasingContent[], block: Heading | Paragraph) {
-  if (!children.some((child) => child.type === 'html' && /[*~`]/.test(child.value))) return true;
-  const expected = children
-    .filter(isFormatted)
-    .map((child) => phrasingMarkdown([child]).slice(0, -1));
-  if (!expected.length) return true;
-  let source = phrasingMarkdown(children, block);
-  if (source.length > 5000)
-    source = phrasingMarkdown(
-      children.map((child, index) => {
-        if (child.type !== 'html' || !child.value.includes('\n')) return child;
-        const lines = child.value.split('\n');
-        return {
-          ...child,
-          value: lines
-            .filter(
-              (line, number) =>
-                (number === 0 && index > 0) ||
-                (number === lines.length - 1 && index < children.length - 1) ||
-                /^ {0,3}(```|~~~|<)/.test(line),
-            )
-            .join('\n'),
-        };
-      }),
-      block,
-    );
-  let matched = 0;
-  visit(markdown.parse(source), (node, _, parent) => {
-    if (
-      isFormatted(node) &&
-      (parent?.type === 'paragraph' || parent?.type === 'heading') &&
-      source.slice(node.position!.start.offset, node.position!.end.offset) === expected[matched]
-    )
-      matched++;
+function nearFormatting(value: string, before: boolean, after: boolean) {
+  const lines = value.split('\n');
+  return lines
+    .flatMap((line, number) => {
+      const first = number === 0 && before;
+      const last = number === lines.length - 1 && after;
+      if (/^ {0,3}(```|~~~|<)/.test(line) || (first && last && line.length <= 2000)) return [line];
+      if (first && last) return [`${line.slice(0, 1000)} ${line.slice(-1000)}`];
+      if (first) return [line.slice(0, 1000)];
+      if (last) return [line.slice(-1000)];
+      return [];
+    })
+    .join('\n');
+}
+
+function keepsFormatting(children: PhrasingContent[], heading?: Heading) {
+  if (!children.some((child) => child.type === 'html' && /[*_~`]/.test(child.value))) return true;
+  const plain = (child: PhrasingContent): child is Html =>
+    child.type === 'html' && !isFormatted(child);
+  const large = children.reduce((size, child) => size + (plain(child) ? child.value.length : 0), 0);
+  const checked =
+    large > 5000
+      ? children.map((child, index) =>
+          plain(child)
+            ? {
+                ...child,
+                value: nearFormatting(child.value, index > 0, index < children.length - 1),
+              }
+            : child,
+        )
+      : children;
+  const parts = checked.map((child) => (plain(child) ? child.value : phrasingMarkdown([child])));
+  const prefix = heading ? `${'#'.repeat(heading.depth)} ` : '';
+  const source = markdown.stringify({
+    type: 'root',
+    children: [{ ...(heading ?? { type: 'paragraph' }), children: checked } as Heading | Paragraph],
   });
-  return matched === expected.length;
+  const joined = prefix + parts.join('');
+  const offsets: number[] = [];
+  let at = 0;
+  for (const unit of joined.split('')) {
+    offsets.push(at);
+    if (source[at] === unit) at++;
+    else {
+      const entity = source.slice(at).match(/^&#x([0-9a-f]+);/i);
+      if (!entity || String.fromCodePoint(parseInt(entity[1], 16)) !== unit) return false;
+      at += entity[0].length;
+    }
+  }
+  offsets.push(at);
+  const expected = new Set<string>();
+  let position = prefix.length;
+  parts.forEach((part, index) => {
+    const [from, to] = [offsets[position], offsets[position + part.length]];
+    if (isFormatted(checked[index])) expected.add(`${from}:${source.slice(from, to)}`);
+    position += part.length;
+  });
+  visit(markdown.parse(source), (node, _, parent) => {
+    const { start, end } = node.position ?? {};
+    if (isFormatted(node) && start && end && ['paragraph', 'heading'].includes(parent?.type ?? ''))
+      expected.delete(`${start.offset}:${source.slice(start.offset, end.offset)}`);
+  });
+  return !expected.size;
 }
 
 function serializeComposerMarkdown(document: ProseMirrorNode, display = false) {
@@ -288,10 +324,10 @@ function serializeComposerMarkdown(document: ProseMirrorNode, display = false) {
         );
       if (child.value.match(/\\*$/)![0].length % 2) child.value += '\\';
     });
-    if (!keepsFormatting(children, node.type === 'heading' ? node : paragraph))
+    if (!keepsFormatting(children, node.type === 'heading' ? node : undefined))
       for (const child of children)
         if (child.type === 'html')
-          child.value = child.value.replace(/(?<!\\)((?:\\\\)*)([*~`])/g, '$1\\$2');
+          child.value = child.value.replace(/(?<!\\)((?:\\\\)*)([*_~`])/g, '$1\\$2');
   });
   const last = content.at(-1);
   const trailingBreak = last?.type === 'paragraph' && last.content?.at(-1)?.type === 'hardBreak';

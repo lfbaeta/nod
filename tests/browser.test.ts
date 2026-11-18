@@ -4731,6 +4731,7 @@ test('composer preserves keyboard shortcuts, upload retries, previews and failed
           'a\\***x**\\*b',
           '\\*\\**x*',
           '\\*!\\**x*',
+          '\\*Y\\* \\**Y*\\*',
           'y'.repeat(5000) + '\n\\\u0060a \u0060x\u0060',
           '\\\u0060a \u0060x\u0060',
           'a\\\u0060\u0060x\u0060\\\u0060b',
