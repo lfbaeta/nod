@@ -4752,6 +4752,28 @@ test('composer preserves keyboard shortcuts, upload retries, previews and failed
           await submit();
           assert.equal(sends.at(-1).text.trimEnd(), sent);
         }
+        const { Editor } = await import('@tiptap/core');
+        const { createComposerExtensions } = await import('./src/web/lib/composer-editor.ts');
+        const { composerMarkdown } = await import('./src/web/lib/composer-markdown.ts');
+        const serializer = new Editor({ extensions: createComposerExtensions({ submit() {}, upload() {} }) });
+        for (const [address, href] of [
+          ['https://example.test', 'https://example.test'],
+          ['ada@example.test', 'mailto:ada@example.test'],
+          ['www.example.test', 'http://www.example.test'],
+        ]) {
+          serializer.commands.setContent({
+            type: 'doc',
+            content: [{ type: 'paragraph', content: [
+              { type: 'text', text: 'see ' + address },
+              { type: 'text', text: '(x)', marks: [{ type: 'strike' }] },
+            ] }],
+          });
+          const nodes = parseComposerMarkdown(composerMarkdown(serializer.state.doc)).content[0].content;
+          assert.deepEqual(
+            nodes.map((node) => [node.text, node.marks?.map((mark) => mark.attrs?.href ?? mark.type)]),
+            [['see ', undefined], [address, [href]], ['(x)', ['strike']]],
+          );
+        }
         await act(async () => replaceText('| label | value |\n| --- | --- |\n| first | second |'));
         await pasteAtEnd('table tr:last-child td:first-child p', 'A|B\\|C\nD');
         await submit();
