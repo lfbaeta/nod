@@ -59,14 +59,14 @@ export default scenario({
         (run) =>
           run.tools.some(
             (call) =>
-              call.name === 'apps' && !call.isError && /^GMAIL_/.test(String(call.input?.action)),
+              call.name === 'apps' && !call.isError && call.input?.action === 'GMAIL_FETCH_EMAILS',
           ),
         {
           aspect: 'process',
         },
       ),
       check('named-the-newest-email', (run) => ({
-        pass: /harbour lights/i.test(run.said),
+        pass: /harbour lights shoot/i.test(run.said),
         evidence: run.said.slice(0, 400),
       })),
     ];
