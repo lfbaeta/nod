@@ -1,7 +1,7 @@
 import type { JSONContent } from '@tiptap/core';
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
 import type { Root as HtmlRoot } from 'hast';
-import type { BlockContent, PhrasingContent, Root, RootContent } from 'mdast';
+import type { BlockContent, Heading, Paragraph, PhrasingContent, Root, RootContent } from 'mdast';
 import { LinkifyIt } from 'linkify-it';
 import { unified } from 'unified';
 import remarkParse from 'remark-parse';
@@ -24,6 +24,7 @@ const markdown = unified()
   });
 const linkify = new LinkifyIt({ fuzzyLink: true });
 const formatted = ['delete', 'emphasis', 'inlineCode', 'link', 'strong'];
+const paragraph: Paragraph = { type: 'paragraph', children: [] };
 
 function literal(value: string): PhrasingContent[] {
   if (!value.startsWith('/') && safeMessageLink(value, window.location.origin))
@@ -224,20 +225,21 @@ function tableInline(nodes: PhrasingContent[]): PhrasingContent[] {
     );
 }
 
-function phrasingMarkdown(children: PhrasingContent[]) {
-  return markdown.stringify({ type: 'root', children: [{ type: 'paragraph', children }] });
+function phrasingMarkdown(children: PhrasingContent[], block: Heading | Paragraph = paragraph) {
+  return markdown.stringify({ type: 'root', children: [{ ...block, children }] });
 }
 
 function isFormatted(node: { type: string; value?: unknown }) {
   return formatted.includes(node.type) || (node.type === 'html' && node.value === '<u>');
 }
 
-function keepsFormatting(children: PhrasingContent[]) {
+function keepsFormatting(children: PhrasingContent[], block: Heading | Paragraph) {
+  if (!children.some((child) => child.type === 'html' && /[*~`]/.test(child.value))) return true;
   const expected = children
     .filter(isFormatted)
     .map((child) => phrasingMarkdown([child]).slice(0, -1));
   if (!expected.length) return true;
-  let source = phrasingMarkdown(children);
+  let source = phrasingMarkdown(children, block);
   if (source.length > 5000)
     source = phrasingMarkdown(
       children.map((child, index) => {
@@ -255,6 +257,7 @@ function keepsFormatting(children: PhrasingContent[]) {
             .join('\n'),
         };
       }),
+      block,
     );
   let matched = 0;
   visit(markdown.parse(source), (node, _, parent) => {
@@ -285,7 +288,7 @@ function serializeComposerMarkdown(document: ProseMirrorNode, display = false) {
         );
       if (child.value.match(/\\*$/)![0].length % 2) child.value += '\\';
     });
-    if (!keepsFormatting(children))
+    if (!keepsFormatting(children, node.type === 'heading' ? node : paragraph))
       for (const child of children)
         if (child.type === 'html')
           child.value = child.value.replace(/(?<!\\)((?:\\\\)*)([*~`])/g, '$1\\$2');
