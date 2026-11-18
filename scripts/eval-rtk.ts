@@ -252,7 +252,7 @@ const manifest = {
     ...(caseVersion >= 6
       ? {
           'C8-rtk-used':
-            'The execution trace records a real RTK command invocation beyond rewrite probing. A disposable PATH shim logs arguments then execs the installed binary without changing output; applies to the display cases.',
+            'The execution trace records a real RTK command invocation beyond rewrite probing. A wrapper at the protected absolute path records arguments and runs the installed binary without changing output; applies to the display cases.',
         }
       : {}),
   },
