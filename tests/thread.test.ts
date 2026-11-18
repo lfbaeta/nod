@@ -5568,6 +5568,25 @@ test(
           );
           await thread.stopThread();
           await waitFor(settledThread);
+          await onboarding.complete('Alex');
+          assert.equal(onboarding.planning(), undefined);
+          assert.equal(
+            (
+              await db.pool.query(
+                'SELECT 1 FROM onboarding_suggestions WHERE greeted_at IS NOT NULL',
+              )
+            ).rowCount,
+            0,
+          );
+          assert.equal(
+            (
+              await db.pool.query(
+                'SELECT 1 FROM messages WHERE owner_id=$1 AND turn_id IS NULL AND role=$2',
+                [ownerId, 'assistant'],
+              )
+            ).rowCount,
+            0,
+          );
           t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-10-24T12:00:00Z') });
           currentApps = [
             {
