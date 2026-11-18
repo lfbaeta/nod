@@ -189,7 +189,7 @@ function blocks(nodes: JSONContent[], display = false): RootContent[] {
                 type: 'tableCell',
                 children: tableInline(
                   (cell.content ?? []).flatMap((paragraph, index) => [
-                    ...(index ? [{ type: 'break' as const }] : []),
+                    ...(index ? [{ type: 'html' as const, value: '\n' }] : []),
                     ...inline(paragraph.content ?? [], false, !display, display),
                   ]),
                 ),
@@ -204,10 +204,16 @@ function blocks(nodes: JSONContent[], display = false): RootContent[] {
 }
 
 function tableInline(nodes: PhrasingContent[]): PhrasingContent[] {
-  return nodes.map((node) =>
-    node.type === 'break'
-      ? { type: 'html', value: '<br>' }
-      : node.type === 'html'
+  return nodes
+    .reduce<PhrasingContent[]>((merged, node) => {
+      const last = merged.at(-1);
+      if (node.type === 'html' && last?.type === 'html')
+        merged[merged.length - 1] = { ...last, value: last.value + node.value };
+      else merged.push(node);
+      return merged;
+    }, [])
+    .map((node) =>
+      node.type === 'html'
         ? {
             ...node,
             value: node.value
@@ -215,15 +221,12 @@ function tableInline(nodes: PhrasingContent[]): PhrasingContent[] {
                 /(\\*)\|/g,
                 (_, slashes: string) => `${'\\'.repeat(slashes.length * 2 + 1)}|`,
               )
-              .replace(
-                /(\\*)\n/g,
-                (_, slashes: string) => `${slashes}${slashes.length % 2 ? '\\' : ''}<br>`,
-              ),
+              .replace(/(\\*)\n/g, (_, slashes: string) => `${slashes}${slashes}<br>`),
           }
         : 'children' in node
           ? { ...node, children: tableInline(node.children) }
           : node,
-  );
+    );
 }
 
 function serializeComposerMarkdown(document: ProseMirrorNode, display = false) {
