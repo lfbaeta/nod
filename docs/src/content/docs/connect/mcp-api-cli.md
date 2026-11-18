@@ -45,6 +45,8 @@ A failed tool request keeps the server's status and reason. Nod does not retry i
 
 Ask Nod to connect a service it can't find in the app catalog. Nod proposes a way in, called an access path, and sends you a link to a private setup page. There, you paste a token or sign in. The model never sees the token.
 
+Some services give each region or workspace its own address, such as a separate EU address. Each one has its own sign-in, so an account connects only through its own address. Nod uses the address you give it, or asks which region you use before it proposes one. If sign-in ends on the service's home page instead of returning to Nod, tell Nod your workspace address and start again.
+
 | Access path | What Nod calls                                                 | How it signs in                       |
 | ----------- | -------------------------------------------------------------- | ------------------------------------- |
 | MCP server  | Tools on a public HTTPS MCP server, or a private one you enter | A token in a header, or OAuth sign-in |

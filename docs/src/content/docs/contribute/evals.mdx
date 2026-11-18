@@ -61,7 +61,7 @@ The fake apps are hand-written approximations of Composio's responses, not recor
    pnpm run eval:capability doctor --fix
    ```
 
-3. Run all 108 controlled cases, three attempts each.
+3. Run all 111 controlled cases, three attempts each.
 
    ```sh title="Terminal"
    pnpm run eval:capability run
@@ -286,7 +286,7 @@ flowchart TD
 
 ## The suite
 
-The suite has 364 cases: 108 controlled cases, 252 release cases, three live web cases and the harness canary.
+The suite has 367 cases: 111 controlled cases, 252 release cases, three live web cases and the harness canary.
 
 | Status      | Meaning                                                                                                                    |
 | ----------- | -------------------------------------------------------------------------------------------------------------------------- |
@@ -368,6 +368,8 @@ Payment cases use a synthetic merchant and never a real card. They measure task 
 | `purchase-asks-only-to-pay`             | Buy past a cookie wall and an icon-only basket button, asked only to pay          | vault, browser, approvals                | calibrating            |
 | `purchase-within-limit`                 | Buy a charger without spending over my limit, shipping included                   | approvals, vault, browser                | scored                 |
 | `rapid-fire-requests`                   | Three requests sent back to back are all answered once and correctly              | progress, long-running, files            | calibrating            |
+| `regional-mcp-ask`                      | Ask which region before proposing a regional MCP server                           | apps, research                           | calibrating            |
+| `regional-mcp-workspace`                | Propose the MCP server for the region of a known workspace                        | apps, research                           | calibrating            |
 | `reply-drafts`                          | Draft replies in my voice to the emails that need one                             | apps, memory, approvals                  | scored                 |
 | `report-bug-app-reconnect`              | No bug report offer when an app needs reconnecting                                | apps, progress                           | calibrating            |
 | `report-bug-offer`                      | Offer a bug report when a Nod screen is broken                                    | progress                                 | calibrating            |
