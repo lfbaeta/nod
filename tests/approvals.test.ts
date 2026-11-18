@@ -1758,6 +1758,145 @@ test(
         },
       );
 
+      await t.test(
+        'an unquoted web retry keeps the request of the latest task even across channels (LAB-1467)',
+        async (t) => {
+          const website = 'https://calendar.example.test';
+          const event = 'Studio planning';
+          const when = 'November 24, 2030, from 9 to 9:30 AM';
+          const request = `Create an event called ${event} in my iCloud calendar at ${website} on ${when}.`;
+          const create = {
+            website,
+            page: `${website}/calendar`,
+            step: 'click',
+            control: [{ role: 'button', name: 'Create' }],
+            submits: 'unknown',
+            command: { action: 'click', selector: '@e1' },
+          };
+          aligned = ({ action, userMessages }) => {
+            const args = action?.arguments;
+            const instruction = (
+              userMessages as Array<{ text: string; canAuthorize?: boolean }> | undefined
+            )?.find(({ text, canAuthorize }) => text === request && canAuthorize !== false);
+            return action?.name === 'NOD_browser' &&
+              args?.website === website &&
+              args.page === `${website}/calendar` &&
+              args.step === 'click' &&
+              args.control?.[0]?.name === 'Create' &&
+              instruction
+              ? { run: true, because: instruction.text }
+              : false;
+          };
+
+          const startAttempt = async (text: string, message: string, channel?: string) => {
+            const submitted = await messages.submit(text, [], { channel });
+            const parent = await running(submitted.turnId);
+            const task = await tasks.execute(
+              parent,
+              {
+                action: 'start',
+                title: `Create ${event}`,
+                message,
+                doneWhen: `${event} is verified on the calendar on ${when}.`,
+                brief: `Add ${event} on ${when} at ${website}.`,
+                now: 'Checking the calendar',
+              },
+              submitted.messageId,
+            );
+            assert.ok('id' in task);
+            await finish(parent.turnId, 'succeeded');
+            const { rows } = await db.pool.query<{ turn_id: string }>(
+              'SELECT turn_id FROM tasks WHERE id=$1',
+              [task.id],
+            );
+            const worker = await running(rows[0]!.turn_id);
+            await tasks.inherit(worker);
+            return { task, worker };
+          };
+
+          const decoy = await startAttempt('Read the calendar only.', 'I’ll read the calendar.');
+          await thread.reply(decoy.worker, 'I read the calendar.');
+          await tasks.settle(decoy.worker, 'I read the calendar.');
+          await finish(decoy.worker.turnId, 'succeeded');
+
+          const unseen = await messages.submit('Then try it again', [], {
+            channel: 'telegram:fixture',
+          });
+          const unseenRetry = await running(unseen.turnId);
+          await assert.rejects(
+            tasks.execute(
+              unseenRetry,
+              { action: 'reply', ids: [decoy.task.id], retry: true },
+              unseen.messageId,
+            ),
+            /That task is closed/,
+          );
+          await finish(unseenRetry.turnId, 'succeeded');
+
+          const { task, worker: first } = await startAttempt(
+            request,
+            'I’ll create the calendar event.',
+            'telegram:fixture',
+          );
+          const beforeFirstClick = calls.length;
+          await approvals.request(first, 'NOD_browser', create);
+          assert.equal(calls.length, beforeFirstClick + 1);
+          const unverified = `I couldn’t verify that ${event} was saved.`;
+          await thread.reply(first, unverified);
+          await tasks.settle(first, unverified);
+          await finish(first.turnId, 'succeeded');
+
+          const submitted = await messages.submit('Then try it again');
+          const ownerRetry = await running(submitted.turnId);
+          assert.equal((await row(ownerRetry.turnId)).session_id, ownerRetry.threadId);
+          await assert.rejects(
+            tasks.execute(
+              ownerRetry,
+              { action: 'reply', ids: [decoy.task.id], retry: true },
+              submitted.messageId,
+            ),
+            /That task is closed/,
+          );
+          await tasks.execute(
+            ownerRetry,
+            { action: 'reply', ids: [task.id], retry: true },
+            submitted.messageId,
+          );
+          await finish(ownerRetry.turnId, 'succeeded');
+          const { rows } = await db.pool.query<{ turn_id: string }>(
+            'SELECT turn_id FROM tasks WHERE id=$1',
+            [task.id],
+          );
+          const retry = await running(rows[0]!.turn_id);
+          await tasks.inherit(retry);
+          const retryRow = await row(retry.turnId);
+          assert.equal(retryRow.session_id, task.id);
+          assert.equal(retryRow.message_id, submitted.messageId);
+          assert.equal(retryRow.channel, 'web');
+          t.after(async () => {
+            await db.pool.query(
+              "UPDATE approvals SET status='expired' WHERE turn_id=$1 AND status='pending'",
+              [retry.turnId],
+            );
+            await tasks.settle(retry, 'Fixture finished.');
+            await finish(retry.turnId, 'succeeded');
+          });
+          const result = await trust.check(retry, 'NOD_browser', create);
+          assert.equal(result.confirm, false);
+          assert.equal(result.basis.kind, 'message');
+          assert.equal(result.basis.messageId, (await row(first.turnId)).message_id);
+
+          const before = calls.length;
+          await propose(retry, 'NOD_browser', {
+            ...create,
+            page: `${website}/calendar/settings`,
+          });
+          assert.equal(calls.length, before);
+          await db.pool.query('UPDATE turns SET withdrawn=true WHERE id=$1', [first.turnId]);
+          assert.equal((await trust.check(retry, 'NOD_browser', create)).confirm, true);
+        },
+      );
+
       await t.test('a newer chat correction before action handoff prevents the write', async () => {
         aligned = true;
         const action = 'GMAIL_SEND_EMAIL';

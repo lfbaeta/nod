@@ -43,6 +43,8 @@ The extra run uses the saved instruction and delivery channel. The usual approva
 
 The button shows **Queued**, **Working**, or **Needs your input** while a run is active. You cannot start another run until that run ends. A recurring schedule skips timed runs that fall due during an active run. A one-time schedule waits for the active run to end.
 
+Select **Needs your input** to open the run's current question in Chat, where you can approve an action or complete sign-in. This opens the existing request without starting another run.
+
 **Run now** runs a watch even when its connected accounts have no changes. If the connection drops, **Try again** checks or starts the same run. It cannot start a second copy.
 
 ## What happens when a schedule runs

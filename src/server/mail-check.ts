@@ -27,6 +27,7 @@ export function createMailCheck({
       },
     ],
   };
+  const slots = 6;
   let checking = 0;
   const expired = Symbol('mail check limit');
   const waiting: Array<() => void> = [];
@@ -47,7 +48,7 @@ export function createMailCheck({
       };
       if (signal.aborted) return reject(signal.reason);
       signal.addEventListener('abort', cancel, { once: true });
-      if (checking < 6) start();
+      if (checking < slots) start();
       else waiting.push(start);
     });
     const limit = AbortSignal.timeout(15_000);
@@ -86,6 +87,7 @@ export function createMailCheck({
     if (signal?.aborted) return emails.map(() => stopped);
     const decision = decisions?.configured === false ? undefined : decisions;
     const read = new AbortController();
+    let timeouts = 0;
     const stop = signal ? AbortSignal.any([signal, read.signal]) : read.signal;
     return Promise.all(
       emails.map(async (email) => {
@@ -110,6 +112,7 @@ export function createMailCheck({
                   ),
             stop,
           );
+          timeouts = 0;
           if (result && typeof result === 'object') {
             const access = (result as { access?: unknown }).access;
             if (typeof access === 'boolean') return access;
@@ -118,7 +121,7 @@ export function createMailCheck({
         } catch (error) {
           if (signal?.aborted) return stopped;
           if (error === expired) {
-            read.abort();
+            if (++timeouts === slots) read.abort();
             return 'the check model did not answer within 15 seconds';
           }
           if (read.signal.aborted) return stopped;

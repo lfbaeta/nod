@@ -353,7 +353,11 @@ export interface Schedule {
   revision: number;
   nextRun: string | null;
   lastRun: ScheduleRun | null;
-  activeRun: { turnId: string; status: 'queued' | 'running' | 'waiting' } | null;
+  activeRun: {
+    turnId: string;
+    status: 'queued' | 'running' | 'waiting';
+    questionMessageId: string | null;
+  } | null;
   baselineObservation: ScheduleObservation | null;
   watch: string[] | null;
   model: ModelSelection | null;

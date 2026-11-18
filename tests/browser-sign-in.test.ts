@@ -688,6 +688,12 @@ test(
         );
         return;
       }
+      if (request.url === '/twin' || request.url === '/twin-inner') {
+        response.end(
+          `<body style="margin:8px"><form action="/selected" method="post" style="margin:0"><button style="width:200px;height:40px">Continue with Example</button></form>${request.url === '/twin' ? '<div style="position:fixed;left:0;top:0;width:300px;height:60px"></div><iframe title="Sign in" src="/twin-inner" style="width:500px;height:300px;margin:150px 200px;border:0"></iframe>' : ''}`,
+        );
+        return;
+      }
       if (request.url === '/cancel') {
         response.end(
           '<form action="/selected" method="post"><button id="primary" onmousedown="const xhr=new XMLHttpRequest();xhr.open(\'POST\',\'/pressed\',false);xhr.send()">Continue with Example</button></form><button id="ordinary" onclick="if(event.isTrusted)fetch(\'/ordinary\',{method:\'POST\'})">Continue browsing</button>',
@@ -702,7 +708,7 @@ test(
       response.end(
         `
         ${request.url === '/scaled-inner' ? '<script>addEventListener("pointermove",()=>{const xhr=new XMLHttpRequest();xhr.open("POST","/moved",false);xhr.send()},{once:true})</script>' : ''}
-        <base href="/"><form action="selected" method="post">${primary}<button id="alternate" formaction="/alternate">Use another account</button></form><a id="link" href="linked">Continue with Link</a><button id="change" onclick="${change}">Change control</button>`,
+        <base href="/"><style>#primary{position:relative}#primary::after{content:"";position:absolute;inset:0}</style><form action="selected" method="post">${primary}<button id="alternate" formaction="/alternate">Use another account</button></form><a id="link" href="linked">Continue with Link</a><button id="change" onclick="${change}">Change control</button>`,
       );
     });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -821,15 +827,38 @@ test(
       await assert.rejects(
         client.signInMethods!('fixture', origin, [{ label: 'Ignored', selector: '#primary' }]),
       );
+      await act({ action: 'open', url: origin + '/twin' });
+      await act({ action: 'wait', load: 'networkidle' });
+      const twin = /button "Continue with Example"[^\n]*ref=(e\d+)/.exec(
+        (await act({ action: 'snapshot' })).text,
+      )?.[1];
+      assert.ok(twin);
+      await assert.rejects(
+        client.signInMethods!('fixture', origin, [{ label: 'Ignored', selector: '@' + twin }]),
+      );
       for (const path of ['/framed', '/foreign']) {
         await act({ action: 'open', url: origin + path });
         await act({ action: 'wait', text: 'Frame ready' });
         const inspect = () =>
           client.signInMethods!('fixture', origin, [{ label: 'Ignored', selector: '#primary' }]);
+        const framedRef = /button "Continue with Example"[^\n]*ref=(e\d+)/.exec(
+          (await act({ action: 'snapshot' })).text,
+        )?.[1];
+        assert.ok(framedRef);
+        const inspectRef = () =>
+          client.signInMethods!('fixture', origin, [
+            { label: 'Ignored', selector: '@' + framedRef },
+          ]);
         if (path === '/foreign') {
           await assert.rejects(inspect());
+          await assert.rejects(
+            inspectRef(),
+            (error) =>
+              error instanceof BrowserActionError && error.code === 'browser_target_changed',
+          );
           continue;
         }
+        assert.equal((await inspectRef()).methods[0]!.label, 'Continue with Example');
         const framed = await inspect();
         assert.equal(framed.methods[0]!.label, 'Continue with Example');
         await act({ action: 'click', selector: '#reload-frame' });
