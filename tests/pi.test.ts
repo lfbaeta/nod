@@ -263,6 +263,11 @@ test('models and routers complete tool discovery inside the endpoint context', a
             assert.ok(JSON.stringify(body).includes('Synthetic retained recent turn.'));
           }
         }
+        if (!summarizing)
+          assert.ok(
+            body.tools.some((tool: any) => tool.function.name === 'apps'),
+            'Connected apps are unreachable without the apps tool.',
+          );
         const call = summarizing ? undefined : calls[requests++];
         if (call) assert.ok(body.tools.some((tool: any) => tool.function.name === call[0]));
         const chunk = {

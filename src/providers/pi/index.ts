@@ -670,6 +670,11 @@ export function createPiAgent(options: {
         );
       if (input.newRequest && cold) startRequest(manager);
       const sandboxTools = input.restricted ? [] : createSandbox(input.workspace, input.timeZone);
+      const compactTools = [
+        ...sandboxTools.map((tool) => tool.name),
+        'nod_tool_search',
+        ...input.tools.filter((tool) => tool.name === 'apps').map((tool) => tool.name),
+      ];
       const tools: ToolDefinition[] = [
         ...sandboxTools.map((definition): ToolDefinition => ({
           ...definition,
@@ -787,11 +792,7 @@ export function createPiAgent(options: {
                         }),
                         description: tool.description.replaceAll('tool_search', 'nod_tool_search'),
                         execute: async (id, params, signal, update, context) => {
-                          if (budget.compact)
-                            pi.setActiveTools([
-                              ...sandboxTools.map((tool) => tool.name),
-                              'nod_tool_search',
-                            ]);
+                          if (budget.compact) pi.setActiveTools(compactTools);
                           const result = await tool.execute(
                             id,
                             budget.compact
@@ -1082,8 +1083,7 @@ export function createPiAgent(options: {
         sessionManager: manager,
         settingsManager: settings,
       });
-      if (budget.compact)
-        session.setActiveToolsByName([...sandboxTools.map((tool) => tool.name), 'nod_tool_search']);
+      if (budget.compact) session.setActiveToolsByName(compactTools);
       if (disposed) {
         session.dispose();
         throw new Error('The agent service has stopped.');

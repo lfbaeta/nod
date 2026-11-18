@@ -254,7 +254,7 @@ Background work, such as memory upkeep, uses a smaller model from the same conne
 
 ## Models with a small context window
 
-For a context window below 65,536 tokens, Nod uses short instructions and loads one detailed tool at a time. It reads guides, saved memory and older messages when needed. Large tool results stay in workspace files, with a short preview in the conversation.
+For a context window below 65,536 tokens, Nod uses short instructions and loads one detailed tool at a time. The tool for connected apps stays available. It reads guides, saved memory and older messages when needed. Large tool results stay in workspace files, with a short preview in the conversation.
 
 Nod limits reply size and asks Pi to start history compaction earlier. Pi handles context limits from the provider and can summarize older work before continuing. Large images, tool schemas or a request that cannot be summarized can still need a larger window. A failure keeps the provider's or compaction's specific reason.
 
