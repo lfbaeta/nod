@@ -352,7 +352,7 @@ export function SetupActions({
         }
         const app = result.apps.get(href);
         if (!app || app.available === false) {
-          fail('This sign-in link is no longer available. Ask Nod to connect again.');
+          fail(app?.error ?? 'This sign-in link is no longer available. Ask Nod to connect again.');
           return;
         }
         if (app.pairingConfirmed === true) {

@@ -6824,6 +6824,7 @@ test(
     assert.equal((await status()).oauthStatus, 'cancelled');
     assert.equal((await status()).oauthError, undefined);
     assert.equal((await rawStatus(first.json().url)).apps[0].available, false);
+    assert.equal((await rawStatus(first.json().url)).apps[0].error, undefined);
     assert.notEqual((await setupStatus()).apps[0].available, false);
     const firstHash = createHash('sha256').update(first.json().url).digest('hex');
     const mixed = await app.inject({
@@ -6853,6 +6854,11 @@ test(
     assert.equal(await callback(states[1], 'code=fail'), 'failed');
     assert.equal((await status()).oauthStatus, 'failed');
     assert.match((await status()).oauthError, /Synthetic exchange failure/);
+    assert.match(
+      (await rawStatus(authorizations.get(states[1])!.url)).apps[0].error,
+      /Synthetic exchange failure/,
+    );
+    assert.equal((await setupStatus()).apps[0].error, undefined);
     beginFails = true;
     assert.equal((await authorize({ restart: true })).statusCode, 502);
     assert.equal((await status()).oauthError, undefined);
@@ -6873,6 +6879,10 @@ test(
       (await status()).oauthError,
       /invalid_request.*Synthetic resource parameter refused/,
     );
+    const refused = (await rawStatus(authorizations.get(states[2])!.url)).apps[0];
+    assert.equal(refused.available, false);
+    assert.match(refused.error, /invalid_request.*Synthetic resource parameter refused/);
+    assert.ok(!refused.error.includes('synthetic-private'));
     assert.equal((await authorize()).statusCode, 200);
     assert.equal(await callback(states[3], 'error='), 'failed');
     assert.match((await status()).oauthError, /no authorization code/);

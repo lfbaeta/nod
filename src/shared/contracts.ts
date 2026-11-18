@@ -249,6 +249,7 @@ export interface AppSetupStatus {
     logoUrl?: string;
     pairingConfirmed?: boolean;
     available?: boolean;
+    error?: string;
   }>;
 }
 export interface Configuration {

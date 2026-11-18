@@ -4535,13 +4535,13 @@ const captured=[];
 const client={init(_key,options){this.options=options},capture(event,properties={}){const value=this.options.before_send({event,properties});if(value)captured.push(value)},reset(){},set_config(){},stopSessionRecording(){},startSessionRecording(){}};
 setAnalyticsClient(client);configureAnalytics({enabled:true,distinctId:'local:connection-owner',environment:'development'},'web');
 const attempt='a'.repeat(43);
-let connected=false,checks=0,delay=false,release;
+let connected=false,checks=0,delay=false,release,failure;
 window.fetch=globalThis.fetch=async(path,options)=>{
  if(path==='/api/apps/gmail/connect')return Response.json({url:'https://example.test/sign-in',attempt});
  if(path==='/api/apps/setup-cancel')return Response.json({ok:true});
  assert.equal(path,'/api/apps/setup-status');checks++;
  const hash=JSON.parse(options.body).hashes[0];
- const response=()=>Response.json({completed:connected?[hash]:[],apps:[{hash,available:true}]});
+ const response=()=>Response.json({completed:connected?[hash]:[],apps:[{hash,available:!failure,...(failure?{error:failure}:{})}]});
  if(delay)return new Promise(resolve=>{release=()=>resolve(response())});
  return response();
 };
@@ -4558,10 +4558,16 @@ await settle(()=>checks===2);assert.equal(completions().length,0,'an unverified 
 await start();await settle(()=>checks===3);await act(async()=>signIn.cancel());assert.equal(completions().length,0);
 connected=true;await start();await settle(()=>completions().length===1);
 assert.deepEqual(completions()[0].properties.entry,'onboarding');
+connected=false;failure='Sign-in could not finish: invalid_request: Synthetic refusal';
+await start();await settle(()=>signIn.error===failure);
+failure=undefined;const polled=checks;await start();await settle(()=>checks>polled);
+failure='Sign-in could not finish: Synthetic exchange failure';
+await act(async()=>channels[0].onmessage({data:{connection:'failed',service:'gmail',attempt}}));
+await settle(()=>signIn.error===failure);failure=undefined;
 delay=true;release=undefined;await start();await settle(()=>release);
 setRequestAccount('other-owner');await act(async()=>release());assert.equal(completions().length,1);
 await act(async()=>root.unmount());configureAnalytics(undefined);dom.window.close();
-console.log(JSON.stringify({result:'pass',checks:['confirmed-success','original-entry','unverified-broadcast','cancelled-attempt','owner-fence'],events:captured},null,2));
+console.log(JSON.stringify({result:'pass',checks:['confirmed-success','original-entry','failure-reason','unverified-broadcast','cancelled-attempt','owner-fence'],events:captured},null,2));
 process.exit(0);
 `,
   });

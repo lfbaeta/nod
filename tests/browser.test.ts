@@ -7311,7 +7311,7 @@ test('a verified app connection opens chat only on request and keeps private det
       const url = 'https://example.test/sign-in';
       const hash = await setupLinkHash(url);
       const attempt = 'A'.repeat(43);
-      let connected = false, statusReads = 0;
+      let connected = false, statusReads = 0, failure;
       const requests = [], captured = [];
       const app = { slug: 'gmail', name: privateName, status: 'disconnected', triggersEnabled: false, direct: true };
       globalThis.fetch = async (path, options = {}) => {
@@ -7319,7 +7319,7 @@ test('a verified app connection opens chat only on request and keeps private det
         if (path === '/api/apps') return Response.json(connected ? [{ ...app, status: 'connected', connectionId: 'private-connection' }] : []);
         if (path === '/api/apps/catalog') return Response.json([app]);
         if (path === '/api/apps/gmail/connect') return Response.json({ url, attempt });
-        if (path === '/api/apps/setup-status') { statusReads++; return Response.json({ completed: connected ? [hash] : [], apps: [{ hash, slug: 'gmail', name: privateName, available: true }] }); }
+        if (path === '/api/apps/setup-status') { statusReads++; return Response.json({ completed: connected ? [hash] : [], apps: [{ hash, slug: 'gmail', name: privateName, available: !failure, ...(failure ? { error: failure } : {}) }] }); }
         throw new Error('Unexpected fixture request: ' + path);
       };
       setRequestAccount('synthetic-owner');
@@ -7371,6 +7371,26 @@ test('a verified app connection opens chat only on request and keeps private det
         assert.equal(window.location.pathname, '/');
         assert.equal(captured.filter(item => item.event === 'app_connection_chat_requested').length, 1);
         assert.equal(requests.filter(([path]) => path === '/api/messages').length, 0);
+        await act(async () => root.render(null));
+        pageDataCache.clear();
+        connected = false;
+        statusReads = 0;
+        window.history.replaceState(null, '', '/apps');
+        await act(async () => root.render(createElement(Apps, { key: 'failed-sign-in', onAsk() {} })));
+        await settle(() => document.querySelector('[data-connect-service="gmail"]'));
+        await act(async () => document.querySelector('[data-connect-service="gmail"]').click());
+        await settle(() => statusReads > 0);
+        failure = 'Sign-in could not finish: invalid_request: Synthetic refusal';
+        await act(async () => channels.at(-1).onmessage({ data: { service: 'gmail', attempt, connection: 'failed' } }));
+        await settle(() => document.body.textContent.includes(failure));
+        await act(async () => root.render(null));
+        pageDataCache.clear();
+        statusReads = 0;
+        failure = 'Sign-in could not finish: Synthetic polled refusal';
+        await act(async () => root.render(createElement(Apps, { key: 'polled-failure', onAsk() {} })));
+        await settle(() => document.querySelector('[data-connect-service="gmail"]'));
+        await act(async () => document.querySelector('[data-connect-service="gmail"]').click());
+        await settle(() => document.body.textContent.includes(failure));
       } finally { await act(async () => root.unmount()); dom.window.close(); }
     `,
   });

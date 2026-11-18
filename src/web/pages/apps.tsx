@@ -2,7 +2,7 @@ import { PageTitle } from '../components/page-title';
 import { useEffect, useId, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import { AlertCircle, ListFilter, MessageCircle, Plus, Users, X } from '../components/icons';
-import type { AppSetupStatus, Configuration, Connection } from '../../shared/contracts';
+import type { Configuration, Connection } from '../../shared/contracts';
 import { SetupNotice } from '../components/setup-notice';
 import { ServiceLogo } from '../components/service-logo';
 import { AppConnectionDialog, type AppSignIn } from '../components/app-connection-dialog';
@@ -14,7 +14,7 @@ import { Tabs } from '../components/tabs';
 import { Tooltip } from '../components/tooltip';
 import { AppAccountManager } from '../components/app-account-manager';
 import { api, ApiError, errorMessage } from '../lib/api';
-import { connectionUrl, setupLinkHash } from '../lib/connection-url';
+import { connectionUrl, readSetup } from '../lib/connection-url';
 import { searchApps } from '../lib/app-search';
 import { navigate } from '../lib/navigation';
 import { desktopLinksAvailable, openConnection } from '../lib/desktop';
@@ -227,7 +227,8 @@ export function Apps({
     let checking: Promise<boolean> | undefined;
     let poll: number | undefined;
     let pairingConfirmed = signIn.pairingConfirmed === true;
-    const settle = (outcome: NonNullable<AppSignIn['outcome']>) => {
+    let failed = false;
+    const settle = (outcome: NonNullable<AppSignIn['outcome']>, error?: string) => {
       if (controller.signal.aborted) return;
       controller.abort();
       if (outcome === 'connected') signIn.report();
@@ -238,23 +239,16 @@ export function Apps({
         current?.url === url &&
         current.service === signIn.service &&
         current.attempt === signIn.attempt
-          ? { ...current, outcome }
+          ? { ...current, outcome, ...(error ? { error } : {}) }
           : current,
       );
       void refresh();
     };
     const read = async () => {
       try {
-        const hash = await setupLinkHash(url);
-        const result = await api<AppSetupStatus>('/api/apps/setup-status', {
-          method: 'POST',
-          body: JSON.stringify({ hashes: [hash], pairingUrl: url }),
-          signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)]),
-          cache: 'no-store',
-        });
+        const { completed, app } = await readSetup(url, controller.signal);
         if (controller.signal.aborted) return false;
-        if (!result.completed.includes(hash)) {
-          const app = result.apps.find((app) => app.hash === hash);
+        if (!completed) {
           if (app && app.available !== false) {
             if (app.pairingConfirmed === true && !pairingConfirmed) {
               pairingConfirmed = true;
@@ -269,7 +263,7 @@ export function Apps({
             }
             return false;
           }
-          settle('unavailable');
+          settle(app?.error || failed ? 'failed' : 'unavailable', app?.error);
           return true;
         }
         settle('connected');
@@ -323,13 +317,12 @@ export function Apps({
           void check();
           return;
         }
-        settle(
-          event.data.connection === 'cancelled'
-            ? 'cancelled'
-            : event.data.connection === 'expired'
-              ? 'unavailable'
-              : 'failed',
-        );
+        if (event.data.connection === 'failed') {
+          failed = true;
+          void check().then((settled) => settled || settle('failed'));
+          return;
+        }
+        settle(event.data.connection === 'cancelled' ? 'cancelled' : 'unavailable');
       };
     return () => {
       controller.abort();

@@ -2583,11 +2583,11 @@ export async function createIntegrations(pool: Pool, options: IntegrationOptions
             ? await provider.connectionStatus?.(configuredOwner, pairingUrl).catch(() => undefined)
             : undefined;
         const discoveredLinks = discovered.flatMap(
-          ({ id, link_hash, available, expired, ...service }) => {
+          ({ id, link_hash, available, expired, error, ...service }) => {
             const proposalHash = createHash('sha256').update(`/apps?connect=${id}`).digest('hex');
             return [
               ...(link_hash && hashes.includes(link_hash)
-                ? [{ ...service, hash: link_hash, available }]
+                ? [{ ...service, hash: link_hash, available, ...(error ? { error } : {}) }]
                 : []),
               ...(hashes.includes(proposalHash)
                 ? [{ ...service, hash: proposalHash, ...(expired ? { available: false } : {}) }]
@@ -2605,6 +2605,7 @@ export async function createIntegrations(pool: Pool, options: IntegrationOptions
               slug: row.slug,
               name: 'name' in row && typeof row.name === 'string' ? row.name : info.name,
               ...('available' in row ? { available: row.available } : {}),
+              ...('error' in row && typeof row.error === 'string' ? { error: row.error } : {}),
               ...(info.logoUrl ? { logoUrl: info.logoUrl } : {}),
               ...(connectionStatus?.pairingConfirmed && row.hash === pairingHash
                 ? { pairingConfirmed: true }
