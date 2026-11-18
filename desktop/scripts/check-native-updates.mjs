@@ -390,8 +390,16 @@ async function main() {
       receipt.completed = true;
     });
     if (route.file) {
+      let sent = 0;
+      response.on('close', () => {
+        if (sent === route.bytes) receipt.completed = true;
+      });
       response.writeHead(200, { 'content-type': 'application/zip', 'content-length': route.bytes });
-      createReadStream(route.file).pipe(response);
+      createReadStream(route.file)
+        .on('data', (chunk) => {
+          sent += chunk.length;
+        })
+        .pipe(response);
     } else if (typeof route.text === 'string') {
       response.writeHead(200, { 'content-type': 'text/plain' });
       response.end(route.text);
