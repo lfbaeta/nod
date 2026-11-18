@@ -10,15 +10,12 @@ SetCompressor /SOLID zlib
 !ifdef SIGNER
   !uninstfinalize '"${NODE}" "${SIGNER}" "%1"' = 0
 !endif
-ShowInstDetails show
+ShowInstDetails hide
+AutoCloseWindow true
 !define MUI_ICON "${ICON}"
 !define MUI_UNICON "${ICON}"
 !define MUI_ABORTWARNING
-!define MUI_FINISHPAGE_RUN "$INSTDIR\nod.exe"
-!insertmacro MUI_PAGE_WELCOME
-!insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
-!insertmacro MUI_PAGE_FINISH
 !insertmacro MUI_UNPAGE_CONFIRM
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_LANGUAGE "English"
@@ -35,6 +32,12 @@ Function .onInit
     SetErrorLevel 1
     Abort
   ${EndIf}
+FunctionEnd
+
+Function .onInstSuccess
+  IfSilent installed
+  Exec '"$INSTDIR\nod.exe"'
+  installed:
 FunctionEnd
 
 Function CheckInstallDirectory

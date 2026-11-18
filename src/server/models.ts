@@ -351,6 +351,7 @@ export function createModelService(options: {
     }
   }
   let rows: (ModelRecord & {
+    credentialTag?: string;
     keyEnding?: string;
     issue?: ModelIssue;
     issues?: Record<string, ModelIssue>;
@@ -359,6 +360,7 @@ export function createModelService(options: {
   let selectionCheck: (() => Promise<unknown>) | undefined;
   let checked: string | undefined;
   let pendingCheck: Promise<unknown> | undefined;
+  let checkIssue: ModelIssue | undefined;
   let initialized = false;
   let selection: ModelSelection | null = null;
   let routes: ModelRoutes = {};
@@ -430,11 +432,11 @@ export function createModelService(options: {
     const state = await store.read();
     rows = state.connections.map(({ credential: saved, ...row }) => {
       const value = row.managed ? options.bootstrap?.credentials[row.provider] : saved;
-      const failed = failures(row, credentialTag(value)).sort(
-        ([, a], [, b]) => b.retryAt - a.retryAt,
-      );
+      const tag = credentialTag(value);
+      const failed = failures(row, tag).sort(([, a], [, b]) => b.retryAt - a.retryAt);
       return {
         ...row,
+        credentialTag: tag,
         ...(value &&
         typeof value === 'object' &&
         'key' in value &&
@@ -462,17 +464,34 @@ export function createModelService(options: {
     const key = `${row.id}:${state.selection!.modelId}:${credentialTag(credential(row))}`;
     if (key === checked) return;
     checked = key;
+    checkIssue = undefined;
     const saved = credential(row);
     const port = saved?.type === 'endpoint' ? new URL(saved.url).port : undefined;
-    pendingCheck = selectionCheck().catch((error: unknown) =>
-      logFailure('model_check_failed', error, {
-        provider: row.provider,
-        ...(port === undefined
-          ? {}
-          : { serverKind: port === '11434' ? 'ollama' : port === '1234' ? 'lmstudio' : 'other' }),
-        status: Object(error).providerStatus,
-      }),
-    );
+    const check = selectionCheck()
+      .catch((error: unknown) => {
+        if (pendingCheck === check)
+          checkIssue = {
+            reason: createTextRedactor([...secrets])(
+              modelFailureReason(error instanceof Error ? error.message : String(error)),
+            )
+              .replace(/\s+/g, ' ')
+              .trim()
+              .slice(0, 300),
+          };
+        logFailure('model_check_failed', error, {
+          provider: row.provider,
+          ...(port === undefined
+            ? {}
+            : { serverKind: port === '11434' ? 'ollama' : port === '1234' ? 'lmstudio' : 'other' }),
+          status: Object(error).providerStatus,
+        });
+      })
+      .finally(() => {
+        if (pendingCheck !== check) return;
+        pendingCheck = undefined;
+        options.changed?.();
+      });
+    pendingCheck = check;
   }
   function requested(row: ModelRecord | undefined, modelId: string | undefined) {
     const chosen = row?.models.find((model) => model.choice.id === modelId);
@@ -506,6 +525,16 @@ export function createModelService(options: {
           );
         return async (error) => {
           if (!tag || closed) return;
+          if (
+            !error &&
+            row.id === selection?.connectionId &&
+            requested(row, selection.modelId).includes(modelId) &&
+            checkIssue &&
+            rows.find((item) => item.id === row.id)?.credentialTag === tag
+          ) {
+            checkIssue = undefined;
+            options.changed?.();
+          }
           const recorded = failures(
             rows.find((item) => item.id === row.id),
             tag,
@@ -1131,7 +1160,8 @@ export function createModelService(options: {
         label: chosen?.choice.name ?? selection?.modelId,
         configured: service.configured,
         reconnect: row?.status === 'reconnect',
-        issue: selection ? service.issue(selection) : undefined,
+        checking: Boolean(pendingCheck),
+        issue: selection ? (service.issue(selection) ?? checkIssue) : undefined,
       };
     },
     issue(choice: Pick<ModelSelection, 'connectionId' | 'modelId'>) {
@@ -1256,7 +1286,7 @@ export function createModelService(options: {
     },
     view(): ModelsResponse {
       const unpriced = unpricedPreparationModel();
-      const selectionIssue = selection ? service.issue(selection) : undefined;
+      const selectionIssue = service.current.issue;
       return {
         connections: rows.map(
           ({ id, provider, method, label, status, managed, models, keyEnding, issue }) => ({
@@ -1526,12 +1556,6 @@ export function createModelService(options: {
           .read()
           .then(checkSelection, (error: unknown) => logFailure('model_check_failed', error));
     },
-    async checkSettled() {
-      await Promise.race([
-        pendingCheck,
-        new Promise((resolve) => setTimeout(resolve, 15_000).unref()),
-      ]);
-    },
     async resolve(
       auxiliary = false,
       choice: ModelSelection | null = selection,
@@ -1581,7 +1605,6 @@ export function createModelService(options: {
         routes.post('/api/models/keys', async (request) => {
           const { provider, key, ...settings } = keySchema.parse(request.body);
           await service.addKey(provider, key, settings);
-          await service.checkSettled();
           return service.view();
         });
         routes.get('/api/models/azure', async () => ({
@@ -1599,12 +1622,10 @@ export function createModelService(options: {
             .strict()
             .parse(request.body);
           await service.addEndpoint(input.url, input.key || undefined);
-          await service.checkSettled();
           return service.view();
         });
         routes.put('/api/models/selection', async (request) => {
           await service.select(modelSelectionInput.parse(request.body));
-          await service.checkSettled();
           return service.view();
         });
         routes.put('/api/models/routes', async (request) => {
@@ -1670,7 +1691,6 @@ export function createModelService(options: {
             .strict()
             .parse(request.body);
           await complete(new URL(input.url));
-          await service.checkSettled();
           return service.view();
         });
         routes.get('/api/models/oauth/callback', async (request, reply) => {

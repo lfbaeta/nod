@@ -101,6 +101,7 @@ import {
   createUpdateSource,
   startDesktopUpdateChecks,
 } from '../main/updates.mjs';
+import { clearInstalledWindowsUpdates } from '../main/windows-update.mjs';
 import {
   protectWindowsProfile,
   stageWindowsUpdate,
@@ -507,6 +508,8 @@ async function runningDesktop(
     reveal = () => assert.fail('No file should be revealed.'),
     openExternal,
     quitAndInstall = () => assert.fail('No update should install.'),
+    startWindowsInstall = () => assert.fail('No Windows update should install.'),
+    exit = () => {},
     displays = [{ workArea: { x: 0, y: 0, width: 1920, height: 1080 } }],
   } = {},
 ) {
@@ -546,6 +549,7 @@ async function runningDesktop(
     handle: (name, handler) => handlers.set(name, handler),
   });
   let openAtLogin = false;
+  let initialized = false;
   let requestHeaders;
   let permissionCheck;
   let permissionRequest;
@@ -614,7 +618,10 @@ async function runningDesktop(
       setLoginItemSettings: (value) => {
         if (updateLoginItems(value)) openAtLogin = value.openAtLogin;
       },
-      quit() {},
+      quit: () => appEvents.emit('before-quit', { preventDefault() {} }),
+      exit: () => {
+        if (initialized) exit();
+      },
     },
     process: {
       platform,
@@ -625,6 +632,7 @@ async function runningDesktop(
       getSystemVersion: () => '0.0.0',
     },
     ipcMain: ipc,
+    startWindowsInstall,
     autoUpdater: Object.assign(new EventEmitter(), {
       quitAndInstall() {
         quitAndInstall();
@@ -938,6 +946,7 @@ async function runningDesktop(
     ${artifactHandlers}
     ${loginItem}
     ${source}
+    ${source.slice(source.indexOf("  app.on('second-instance'"), source.indexOf('  void app\n    .whenReady()'))}
     appLinksReady = true;
     engine = {};
     enginePreferencesReady = true;
@@ -965,7 +974,7 @@ async function runningDesktop(
       launch: async () => { ${source.slice(source.lastIndexOf('      try {\n        const saved = await settings.get();'), source.indexOf('    })', source.lastIndexOf('      try {\n        const saved = await settings.get();')))} },
       settle: () => preparing ?? Promise.resolve(),
       installRuntime: (installer) => lifecycle.install(installer, { warmup: false }),
-      close: async () => { quitting = true; await lifecycle.close(); },
+      close: async () => { quitting = true; await lifecycle.close(); await diagnosticWrites; },
       profileRoot,
       profileOwner,
       nativeOpening: () => freshAppOpenCapture,
@@ -981,15 +990,19 @@ async function runningDesktop(
       checkUpdates: (updater, manual = true, restartReady = false) => { updates = updater; return checkForUpdates(manual, restartReady); },
       registerFiles: () => { ${source.slice(source.indexOf('      disposeArtifactFiles = registerArtifactFileHandlers('), source.indexOf("      ipcMain.handle('nod:renderer-ready'"))} },
       quit,
+      quitApp: (install = true) => { installUpdateOnQuit = install; return quitApp(); },
+      requestQuit: () => app.quit(),
       restartForUpdate,
       crash: () => { engine = undefined; enginePreferencesReady = false; },
     };
     })()`,
     context,
   );
+  initialized = true;
   return {
     ...context.running,
     openLink: (value) => appEvents.emit('open-url', { preventDefault() {} }, value),
+    secondInstance: (argv) => appEvents.emit('second-instance', {}, argv),
     windows,
     children,
     nativeAnalytics,
@@ -3429,6 +3442,70 @@ test('quit removes temporary files and stops downloads before the updater can qu
       assert.equal(cleanupAttempts, retry ? 2 : 1);
       assert.equal(prompts, retry ? 1 : 0);
     });
+});
+
+test('a normal Windows quit installs a ready update after cleanup and leaves Nod closed', async (t) => {
+  for (const install of [false, true]) {
+    const events = [];
+    const candidate = { version: '0.10.0' };
+    const f = await runningDesktop(t, async () => Response.json({}), {
+      platform: 'win32',
+      startWindowsInstall: async (options) => {
+        assert.equal(options.relaunch, false);
+        assert.equal(events[0], 'downloads-stopped');
+        events.push('install');
+      },
+      exit: () => events.push('exit'),
+    });
+    t.after(() => f.close());
+    f.crash();
+    await f.checkUpdates(
+      {
+        ready: candidate,
+        check: async () => candidate,
+        dispose: async () => events.push('downloads-stopped'),
+      },
+      false,
+    );
+    await f.quitApp(install);
+    assert.deepEqual(
+      events,
+      install ? ['downloads-stopped', 'install', 'exit'] : ['downloads-stopped', 'exit'],
+    );
+    await f.close();
+  }
+});
+
+test('quit requests install once, skip installer conflicts, and still close after an update launch fails', async (t) => {
+  for (const mode of ['ready', 'installer', 'launch-failed', 'not-ready']) {
+    const exited = deferred();
+    let installs = 0;
+    let exits = 0;
+    const candidate = mode === 'not-ready' ? undefined : { version: '0.10.0' };
+    const f = await runningDesktop(t, async () => Response.json({}), {
+      platform: 'win32',
+      startWindowsInstall: async () => {
+        installs++;
+        if (mode === 'launch-failed') throw new Error('Synthetic PowerShell launch failure');
+      },
+      exit: () => {
+        exits++;
+        exited.resolve();
+      },
+    });
+    t.after(() => f.close());
+    f.crash();
+    await f.checkUpdates(
+      { ready: candidate, check: async () => candidate, dispose: async () => {} },
+      false,
+    );
+    if (mode === 'installer') f.secondInstance(['nod.exe', '--quit']);
+    else f.requestQuit();
+    f.requestQuit();
+    await exited.promise;
+    assert.equal(installs, mode === 'installer' || mode === 'not-ready' ? 0 : 1);
+    assert.equal(exits, 1);
+  }
 });
 
 test('an update restart keeps Nod on screen and reopens it as it was', async (t) => {
@@ -7346,7 +7423,7 @@ test('automatic update checks retry failures sooner and return to the normal int
   }
 });
 
-test('a start during a Mac update install leaves the staged update alone until one retry interval passes', async (t) => {
+test('a start during a Mac update install waits fifteen minutes even with a shorter failure retry', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
   const powerMonitor = new EventEmitter();
   let calls = 0;
@@ -7363,7 +7440,7 @@ test('a start during a Mac update install leaves the staged update alone until o
   const settle = () => new Promise((resolve) => setImmediate(resolve));
   await settle();
   powerMonitor.emit('resume');
-  t.mock.timers.tick(4);
+  t.mock.timers.tick(15 * 60_000 - 1);
   await settle();
   assert.equal(calls, 0);
   t.mock.timers.tick(1);
@@ -7918,7 +7995,7 @@ test('Windows downloads stage the verified installer and fetch the runtime pack 
     onProgress: (value) => progress.push(value),
     unsigned: signed,
   });
-  assert.deepEqual(downloads, ['nod-Runtime-win32-x64.tar.gz', 'nod-Setup-x64.exe']);
+  assert.deepEqual(downloads, ['nod-Runtime-win32-x64.tar.gz']);
   assert.ok(progress.length >= 2);
   assert.ok(progress.every((value, index) => value > 0 && value >= (progress[index - 1] ?? 0)));
   assert.ok(progress.some((value) => value < 1));
@@ -7951,6 +8028,7 @@ test('Windows downloads stage the verified installer and fetch the runtime pack 
       request,
     });
     downloads.length = 0;
+    await rm(directory, { recursive: true, force: true });
     const statuses = [];
     await prepare(candidate, undefined, (phase, value) => statuses.push([phase, value]));
     assert.deepEqual(statuses.at(-1), ['downloading', 1]);
@@ -7991,7 +8069,9 @@ test('Windows downloads stage the verified installer and fetch the runtime pack 
     { message: 'The Nod update is not signed by n8n GmbH.' },
   );
   assert.deepEqual(checked, [join(directory, '0.2.0', 'nod-Setup-x64.exe')]);
-  await assert.rejects(stat(directory), { code: 'ENOENT' });
+  await assert.rejects(stat(join(directory, candidate.version, candidate.installer.file)), {
+    code: 'ENOENT',
+  });
 
   served['nod-Setup-x64.exe'] = Buffer.alloc(bytes['nod-Setup-x64.exe'].length, 'x');
   for (const includeRuntime of [true, false]) {
@@ -8004,7 +8084,9 @@ test('Windows downloads stage the verified installer and fetch the runtime pack 
         unsigned: signed,
       }),
     );
-    await assert.rejects(stat(directory), { code: 'ENOENT' });
+    await assert.rejects(stat(join(directory, candidate.version, candidate.installer.file)), {
+      code: 'ENOENT',
+    });
   }
 
   release.assets[1].digest = `sha256:${'e'.repeat(64)}`;
@@ -8724,4 +8806,260 @@ test('legacy account completion migrates to device progress without changing key
   assert.equal(Object.hasOwn(migrated, 'onboardingCompleted'), false);
   assert.deepEqual(migrated.secrets, value.secrets);
   assert.deepEqual(await f.reopen().environment(), environment);
+});
+
+async function updateDownloadFixture(t) {
+  const root = await mkdtemp(join(tmpdir(), 'nod-update-download-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const bytes = {
+    'nod-Setup-x64.exe': Buffer.from('Synthetic Windows installer bytes'),
+    'nod-Runtime-win32-x64.tar.gz': Buffer.from('Synthetic Windows runtime bytes'),
+  };
+  const entry = (file) => ({
+    file,
+    url: `https://updates.example.invalid/${file}`,
+    bytes: bytes[file].length,
+    sha256: createHash('sha256').update(bytes[file]).digest('hex'),
+  });
+  const candidate = {
+    version: '0.10.0',
+    installer: entry('nod-Setup-x64.exe'),
+    runtime: entry('nod-Runtime-win32-x64.tar.gz'),
+  };
+  const options = {
+    directory: join(root, 'updates'),
+    resourcesPath: join(root, 'resources'),
+    unsigned: async () => [],
+    fetch: (url) => new Response(bytes[new URL(url).pathname.slice(1)]),
+  };
+  return { root, bytes, candidate, options, target: join(options.directory, candidate.version) };
+}
+
+test('Windows update retries keep verified files and resume partial bytes after a new launch', async (t) => {
+  const f = await updateDownloadFixture(t);
+  const controller = new AbortController();
+  const installer = join(f.target, f.candidate.installer.file);
+  const runtime = join(f.target, f.candidate.runtime.file);
+  await assert.rejects(
+    stageWindowsUpdate(f.candidate, {
+      ...f.options,
+      signal: controller.signal,
+      fetch: (url) =>
+        url.endsWith('.exe')
+          ? new Response(
+              new ReadableStream({
+                start: (stream) =>
+                  stream.enqueue(f.bytes[f.candidate.installer.file].subarray(0, 7)),
+              }),
+            )
+          : f.options.fetch(url),
+      onProgress: (progress) => {
+        if (
+          progress >
+            f.candidate.runtime.bytes / (f.candidate.runtime.bytes + f.candidate.installer.bytes) &&
+          progress < 1
+        )
+          controller.abort();
+      },
+    }),
+    { name: 'AbortError' },
+  );
+  assert.equal((await stat(installer)).size, 7);
+  assert.deepEqual(await readFile(runtime), f.bytes[f.candidate.runtime.file]);
+  await clearInstalledWindowsUpdates(f.options.directory, '0.9.0');
+  const requests = [];
+  let signatures = 0;
+  const resumed = {
+    ...f.options,
+    unsigned: async () => {
+      signatures++;
+      return [];
+    },
+    fetch: (url, options) => {
+      requests.push(url);
+      assert.equal(options.headers.range, 'bytes=7-');
+      const bytes = f.bytes[f.candidate.installer.file];
+      return new Response(bytes.subarray(7), {
+        status: 206,
+        headers: { 'content-range': `bytes 7-${bytes.length - 1}/${bytes.length}` },
+      });
+    },
+  };
+  await stageWindowsUpdate(f.candidate, resumed);
+  await stageWindowsUpdate(f.candidate, resumed);
+  assert.deepEqual(requests, [f.candidate.installer.url]);
+  assert.equal(signatures, 2);
+  assert.deepEqual(await readFile(installer), f.bytes[f.candidate.installer.file]);
+  await clearInstalledWindowsUpdates(f.options.directory, f.candidate.version);
+  assert.deepEqual(await readdir(f.options.directory), []);
+});
+
+test('Windows update staging checks cached hashes and removes an installer with a failed publisher check', async (t) => {
+  const f = await updateDownloadFixture(t);
+  await stageWindowsUpdate(f.candidate, f.options);
+  await writeFile(
+    join(f.target, f.candidate.installer.file),
+    Buffer.alloc(f.candidate.installer.bytes),
+  );
+  const requests = [];
+  await stageWindowsUpdate(f.candidate, {
+    ...f.options,
+    fetch: (url) => {
+      requests.push(url);
+      return f.options.fetch(url);
+    },
+  });
+  assert.deepEqual(requests, [f.candidate.installer.url]);
+  await assert.rejects(
+    stageWindowsUpdate(f.candidate, {
+      ...f.options,
+      fetch: () => assert.fail('Verified files do not need another download.'),
+      unsigned: async (files) => files,
+    }),
+    /not signed by n8n GmbH/,
+  );
+  await assert.rejects(stat(join(f.target, f.candidate.installer.file)), { code: 'ENOENT' });
+  assert.deepEqual(
+    await readFile(join(f.target, f.candidate.runtime.file)),
+    f.bytes[f.candidate.runtime.file],
+  );
+  await assert.rejects(
+    stageWindowsUpdate(
+      { ...f.candidate, installer: { ...f.candidate.installer, bytes: -1 } },
+      f.options,
+    ),
+    /update is invalid/,
+  );
+});
+
+test(
+  'a stalled Windows update stops and keeps bytes for the next background check',
+  { timeout: 5000 },
+  async (t) => {
+    const f = await updateDownloadFixture(t);
+    await assert.rejects(
+      stageWindowsUpdate(f.candidate, {
+        ...f.options,
+        includeRuntime: false,
+        stallTimeout: 25,
+        fetch: (_url, { signal }) =>
+          new Response(
+            new ReadableStream({
+              start(stream) {
+                stream.enqueue(f.bytes[f.candidate.installer.file].subarray(0, 7));
+                signal.addEventListener('abort', () => stream.error(signal.reason), { once: true });
+              },
+            }),
+          ),
+      }),
+      /stopped receiving data/,
+    );
+    assert.equal((await stat(join(f.target, f.candidate.installer.file))).size, 7);
+  },
+);
+
+test('Windows update resumes when a server ignores ranges and rejects corrupt saved bytes', async (t) => {
+  for (const response of ['full', 'wrong-range', 'corrupt-prefix']) {
+    const f = await updateDownloadFixture(t);
+    await mkdir(f.target, { recursive: true });
+    const path = join(f.target, f.candidate.installer.file);
+    const bytes = f.bytes[f.candidate.installer.file];
+    await writeFile(path, response === 'corrupt-prefix' ? Buffer.alloc(7) : bytes.subarray(0, 7));
+    let calls = 0;
+    const operation = stageWindowsUpdate(f.candidate, {
+      ...f.options,
+      includeRuntime: false,
+      fetch: (_url, { headers }) => {
+        calls++;
+        assert.equal(headers.range, calls === 1 ? 'bytes=7-' : undefined);
+        if (response === 'wrong-range' && calls === 1)
+          return new Response(bytes.subarray(8), {
+            status: 206,
+            headers: { 'content-range': `bytes 8-${bytes.length - 1}/${bytes.length}` },
+          });
+        return new Response(bytes);
+      },
+    });
+    if (response === 'corrupt-prefix') {
+      await assert.rejects(operation, /integrity check/);
+      await assert.rejects(stat(path), { code: 'ENOENT' });
+      await stageWindowsUpdate(f.candidate, { ...f.options, includeRuntime: false });
+    } else await operation;
+    assert.deepEqual(await readFile(path), bytes);
+    assert.equal(calls, response === 'wrong-range' ? 2 : 1);
+  }
+});
+
+test('Windows update failures keep partial bytes and never check or run an incomplete installer', async (t) => {
+  for (const failure of ['offline', 'http', 'short', 'oversized', 'unsafe-redirect']) {
+    const f = await updateDownloadFixture(t);
+    await mkdir(f.target, { recursive: true });
+    const path = join(f.target, f.candidate.installer.file);
+    const bytes = f.bytes[f.candidate.installer.file];
+    await writeFile(path, bytes.subarray(0, 7));
+    await assert.rejects(
+      stageWindowsUpdate(f.candidate, {
+        ...f.options,
+        includeRuntime: false,
+        unsigned: () => assert.fail('An incomplete installer cannot reach the publisher check.'),
+        fetch: (url) => {
+          assert.equal(new URL(url).protocol, 'https:');
+          if (failure === 'offline') throw new Error('Synthetic offline request');
+          if (failure === 'http') return new Response(null, { status: 503 });
+          if (failure === 'unsafe-redirect')
+            return new Response(null, {
+              status: 302,
+              headers: { location: 'http://unsafe.example.invalid/installer.exe' },
+            });
+          return new Response(
+            failure === 'short' ? bytes.subarray(0, 10) : Buffer.alloc(bytes.length + 1),
+          );
+        },
+      }),
+    );
+    if (['short', 'oversized'].includes(failure))
+      await assert.rejects(stat(path), { code: 'ENOENT' });
+    else assert.equal((await stat(path)).size, 7);
+  }
+});
+
+test('background checks cap the retry wait and retry on wake after a failure', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const powerMonitor = new EventEmitter();
+  const settle = () => new Promise((resolve) => setImmediate(resolve));
+  let calls = 0;
+  let fail = true;
+  const stop = startDesktopUpdateChecks({
+    powerMonitor,
+    check: async () => {
+      calls++;
+      if (fail) throw new Error('Synthetic offline check');
+    },
+  });
+  t.after(stop);
+  await settle();
+  assert.equal(calls, 1);
+  powerMonitor.emit('resume');
+  await settle();
+  assert.equal(calls, 2);
+  for (const delay of [120_000, 240_000, 480_000, 900_000, 900_000]) {
+    const before = calls;
+    t.mock.timers.tick(delay - 1);
+    await settle();
+    assert.equal(calls, before);
+    t.mock.timers.tick(1);
+    await settle();
+    assert.equal(calls, before + 1);
+  }
+  fail = false;
+  powerMonitor.emit('resume');
+  await settle();
+  const before = calls;
+  powerMonitor.emit('resume');
+  t.mock.timers.tick(6 * 60 * 60_000 - 1);
+  await settle();
+  assert.equal(calls, before);
+  t.mock.timers.tick(1);
+  await settle();
+  assert.equal(calls, before + 1);
 });

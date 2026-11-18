@@ -146,7 +146,7 @@ export function ModelKeyHelp({
         <a href={`https://${info.keyUrl}`} target="_blank" rel="noreferrer">
           Get API key
         </a>
-        {info.catalog === 'bundled' && ' Access checked on first use.'}
+        {info.catalog === 'bundled' && ' Access is checked after you select a model.'}
       </p>
       {provider === 'google' && (
         <p className={className}>

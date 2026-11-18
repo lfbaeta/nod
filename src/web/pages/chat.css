@@ -1321,3 +1321,11 @@ button.message-work:is(:hover, :focus-visible) {
   flex-wrap: wrap;
   gap: 8px 16px;
 }
+.chat-model-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  color: var(--muted-foreground);
+  font-size: 13px;
+}

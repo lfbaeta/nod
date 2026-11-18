@@ -2733,6 +2733,114 @@ describe('model connections', { skip: !process.env.TEST_DATABASE_URL }, () => {
     };
   }
 
+  test(
+    'model setup returns while checks run and shows only the current result',
+    { timeout: 10_000 },
+    async (t) => {
+      const f = await fixture(t);
+      const definitions = await f.backend.catalog('openai', 'api_key');
+      const key = 'fixture-background-model-key';
+      const state = 'fixture-background-sign-in-state-12345';
+      const owner = await f.create('fixture-background-model-owner', {
+        ...f.backend,
+        catalog: async () => definitions,
+        connectKey: async (_provider, credential) => ({ credential, models: definitions }),
+        authorize: () => ({ url: 'https://model.example/sign-in', state, secret: {} }),
+        exchange: async () => ({ type: 'api_key', key: 'fixture-background-oauth-key' }),
+      });
+      const checks: { resolve(): void; reject(error: Error): void }[] = [];
+      await owner.setSelectionCheck(() => {
+        return new Promise<void>((resolve, reject) => checks.push({ resolve, reject }));
+      });
+      const app = Fastify();
+      owner.register(app);
+      t.after(async () => {
+        for (const check of checks) check.resolve();
+        await app.close();
+      });
+      const saved = await app.inject({
+        method: 'POST',
+        url: '/api/models/keys',
+        payload: { provider: 'openai', key },
+      });
+      assert.equal(saved.statusCode, 200, saved.body);
+      assert.equal(owner.current.checking, true);
+      assert.equal(checks.length, 1);
+
+      const endpoint = await app.inject({
+        method: 'POST',
+        url: '/api/models/endpoints',
+        payload: { url: 'http://localhost:11434/v1' },
+      });
+      assert.equal(endpoint.statusCode, 200, endpoint.body);
+      const selection = owner.view().selection!;
+      const selected = await app.inject({
+        method: 'PUT',
+        url: '/api/models/selection',
+        payload: selection,
+      });
+      assert.equal(selected.statusCode, 200, selected.body);
+      assert.equal(checks.length, 2);
+      checks[0]!.reject(new Error('Synthetic old model failure.'));
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(owner.current.checking, true);
+      assert.equal(owner.current.issue, undefined);
+
+      checks[1]!.reject(new Error(`HTTP 503: Synthetic service unavailable. ${key}`));
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(owner.current.checking, false);
+      assert.match(owner.current.issue!.reason, /HTTP 503: Synthetic service unavailable/);
+      assert.doesNotMatch(owner.current.issue!.reason, /fixture-background-model-key/);
+      assert.deepEqual(owner.view().selectionIssue, owner.current.issue);
+      const access = await owner.resolve();
+      const complete = await access.prepareRequest!(selection.modelId, false);
+      await complete();
+      assert.equal(owner.current.issue, undefined);
+
+      await owner.select(selection);
+      const signIn = await app.inject({
+        method: 'POST',
+        url: '/api/models/oauth',
+        payload: { provider: 'openrouter' },
+      });
+      assert.equal(signIn.statusCode, 200, signIn.body);
+      const signedIn = await app.inject({
+        method: 'POST',
+        url: '/api/models/oauth/complete',
+        payload: {
+          url: `http://127.0.0.1:4310/api/models/oauth/callback?state=${state}&code=fixture-code`,
+        },
+      });
+      assert.equal(signedIn.statusCode, 200, signedIn.body);
+      assert.equal(owner.current.checking, true);
+      checks.at(-1)!.resolve();
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(owner.current.checking, false);
+      assert.equal(owner.current.issue, undefined);
+
+      const connectionId = owner
+        .view()
+        .connections.find((row) => row.provider === 'compatible')!.id;
+      await owner.select({ ...selection, connectionId });
+      const previous = await owner.resolve();
+      const completePrevious = await previous.prepareRequest!(selection.modelId, false);
+      assert.equal(
+        await owner.addEndpoint('http://localhost:11434/v1', 'fixture-replacement-endpoint-key'),
+        connectionId,
+      );
+      checks.at(-1)!.reject(new Error('Synthetic new credential failure.'));
+      await new Promise((resolve) => setImmediate(resolve));
+      const issue = owner.view().selectionIssue;
+      assert.match(issue!.reason, /Synthetic new credential failure/);
+      await completePrevious();
+      assert.deepEqual(owner.current.issue, issue);
+      const current = await owner.resolve();
+      const completeCurrent = await current.prepareRequest!(selection.modelId, false);
+      await completeCurrent();
+      assert.equal(owner.current.issue, undefined);
+    },
+  );
+
   test('OpenAI connections keep their regions through selection, refresh and restart', async (t) => {
     const f = await fixture(t);
     const { createPiModelBackend } = await import('../src/providers/pi/models.ts');

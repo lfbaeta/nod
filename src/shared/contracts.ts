@@ -257,6 +257,7 @@ export interface Configuration {
   model: string;
   llmReady: boolean;
   modelReconnect: boolean;
+  modelChecking?: boolean;
   modelIssue?: ModelIssue;
   modelAlternative?: ModelSelection & { label: string };
   integrationsReady: boolean;

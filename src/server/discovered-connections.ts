@@ -1637,7 +1637,16 @@ export async function createDiscoveredConnections(
         .strict()
         .refine((value) => !value.clientIdRequired || value.auth === 'oauth')
         .safeParse(request.body);
-      if (!parsed.success) throw error('Enter a name, server URL and authentication method.');
+      if (!parsed.success) {
+        const field = parsed.error.issues[0]?.path[0];
+        throw error(
+          field === 'name'
+            ? 'Enter a name of 1 to 80 characters.'
+            : field === 'endpoint'
+              ? 'Enter a valid server URL, such as https://example.com/mcp.'
+              : 'Enter a name, server URL and authentication method.',
+        );
+      }
       const { name, auth } = parsed.data;
       let localOrigin: string | undefined;
       const endpoint = await options.transport

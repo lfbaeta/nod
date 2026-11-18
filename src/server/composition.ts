@@ -2874,6 +2874,7 @@ async function initializeApplication(
         model: adapters.model.name,
         llmReady: adapters.model.configured,
         modelReconnect: adapters.model.reconnect === true,
+        ...(adapters.models?.current.checking ? { modelChecking: true } : {}),
         ...(adapters.model.issue ? { modelIssue: adapters.model.issue } : {}),
         ...(alternative ? { modelAlternative: alternative } : {}),
         integrationsReady: adapters.integrations.configured,

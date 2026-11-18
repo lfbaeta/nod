@@ -2539,13 +2539,21 @@ export function Chat({
             </Notice>
           )}
           {state.configuration.llmReady &&
+            state.configuration.modelChecking &&
+            !state.configuration.modelIssue && (
+              <div className="chat-model-check" role="status">
+                <LoaderCircle size={14} className="spin" aria-hidden="true" />
+                Checking your model connection…
+              </div>
+            )}
+          {state.configuration.llmReady &&
             !state.chatRecovery &&
             (state.configuration.modelIssue ||
               (modelFailed &&
                 (failedRequest || (modelAdvice && state.configuration.modelAlternative)))) && (
               <Notice kind="info">
                 {state.configuration.modelIssue
-                  ? `Your model’s last request failed: ${state.configuration.modelIssue.reason.replace(/(?<![.!?])$/, '.')}`
+                  ? `Your model connection needs attention: ${state.configuration.modelIssue.reason.replace(/(?<![.!?])$/, '.')}`
                   : 'Your model’s last request failed.'}
                 <span className="notice-actions">
                   {modelAdvice && state.configuration.modelAlternative && (

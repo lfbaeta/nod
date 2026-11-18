@@ -4721,6 +4721,23 @@ test('composer preserves keyboard shortcuts, upload retries, previews and failed
         assert.equal(sends.at(-1).text, '**bold\\*star** next *literal*');
         const richVisible = await assertVisiblePaste(sends.at(-1), 'bold*star next *literal*');
         assert.equal(richVisible.querySelector('strong')?.textContent, 'bold*star');
+        for (const draft of [
+          'See \\![docs](https://example.test/docs)',
+          'See \\\\[docs](https://example.test/docs)',
+          'See \\\\**docs**',
+          'See \\\\<u>docs</u>',
+          'a\\~~~x~~ ~~y~~\\~b',
+          'a\\**x* *y*\\*b',
+          'a\\***x**\\*b',
+          '\\*\\**x*',
+          'a\\\u0060\u0060x\u0060\\\u0060b',
+          '| a          |\n| ---------- |\n| b\\\\\\\\<br>c |',
+        ]) {
+          await act(async () => replaceText(draft));
+          await submit();
+          assert.equal(sends.at(-1).text.trimEnd(), draft);
+          assert.deepEqual(parseComposerMarkdown(sends.at(-1).text), parseComposerMarkdown(draft));
+        }
         await act(async () => replaceText('| label | value |\n| --- | --- |\n| first | second |'));
         await pasteAtEnd('table tr:last-child td:first-child p', 'A|B\\|C\nD');
         await submit();
@@ -6687,7 +6704,8 @@ test('chat reloads older history after hidden confirmations exceed the ID window
         await settle(() => hasDraft() && !document.querySelector('.composer-reply'));
         assert.equal(JSON.parse(localStorage.getItem(draftKey)).reply, null);
         await submit();
-        await settle(() => document.querySelector('[role="alert"]')?.textContent.includes('may have been sent'));
+        await settle(() => hasDraft() &&
+          document.querySelector('[role="alert"]')?.textContent.includes('may have been sent'));
         assert.equal(sends.length, 2);
         assert.ok(hasDraft());
         await submit();

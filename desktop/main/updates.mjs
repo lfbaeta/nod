@@ -512,7 +512,7 @@ export function startDesktopUpdateChecks({
   powerMonitor,
   defer = false,
   interval = 6 * 60 * 60 * 1000,
-  retry = 15 * 60 * 1000,
+  retry = 60_000,
 }) {
   let timer;
   let failures = 0;
@@ -534,7 +534,7 @@ export function startDesktopUpdateChecks({
       const delay = resumePending
         ? 0
         : failures
-          ? Math.min(interval, retry * 2 ** (failures - 1))
+          ? Math.min(interval, 15 * 60_000, retry * 2 ** Math.min(failures - 1, 10))
           : interval;
       resumePending = false;
       due = Date.now() + delay;
@@ -545,14 +545,15 @@ export function startDesktopUpdateChecks({
     }
   };
   const resume = () => {
-    if (Date.now() < due || stopped) return;
+    if (stopped || (!failures && Date.now() < due)) return;
     if (pending) resumePending = true;
     else void run();
   };
   powerMonitor.on('resume', resume);
   if (defer) {
-    due = Date.now() + retry;
-    timer = setTimeout(run, retry);
+    const delay = 15 * 60_000;
+    due = Date.now() + delay;
+    timer = setTimeout(run, delay);
     timer.unref?.();
   } else void run();
   return () => {

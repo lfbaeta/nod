@@ -23,6 +23,12 @@ const markdown = unified()
     listItemIndent: 'one',
   });
 const linkify = new LinkifyIt({ fuzzyLink: true });
+const delimiters: Record<string, string> = {
+  delete: '~',
+  emphasis: '*',
+  inlineCode: '`',
+  strong: '*',
+};
 
 function literal(value: string): PhrasingContent[] {
   if (!value.startsWith('/') && safeMessageLink(value, window.location.origin))
@@ -183,7 +189,7 @@ function blocks(nodes: JSONContent[], display = false): RootContent[] {
                 type: 'tableCell',
                 children: tableInline(
                   (cell.content ?? []).flatMap((paragraph, index) => [
-                    ...(index ? [{ type: 'break' as const }] : []),
+                    ...(index ? [{ type: 'html' as const, value: '\n' }] : []),
                     ...inline(paragraph.content ?? [], false, !display, display),
                   ]),
                 ),
@@ -198,10 +204,16 @@ function blocks(nodes: JSONContent[], display = false): RootContent[] {
 }
 
 function tableInline(nodes: PhrasingContent[]): PhrasingContent[] {
-  return nodes.map((node) =>
-    node.type === 'break'
-      ? { type: 'html', value: '<br>' }
-      : node.type === 'html'
+  return nodes
+    .reduce<PhrasingContent[]>((merged, node) => {
+      const last = merged.at(-1);
+      if (node.type === 'html' && last?.type === 'html')
+        merged[merged.length - 1] = { ...last, value: last.value + node.value };
+      else merged.push(node);
+      return merged;
+    }, [])
+    .map((node) =>
+      node.type === 'html'
         ? {
             ...node,
             value: node.value
@@ -209,17 +221,35 @@ function tableInline(nodes: PhrasingContent[]): PhrasingContent[] {
                 /(\\*)\|/g,
                 (_, slashes: string) => `${'\\'.repeat(slashes.length * 2 + 1)}|`,
               )
-              .replaceAll('\n', '<br>'),
+              .replace(/(\\*)\n/g, (_, slashes: string) => `${slashes}${slashes}<br>`),
           }
         : 'children' in node
           ? { ...node, children: tableInline(node.children) }
           : node,
-  );
+    );
 }
 
 function serializeComposerMarkdown(document: ProseMirrorNode, display = false) {
   const content: JSONContent[] = document.toJSON().content ?? [];
   const tree: Root = { type: 'root', children: blocks(content, display) };
+  const escape = (run: string) => run.replace(/./g, '\\$&');
+  visit(tree, (node) => {
+    if (!('children' in node)) return;
+    node.children.forEach((child, index) => {
+      if (child.type !== 'html') return;
+      const previous = delimiters[node.children[index - 1]?.type ?? ''];
+      const next = node.children[index + 1];
+      if (previous) child.value = child.value.replace(new RegExp(`^\\${previous}+`), escape);
+      if (!next) return;
+      const delimiter = next.type === 'link' ? '!' : delimiters[next.type];
+      const run = delimiter ? child.value.match(new RegExp(`\\${delimiter}*$`))![0] : '';
+      const head = child.value.slice(0, child.value.length - run.length);
+      const escaped = head.match(/\\*$/)![0].length % 2;
+      child.value = run
+        ? head + run.slice(0, escaped) + escape(run.slice(escaped))
+        : head + (escaped ? '\\' : '');
+    });
+  });
   const last = content.at(-1);
   const trailingBreak = last?.type === 'paragraph' && last.content?.at(-1)?.type === 'hardBreak';
   const value = markdown.stringify(tree);

@@ -9201,7 +9201,22 @@ test(
     }
     assert.equal((await create({ ...input, clientIdRequired: 'true' })).statusCode, 400);
     assert.equal((await create({ ...input, ownerId: 'foreign-owner' })).statusCode, 400);
+    assert.equal((await create({ ...input, name: '   ' })).statusCode, 400);
     assert.equal((await pool.query('SELECT id FROM discovered_connection_proposals')).rowCount, 0);
+    const named = await create({
+      ...input,
+      name: 'Example Work (n8n)',
+      endpoint: 'https://93.184.216.34/named',
+    });
+    assert.equal(named.statusCode, 200, named.body);
+    assert.equal(
+      (
+        await pool.query('SELECT name FROM discovered_connection_proposals WHERE id=$1', [
+          named.json().id,
+        ])
+      ).rows[0].name,
+      'Example Work (n8n)',
+    );
     const response = await create(input);
     assert.equal(response.statusCode, 200, response.body);
     assert.equal(response.headers['cache-control'], 'no-store');
