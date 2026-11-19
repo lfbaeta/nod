@@ -4577,7 +4577,73 @@ test(
               /connected account changed before confirmation/,
             );
             assert.equal(calls.length, 3);
+
+            const body = { label: 'Synthetic repeated record', count: 4 };
+            const args = { ...nextArgs(), method: 'POST', body };
+            expected = { method: 'POST', url, body };
+            const initial = await propose('CONNECTED_HTTP', args, 'apps');
+            const [first] = await approvalsFor(initial);
+            const question = 'Should I send the same synthetic request again?';
+            questionAfterConfirm = question;
+            const accepted = await request('POST', '/api/messages', {
+              text: 'Make request',
+              replyToMessageId: first.confirmation_message_id,
+              approvalAnswer: { approvalId: first.id, approved: true },
+            });
+            assert.equal(accepted.statusCode, 200, accepted.body);
+            await waitFor(accepted.json().turnId, 'waiting');
+            assert.equal(calls.length, 4);
+            const savedQuestion = (
+              await pool.query(
+                "SELECT id FROM messages WHERE turn_id=$1 AND role='assistant' AND text=$2",
+                [accepted.json().turnId, question],
+              )
+            ).rows[0];
+            assert.ok(savedQuestion);
+            const reply = 'Send the same synthetic request again.';
+            plans.set(reply, { tool: 'apps', action: 'CONNECTED_HTTP', args });
+            repeatDecision = 'new';
+            httpReview = async () => ({ run: true, because: 'read' });
+            wording.length = 0;
+            const repeated = await request('POST', '/api/messages', {
+              text: reply,
+              replyToMessageId: savedQuestion.id,
+            });
+            assert.equal(repeated.statusCode, 200, repeated.body);
+            await waitFor(repeated.json().turnId, 'waiting');
+            const [second] = await approvalsFor(repeated.json().turnId);
+            assert.equal(second.status, 'pending');
+            assert.equal(second.source_message_id, repeated.json().messageId);
+            assert.deepEqual(second.details.request, expected);
+            assert.equal(second.details.verifiedBinding, first.details.verifiedBinding);
+            assert.equal(calls.length, 4);
+            assert.deepEqual(
+              wording.map((input) => input.purpose),
+              ['confirmation', 'confirmation_review'],
+            );
+            for (const input of wording) {
+              assert.equal(input.data.action, 'HTTP request');
+              assert.deepEqual(input.data.args, expected);
+            }
+            const confirmed = await request('POST', '/api/messages', {
+              text: 'Make request',
+              replyToMessageId: second.confirmation_message_id,
+              approvalAnswer: { approvalId: second.id, approved: true },
+            });
+            assert.equal(confirmed.statusCode, 200, confirmed.body);
+            await waitFor(confirmed.json().turnId, 'succeeded');
+            assert.equal(calls.length, 5);
+            assert.deepEqual(
+              { ...calls.at(-1), body: JSON.parse(calls.at(-1)!.body) },
+              {
+                method: 'POST',
+                url: `/v2${route}`,
+                body,
+              },
+            );
           } finally {
+            questionAfterConfirm = undefined;
+            repeatDecision = 'same';
             httpReview = undefined;
             confirmationModel = undefined;
             await pool.query('DELETE FROM vault_app_grants WHERE owner_id=$1 AND id=$2', [
