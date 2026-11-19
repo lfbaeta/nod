@@ -1993,7 +1993,17 @@ export function createAgentBrowserComputer(options: {
         url,
         dialog?.message.slice(0, 2000),
       );
-      if (dialog) return { ...page, dialog: dialog.message.slice(0, 2000), target };
+      if (dialog)
+        return {
+          ...page,
+          dialog: dialog.message.slice(0, 2000),
+          target,
+          currentSelections: {
+            values: [],
+            incomplete:
+              'The browser cannot read current selections while a JavaScript dialog is open.',
+          },
+        };
       const submits = details && 'rawSubmits' in details ? details.rawSubmits : undefined;
       return {
         ...page,

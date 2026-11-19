@@ -1467,10 +1467,9 @@ async function initializeApplication(
     if (!sameBrowserTarget(current, args)) throw notRun();
     const expectSelections = provenance.details?.verifiedBrowserSelections;
     if (
-      (expectSelections !== undefined || current?.currentSelections !== undefined) &&
-      (typeof expectSelections !== 'string' ||
-        current?.currentSelections?.incomplete ||
-        current?.currentSelections?.binding !== expectSelections)
+      typeof expectSelections !== 'string' ||
+      current?.currentSelections?.incomplete ||
+      current?.currentSelections?.binding !== expectSelections
     )
       throw Object.assign(
         new BrowserActionError(
@@ -1480,7 +1479,7 @@ async function initializeApplication(
         ),
         { notRun: true },
       );
-    const selectionBinding = typeof expectSelections === 'string' ? { expectSelections } : {};
+    const selectionBinding = { expectSelections };
     try {
       const page =
         command.action === 'upload'
@@ -2428,6 +2427,23 @@ async function initializeApplication(
               `The ${action} target is not identified. Inspect a fresh snapshot or screenshot and choose the actual control. Do not ask the owner to approve an unidentified ${action}.`,
             );
           }
+          signal?.throwIfAborted();
+          const current = turn.browserId
+            ? await computer.currentPage(
+                turn.browserId,
+                request.step.action === 'upload'
+                  ? { action: 'click', selector: request.step.selector }
+                  : request.step,
+                signal,
+              )
+            : request.page;
+          if (!sameBrowserTarget(current, args))
+            throw new BrowserActionError('browser_target_changed');
+          const selections = current.currentSelections;
+          if (!selections?.binding || selections.incomplete)
+            throw new Error(
+              selections?.incomplete ?? 'The current selections could not be verified.',
+            );
           const visible =
             turn.browserId &&
             (await computer
@@ -2452,36 +2468,12 @@ async function initializeApplication(
                 },
                 () => undefined,
               ));
-          signal?.throwIfAborted();
-          const current = turn.browserId
-            ? await computer.currentPage(
-                turn.browserId,
-                request.step.action === 'upload'
-                  ? { action: 'click', selector: request.step.selector }
-                  : request.step,
-                signal,
-              )
-            : request.page;
-          if (!sameBrowserTarget(current, args))
-            throw new BrowserActionError('browser_target_changed');
-          const selections = current.currentSelections;
-          if (
-            (request.page.currentSelections !== undefined || selections !== undefined) &&
-            (!selections?.binding || selections.incomplete)
-          )
-            throw new Error(
-              selections?.incomplete ?? 'The current selections could not be verified.',
-            );
           return {
             ...(typeof visible === 'string' && visible.trim()
               ? { pageText: publicText(visible.slice(0, 20_000)) }
               : {}),
-            ...(selections
-              ? {
-                  currentSelections: selections.values,
-                  verifiedBrowserSelections: selections.binding,
-                }
-              : {}),
+            currentSelections: selections.values,
+            verifiedBrowserSelections: selections.binding,
           };
         };
         if (!verdict.confirm) {

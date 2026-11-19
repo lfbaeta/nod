@@ -983,7 +983,7 @@ export async function openDevtools(url: string, targetId: string, signal?: Abort
               ? (checkedValue as 'true' | 'false' | 'mixed')
               : undefined;
             const selected = property(node, 'selected') === true;
-            const widget = ['combobox', 'spinbutton', 'listbox'].includes(role);
+            const widget = ['combobox', 'spinbutton', 'listbox', 'slider'].includes(role);
             if (!widget && checked === undefined && !selected) {
               if (
                 ['checkbox', 'radio', 'switch', 'menuitemcheckbox', 'menuitemradio'].includes(role)

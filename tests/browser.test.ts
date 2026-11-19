@@ -1159,9 +1159,10 @@ test('a card goes only into the approved fields on the approved sites and stays 
         {
           nodeId: 'selected-card',
           backendDOMNodeId: 911,
-          role: { value: 'combobox' },
+          role: { value: 'spinbutton' },
           name: { value: 'Synthetic payment method' },
-          value: { value: card.cardNumber },
+          value: { value: Number(card.cardNumber) },
+          properties: [{ name: 'editable', value: { value: 'plaintext' } }],
         },
       ],
       pay: [],
@@ -6791,6 +6792,8 @@ test('native selection trees keep false, mixed and empty states and reject incom
     assert.doesNotMatch(JSON.stringify(frame), /Synthetic private text|Synthetic editable text/);
     model.selections!.main = [node(1, 'combobox')];
     await assert.rejects(inspector.selections(), /did not report a current value/);
+    model.selections!.main = [node(1, 'slider')];
+    await assert.rejects(inspector.selections(), /did not report a current value/);
     model.selections!.main = [node(1, 'checkbox')];
     await assert.rejects(inspector.selections(), /did not report a current checked state/);
     model.selections!.main = Array.from({ length: 257 }, (_, id) =>
@@ -6901,15 +6904,15 @@ test(
         );
         return;
       }
-      response.end(`<form onsubmit="event.preventDefault();window.syntheticReports=(window.syntheticReports||[]).concat(this.elements.month.value)">
+      response.end(`<form onsubmit="event.preventDefault();window.syntheticReports=(window.syntheticReports||[]).concat(this.elements.month.value);window.syntheticThresholds=(window.syntheticThresholds||[]).concat(this.elements.threshold.value)">
         <label>Company<select name="company"><option>A</option><option selected>B</option></select></label>
         <label>Month<select name="month" id="month"><option>October</option><option selected>November</option></select></label>
         <label>Year<select name="year"><option>2025</option><option selected>2026</option></select></label>
-        <label>Copies<input type="number" value="0"></label><label>Include vacancies<input type="checkbox"></label>
+        <label>Threshold<input id="threshold" name="threshold" type="range" min="0" max="100" value="10"></label><label>Copies<input type="number" value="0"></label><label>Include vacancies<input type="checkbox"></label>
         <div id="numeric-period" role="spinbutton" aria-label="Numeric period" aria-valuenow="11" aria-valuetext="Reporting month" tabindex="0"></div>
         <input aria-label="Private free text" value="Synthetic free text"><input type="password" value="Synthetic password">
         <button id="report">Generate report</button></form><iframe src="/frame" title="Synthetic department"></iframe>
-        <iframe id="remote-frame" src="${origin.replace('127.0.0.1', 'localhost')}/remote-frame?North" title="Synthetic branch"></iframe>`);
+        <iframe id="remote-frame" src="${origin.replace('127.0.0.1', 'localhost')}/remote-frame?North" title="Synthetic branch"></iframe><button id="dialog" onclick="window.syntheticDialogAccepted=confirm('Generate the selected report?')">Confirm report</button>`);
     });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const origin = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
@@ -6962,6 +6965,11 @@ test(
           values.some((item) => item.name === 'Include vacancies' && item.checked === 'false'),
         );
         assert.ok(values.some((item) => item.name === 'Department' && item.value === 'One'));
+        assert.ok(
+          values.some(
+            (item) => item.role === 'slider' && item.name === 'Threshold' && item.value === '10',
+          ),
+        );
         assert.ok(values.some((item) => item.name === 'Branch' && item.value === 'North'));
         assert.doesNotMatch(
           JSON.stringify(values),
@@ -7041,12 +7049,30 @@ test(
           }),
           (error) => error instanceof BrowserActionError && error.code === 'browser_target_changed',
         );
-        changeFormDuringCapture = true;
+        await computer.act('selection', {
+          action: 'evaluate',
+          script: "document.querySelector('#threshold').value='20'",
+        });
+        const rangeChanged = await computer.currentPage('selection', step);
+        assert.equal(rangeChanged.target, numericChanged.target);
+        assert.notEqual(
+          rangeChanged.currentSelections?.binding,
+          numericChanged.currentSelections?.binding,
+        );
         await assert.rejects(
           computer.act('selection', {
             ...step,
             expectTarget: numericChanged.target,
             expectSelections: numericChanged.currentSelections?.binding,
+          }),
+          (error) => error instanceof BrowserActionError && error.code === 'browser_target_changed',
+        );
+        changeFormDuringCapture = true;
+        await assert.rejects(
+          computer.act('selection', {
+            ...step,
+            expectTarget: rangeChanged.target,
+            expectSelections: rangeChanged.currentSelections?.binding,
           }),
           (error) => error instanceof BrowserActionError && error.code === 'browser_target_changed',
         );
@@ -7057,7 +7083,36 @@ test(
           readOnly: true,
         });
         assert.deepEqual(JSON.parse(final.text.slice(final.text.indexOf('\n') + 1)), ['November']);
+        const thresholds = await computer.act('selection', {
+          action: 'evaluate',
+          script: 'window.syntheticThresholds',
+          readOnly: true,
+        });
+        assert.deepEqual(JSON.parse(thresholds.text.slice(thresholds.text.indexOf('\n') + 1)), [
+          '10',
+        ]);
       }
+      await computer.act('selection', { action: 'click', selector: '#dialog' });
+      const modalAt = Date.now();
+      const modal = await computer.currentPage('selection', { action: 'accept_dialog' });
+      assert.ok(
+        Date.now() - modalAt < 1500,
+        'An open dialog must not wait for a blocked accessibility read.',
+      );
+      assert.equal(modal.currentSelections?.binding, undefined);
+      assert.match(modal.currentSelections?.incomplete ?? '', /JavaScript dialog is open/);
+      await computer.act('selection', {
+        action: 'accept_dialog',
+        expectOrigin: modal.origin,
+        expectUrl: modal.url,
+        expectTarget: modal.target,
+      });
+      const accepted = await computer.act('selection', {
+        action: 'evaluate',
+        script: 'window.syntheticDialogAccepted',
+        readOnly: true,
+      });
+      assert.equal(JSON.parse(accepted.text.slice(accepted.text.indexOf('\n') + 1)), true);
       const step = { action: 'click', selector: '#report' } as const;
       const saved = await computer.currentPage('selection', step);
       const restarted = createAgentBrowserComputer({
