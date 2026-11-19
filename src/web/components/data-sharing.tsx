@@ -79,8 +79,8 @@ export function DataSharing({
           {traces !== undefined && (
             <Item icon={MessageSquareText} title="Conversation traces" state={state(traces)}>
               Off by default. Conversations and app results for the team to review. Nod removes
-              personal details it recognizes, but some can remain. Kept for 14 days. Never used to
-              train AI models.
+              personal details it recognizes. Traces can still identify you. n8n&apos;s default
+              service keeps them for 14 days and never uses them to train AI models.
             </Item>
           )}
           <Item icon={Globe2} title="Your models and connected apps">
@@ -94,13 +94,16 @@ export function DataSharing({
           </Item>
         </ul>
         <p>
-          Zero Data Retention limits covered execution logs. Services still process the data.
-          Composio can keep tool search queries. Files and app events have separate rules.
+          When Composio Zero Data Retention is on, it limits covered execution logs. Composio still
+          processes calls and keeps metadata. Tool search queries, files and trigger events have
+          separate rules.
         </p>
         <p>
-          Usage data and traces are stored in the EU. With usage sharing on, a consented onboarding
-          email and any fixed About you choices you shared also go to Customer.io in the US. Turning
-          a switch off stops new sends for that setting; ask us to delete earlier data.
+          n8n&apos;s default services store usage data and traces in the EU. Custom trace services
+          use their operator&apos;s storage and retention rules. With usage sharing on, a consented
+          onboarding email and any fixed About you choices you shared also go to Customer.io in the
+          US. Turning a switch off stops new sends for that setting. A send already in progress can
+          finish. Ask us to delete earlier data.
         </p>
         <div className="data-sharing-actions">
           <a href={detailsUrl} target="_blank" rel="noreferrer">
