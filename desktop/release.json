@@ -1,10 +1,7 @@
 {
-  "version": "0.8.4",
-  "previousTag": "nod-v0.8.3",
-  "source": "cc81434d87b2ad15f7c2d0934c4ac6824c4db0fb",
-  "highlights": "## 🧩 Bring your app to Nod\n\nBuild a connector from an MCP server, an HTTP API or a CLI. The [contributor guide](https://nod.n8n.io/docs/contribute/apps/) and AI builder skill help you create an app folder, follow the standard and add the required tests. Then open a pull request for review. Approved connectors get an Apps entry, a public page and a social image.\n\nAlready have an MCP server on your computer or network? Enter its local or private address in **Apps → Connect MCP**.\n\n## 👀 See Nod's last few steps\n\nSelect the activity line in chat or a task to see up to four recent operations, newest first. Close the list when you want a quieter view. It stays closed while the work continues.\n\n## Also in this release\n\n- **Bug reports:** **Report bug** is easier to find. Nod offers a report when something in Nod itself fails. You review what gets sent.\n- **File previews:** Right-click an image in the preview panel to save or open it.\n- **Memory:** Nod follows references in requests to remember earlier details. Notes you write keep their line breaks.\n- **Sign-in:** MCP setup shows the service's reason when sign-in cannot start. ChatGPT sign-in works when its usual local port is busy.\n- **Long chats:** Earlier tools stay available on later turns. Context errors no longer leave the chat stuck.",
-  "video": {
-    "url": "https://github.com/user-attachments/assets/6bfc3d71-6de3-4593-8fad-b7e56d2af262",
-    "releaseSha256": "0fd4ab5fb690428c253131fd7b17d06b0d25821e56100b29738d600c4e68e3fa"
-  }
+  "version": "0.9.0",
+  "previousTag": "nod-v0.8.4",
+  "source": "94fe4b57b42e3a046ac8c6514cab0aa423f95409",
+  "highlights": "## 🖥️ Put Nod to work in your apps\n\nNod can now use apps on your Mac or Windows computer. Ask it to write a list in TextEdit or Notepad, fill a table in Numbers, or write a Mail draft.\n\nTry telling Nod: “Open TextEdit and write a shopping list: milk, bread, eggs. Don’t save it.”\n\nTurn it on in **Settings → Computer use**. On a Mac, also allow Accessibility. Computer use is experimental and off by default. It works only on work you start. Nod checks changes against your request, and you can select **Stop** while it works. You can also tell Nod to keep out of an app.\n\nComputer use does not work in the Linux Flatpak app yet. [See setup and limits](https://nod.n8n.io/docs/connect/computer-use/).\n\n## Also in this release\n\n- **Schedules:** Select **Stop this run** to end the current run and keep future runs enabled. Late, skipped and failed runs show what happened in chat.\n- **Fresh chat:** Send `/clear` to start fresh. Your files, apps, memory and schedules stay. Previous messages remain in chat search.\n- **Desktop updates:** Interrupted Windows downloads can resume, and downloaded updates install when you quit. Mac updates can finish if you reopen Nod during installation.\n- **Writing in chat:** Fixes for pasted links, text formatting and fast typing keep the message box working as you write.",
+  "video": null
 }
