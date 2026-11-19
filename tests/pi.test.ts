@@ -647,7 +647,7 @@ test('wide OpenRouter requests bound completion reservations without dropping in
       { role: 'user', content: 'Return a short synthetic report.', timestamp: 2 },
     ];
     const bodies: Record<string, any>[] = [];
-    for (const maxTokens of [undefined, 512, 1]) {
+    for (const maxTokens of [65_000, undefined, 512, 1]) {
       const result = await runtime.completeSimple(
         model,
         { systemPrompt: 'Keep the synthetic owner instruction.', messages },
@@ -681,10 +681,10 @@ test('wide OpenRouter requests bound completion reservations without dropping in
       );
       assert.equal(result.stopReason, 'stop', result.errorMessage);
     }
-    assert.equal(bodies.length, 3);
+    assert.equal(bodies.length, 4);
     assert.deepEqual(
       bodies.map((body) => body.max_tokens ?? body.max_completion_tokens),
-      [Math.min(maximum, 32_768), 512, 1],
+      [Math.min(maximum, 32_768), Math.min(maximum, 32_768), 512, 1],
     );
     assert.equal(model.contextWindow, 1_048_576);
     assert.equal(model.maxTokens, bodies[0].max_tokens ?? bodies[0].max_completion_tokens);
