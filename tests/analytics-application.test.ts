@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -62,83 +62,85 @@ test(
     let currentClassification = classification();
     let heldAgent:
       { entered: ReturnType<typeof gate>; released: ReturnType<typeof gate> } | undefined;
-    const application = await createApplication(
-      {
-        analytics: { capture: (event) => events.push(event), shutdown: async () => {} },
-        traces: createModelTraces(),
-        agent: {
-          async open(options) {
-            return {
-              resumed: false,
-              abort() {},
-              dispose() {},
-              async prompt() {
-                if (heldAgent) {
-                  const held = heldAgent;
-                  held.entered.resolve();
-                  await held.released.promise;
-                }
-                options.onEvent({
-                  type: 'provider_usage',
-                  usage: {
-                    id: randomUUID(),
-                    provider: 'anthropic',
-                    model: 'claude-opus-5-5',
-                    category: 'agent',
-                    operation: 'request',
-                    status: 'succeeded',
-                    durationMs: 5,
-                    costUsd: 0.002,
-                    pricing: 'sdk_estimate',
-                  },
-                });
-                options.onEvent({ type: 'final', text: 'Synthetic analytics task completed.' });
-              },
-            };
+    const start = () =>
+      createApplication(
+        {
+          analytics: { capture: (event) => events.push(event), shutdown: async () => {} },
+          traces: createModelTraces(),
+          agent: {
+            async open(options) {
+              return {
+                resumed: false,
+                abort() {},
+                dispose() {},
+                async prompt() {
+                  if (heldAgent) {
+                    const held = heldAgent;
+                    held.entered.resolve();
+                    await held.released.promise;
+                  }
+                  options.onEvent({
+                    type: 'provider_usage',
+                    usage: {
+                      id: randomUUID(),
+                      provider: 'anthropic',
+                      model: 'claude-opus-5-5',
+                      category: 'agent',
+                      operation: 'request',
+                      status: 'succeeded',
+                      durationMs: 5,
+                      costUsd: 0.002,
+                      pricing: 'sdk_estimate',
+                    },
+                  });
+                  options.onEvent({ type: 'final', text: 'Synthetic analytics task completed.' });
+                },
+              };
+            },
+            dispose() {},
           },
-          dispose() {},
-        },
-        classificationCurator: {
-          id: 'fixture',
-          configured: true,
-          async curate(request, _signal, report) {
-            assert.equal(request.task, 'classify');
-            requests.push(request.input);
-            const held = currentClassification;
-            held.entered.resolve();
-            await held.released.promise;
-            report?.({
-              id: held.usageId,
-              provider: 'anthropic',
-              model: 'claude-haiku-5-5',
-              costUsd: 0.0001,
-              inputTokens: 30,
-              outputTokens: 8,
-              durationMs: 7,
-              status: 'succeeded',
-              pricing: 'sdk_estimate',
-            });
-            return { task_type: 'research' };
+          classificationCurator: {
+            id: 'fixture',
+            configured: true,
+            async curate(request, _signal, report) {
+              assert.equal(request.task, 'classify');
+              requests.push(request.input);
+              const held = currentClassification;
+              held.entered.resolve();
+              await held.released.promise;
+              report?.({
+                id: held.usageId,
+                provider: 'anthropic',
+                model: 'claude-haiku-5-5',
+                costUsd: 0.0001,
+                inputTokens: 30,
+                outputTokens: 8,
+                durationMs: 7,
+                status: 'succeeded',
+                pricing: 'sdk_estimate',
+              });
+              return { task_type: 'research' };
+            },
           },
+          memoryCurator: { id: 'fixture', configured: false, curate: async () => ({}) },
+          computer: fakeComputer(),
+          workspace: fakeWorkspace(),
+          integrations: createIntegrationFixture(`http://localhost:${port}`).provider,
+          speech: {
+            id: 'fixture',
+            configured: false,
+            synthesize: async () => ({
+              bytes: Buffer.alloc(0),
+              mimeType: 'audio/mpeg',
+              fileName: 'unused.mp3',
+            }),
+          },
+          keyStore: { id: 'fixture', configured: true, getKey: async () => Buffer.alloc(32, 7) },
+          model: { provider: 'anthropic', name: 'claude-opus-5-5', configured: true },
         },
-        memoryCurator: { id: 'fixture', configured: false, curate: async () => ({}) },
-        computer: fakeComputer(),
-        workspace: fakeWorkspace(),
-        integrations: createIntegrationFixture(`http://localhost:${port}`).provider,
-        speech: {
-          id: 'fixture',
-          configured: false,
-          synthesize: async () => ({
-            bytes: Buffer.alloc(0),
-            mimeType: 'audio/mpeg',
-            fileName: 'unused.mp3',
-          }),
-        },
-        keyStore: { id: 'fixture', configured: true, getKey: async () => Buffer.alloc(32, 7) },
-        model: { provider: 'anthropic', name: 'claude-opus-5-5', configured: true },
-      },
-      { channels: false, heartbeat: false },
-    );
+        { channels: false, heartbeat: false },
+      );
+    let application = await start();
     const headers = {
       host: `localhost:${port}`,
       origin: `http://localhost:${port}`,
@@ -320,6 +322,39 @@ test(
             ).rowCount,
             0,
           );
+        },
+      );
+      await t.test(
+        'startup saves a redacted failure when the trace key is unavailable',
+        async () => {
+          await application.app.close();
+          assert.match(await readFile(join(dataDirectory, 'trace-key'), 'utf8'), /^[\w-]{43}$/);
+          await writeFile(join(dataDirectory, 'trace-key'), 'invalid-synthetic-trace-key', {
+            mode: 0o600,
+          });
+          application = await start();
+          await sharing(false);
+          await application.app.close();
+          const failureLog = await readFile(
+            join(
+              dataDirectory,
+              'feedback-logs',
+              `${createHash('sha256').update(ownerId).digest('hex')}-failures`,
+              'journal-0.jsonl',
+            ),
+            'utf8',
+          );
+          const failures = failureLog
+            .trim()
+            .split('\n')
+            .map((line) => JSON.parse(line));
+          assert.equal(
+            failures.filter((entry) => entry.data.event === 'trace_conversation_key_unavailable')
+              .length,
+            1,
+          );
+          assert.equal(failureLog.includes(dataDirectory), false);
+          assert.equal(failureLog.includes('invalid-synthetic-trace-key'), false);
         },
       );
     } finally {
