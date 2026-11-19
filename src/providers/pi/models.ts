@@ -1271,6 +1271,8 @@ export async function createPiModelRuntime(
                 }
                 throw error;
               });
+              phase = 'response';
+              status = response.status;
               return usage ? usage.response(response) : response;
             },
           }

@@ -3429,6 +3429,97 @@ test('hosted connection proof signs only the opened broker popup challenge for i
   }
 });
 
+test('a discarded app sign-in closes its connection browser attempt', async (t) => {
+  for (const hosted of [false, true]) {
+    await t.test(hosted ? 'hosted' : 'native', async (t) => {
+      const origin = hosted ? 'https://nod.customer.example' : 'http://localhost:4310';
+      const browser = createIntegrationBrowser(hosted ? { origin } : undefined);
+      t.after(() => browser.close());
+      const app = Fastify();
+      t.after(() => app.close());
+      if (hosted) {
+        registerLocalAccess(app, 4310, { key: 'synthetic-owner-key', origin });
+        browser.registerRoutes(app);
+      }
+      const root = await mkdtemp(join(tmpdir(), 'nod-discarded-attempt-'));
+      t.after(() => rm(root, { recursive: true, force: true }));
+      let requests = 0;
+      const proxy = createComposioProxy({
+        dataRoot: root,
+        ownerId: 'fixture-owner',
+        keyStore: installationKeyStore,
+        checkpoint: fixtureIdentityCheckpoint,
+        url: 'https://proxy.example.test',
+        request: async () => {
+          requests++;
+          throw new Error('The synthetic connection service is offline.');
+        },
+        browser,
+      });
+      await proxy.initialize();
+      const provider = createComposioProvider({ proxy });
+      const authorize = () =>
+        provider.authorize!(
+          'fixture-owner',
+          'gmail',
+          `${origin}/api/apps/callback?state=${randomBytes(32).toString('base64url')}`,
+        );
+      const discarded = await authorize();
+      const survivor = await authorize();
+      assert.equal(browser.owns(discarded.url), true);
+      const url = new URL(discarded.url);
+      const page = hosted
+        ? (await app.inject({ url: url.pathname, headers: { host: url.host } })).body
+        : await (await fetch(discarded.url)).text();
+      const bridgeKey = hosted
+        ? JSON.parse(page.match(/const \{brokerOrigin,id,expiresAt,bridgeKey\}=(.+);/)![1])
+            .bridgeKey
+        : JSON.parse(page.match(/const bridgeKey=("[^"]+");/)![1]);
+      await provider.deleteAccount(discarded.accountId, 'fixture-owner');
+      assert.equal(browser.owns(discarded.url), false);
+      assert.equal(browser.owns(survivor.url), true);
+      const browserKey = generateKeyPairSync('ec', { namedCurve: 'prime256v1' }).publicKey.export({
+        format: 'jwk',
+      });
+      if (hosted) {
+        assert.equal(
+          (await app.inject({ url: url.pathname, headers: { host: url.host } })).statusCode,
+          403,
+        );
+        const late = await app.inject({
+          method: 'POST',
+          url: url.pathname,
+          headers: { host: url.host, origin, 'x-nod-bridge': bridgeKey },
+          payload: { browserKey },
+        });
+        assert.equal(late.statusCode, 403);
+      } else {
+        await assert.rejects(fetch(discarded.url));
+        await assert.rejects(
+          fetch(`${url.origin}/start`, {
+            method: 'POST',
+            headers: {
+              'content-type': 'application/json',
+              origin: url.origin,
+              'x-nod-bridge': bridgeKey,
+            },
+            body: JSON.stringify({ browserKey }),
+          }),
+        );
+      }
+      assert.equal(requests, 0);
+      await provider.deleteAccount(survivor.accountId, 'fixture-owner');
+      for (let attempt = 0; attempt < 20; attempt++) {
+        const next = await authorize();
+        await provider.deleteAccount(next.accountId, 'fixture-owner');
+      }
+      const last = await authorize();
+      assert.equal(browser.owns(last.url), true);
+      assert.equal(requests, 0);
+    });
+  }
+});
+
 test('connection bridge binds a single browser bootstrap to one installation attempt and closes on completion', async (t) => {
   const browser = createIntegrationBrowser();
   t.after(() => browser.close());
@@ -8607,6 +8698,7 @@ function composioProxyFixture(
     parseCallback: async () => assert.fail('Unexpected fixture callback.'),
     upload: async () => assert.fail('Unexpected fixture upload.'),
     isPendingAccount: () => false,
+    finishPendingAccount: () => assert.fail('Unexpected fixture sign-in discard.'),
     backoff: () => undefined,
     ...overrides,
   };
