@@ -10136,6 +10136,64 @@ test('turn-bound review and memory timeouts retain their cause while Stop ends r
       );
 });
 
+test('model HTTP failures keep their response status within each request and retry', async (t) => {
+  const statuses: number[] = [];
+  let disconnected = false;
+  t.mock.method(globalThis, 'fetch', async () => {
+    if (disconnected)
+      throw Object.assign(new Error('Synthetic disconnect.'), { code: 'ECONNRESET' });
+    const status = statuses.shift();
+    assert.ok(status);
+    return status !== 200
+      ? Response.json({ error: { message: 'Synthetic service refusal.' } }, { status })
+      : new Response(
+          `data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: '{"access":false}' }, finish_reason: 'stop' }], usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } })}\n\ndata: [DONE]\n\n`,
+          { headers: { 'content-type': 'text/event-stream' } },
+        );
+  });
+  const access = smallContextAccess('compatible', 'fixture-response-status', 128000);
+  const { runtime, model, requestFacts } = await createPiModelRuntime(access);
+  const request = {
+    messages: [{ role: 'user' as const, content: 'Synthetic mail.', timestamp: 1 }],
+  };
+  for (const status of [403, 200, 401]) {
+    statuses.push(status);
+    const result = await runtime.completeSimple(model, request);
+    assert.equal(result.stopReason, status === 200 ? 'stop' : 'error');
+    if (status !== 200) assert.match(result.errorMessage ?? '', new RegExp(`HTTP ${status}`));
+    assert.equal(requestFacts(result)?.requestPhase, status === 200 ? 'stream' : 'response');
+  }
+  disconnected = true;
+  const failed = await runtime.completeSimple(model, request);
+  assert.equal(failed.stopReason, 'error');
+  assert.doesNotMatch(failed.errorMessage ?? '', /HTTP \d{3}/);
+  assert.equal(requestFacts(failed)?.requestPhase, 'request');
+  disconnected = false;
+  statuses.push(503, 403);
+  const reports: Array<Partial<ProviderUsageEvent>> = [];
+  const curator = createPiMemoryCurator({
+    provider: 'compatible',
+    configured: () => true,
+    resolve: async () => access,
+  });
+  await assert.rejects(
+    curator.curate(
+      { task: 'access', instructions: 'Check synthetic mail.', input: {} },
+      new AbortController().signal,
+      (usage) => reports.push(usage),
+    ),
+    (error: Error & { providerStatus?: number }) => {
+      assert.equal(error.providerStatus, 403);
+      assert.match(error.message, /HTTP 403/);
+      assert.doesNotMatch(error.message, /HTTP 503/);
+      return true;
+    },
+  );
+  assert.equal(statuses.length, 0);
+  assert.equal(reports.length, 2);
+  assert.ok(reports.every(({ status }) => status === 'failed'));
+});
+
 test('action review failures identify the task, model, provider, and bounded provider reason', async (t) => {
   const { createServer } = await import('node:http');
   const { InMemoryCredentialStore } = await import('@earendil-works/pi-ai');
