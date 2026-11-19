@@ -33,10 +33,6 @@ export function toggleSidebarState(state: SidebarState): SidebarState {
 
 let sliding: Animation[] = [];
 
-/**
- * Slides the sidebar for a pointer press on the toggle. The layout changes once, up front;
- * only transform and clip-path move. The shortcut, the keyboard and the drag stay instant.
- */
 function slideSidebar(toggle: HTMLElement, apply: () => void) {
   const shell = toggle.closest<HTMLElement>('.app-shell');
   const sidebar = shell?.querySelector<HTMLElement>('.sidebar');
@@ -53,7 +49,6 @@ function slideSidebar(toggle: HTMLElement, apply: () => void) {
     const rect = element.getBoundingClientRect();
     return (rect.left + rect.right) / 2;
   };
-  // Measure where things are on screen now, mid-slide or not, so a second press picks up from there.
   const edge = sidebar.getBoundingClientRect();
   const bodyFrom = centre(body);
   const toggleFrom = toggle.getBoundingClientRect().left;
@@ -68,10 +63,8 @@ function slideSidebar(toggle: HTMLElement, apply: () => void) {
     easing: getComputedStyle(shell).getPropertyValue('--ease-enter').trim() || 'ease-out',
   };
   const bodyShift = bodyFrom - centre(body);
-  // The desktop toggle never moves; it must not get a transform (see sidebar-toggle.css).
   const toggleShift = toggleFrom - toggle.getBoundingClientRect().left;
   const covered = toolbar ? Math.max(0, edge.right - toolbar.getBoundingClientRect().left) : 0;
-  // The divider sits in the page area; carry it on the sidebar's edge for the whole slide.
   const divider = shell.querySelector<HTMLElement>('.sidebar-resizer');
   const dividerAt = divider ? centre(divider) : 0;
   const panel = sidebar.animate(
@@ -82,7 +75,6 @@ function slideSidebar(toggle: HTMLElement, apply: () => void) {
   );
   sliding = [
     panel,
-    // Half the sidebar's travel keeps centred content where it was instead of jumping.
     body.animate({ transform: [`translateX(${bodyShift}px)`, 'none'] }, timing),
     ...(toggleShift
       ? [toggle.animate({ transform: [`translateX(${toggleShift}px)`, 'none'] }, timing)]
@@ -100,7 +92,6 @@ function slideSidebar(toggle: HTMLElement, apply: () => void) {
           ),
         ]
       : []),
-    // The toolbar is already at its new place; uncover it as the sidebar's edge passes.
     ...(toolbar && covered
       ? [toolbar.animate({ clipPath: [`inset(0 0 0 ${covered}px)`, 'inset(0)'] }, timing)]
       : []),
@@ -141,8 +132,7 @@ export function SidebarToggle({
       aria-controls="sidebar-navigation"
       aria-keyshortcuts={desktop ? `${mac ? 'Meta' : 'Control'}+B` : undefined}
       onClick={(event) =>
-        // A click from the keyboard has detail 0.
-        event.detail ? slideSidebar(event.currentTarget, onToggle) : onToggle()
+        event.detail > 0 ? slideSidebar(event.currentTarget, onToggle) : onToggle()
       }
     >
       <svg
