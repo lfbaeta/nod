@@ -65,8 +65,8 @@ export function DataSharing({
       <DialogContent className="data-sharing">
         <DialogTitle>How Nod uses your data</DialogTitle>
         <DialogDescription>
-          These switches control sharing with the Nod team at n8n. Connected services also receive
-          the data they need to do your work.
+          These switches control usage data and conversation traces. Connected services receive the
+          data they need to do your work.
         </DialogDescription>
         <ul>
           {usage !== undefined && (
@@ -110,7 +110,8 @@ export function DataSharing({
           use their operator&apos;s storage and retention rules. With usage sharing on, a consented
           onboarding email and any fixed About you choices you shared also go to Customer.io in the
           US. Turning a switch off stops new sends for that setting. A send already in progress can
-          finish. Ask us to delete earlier data.
+          finish. Ask n8n to delete data sent to its services. For a custom trace service, contact
+          its operator.
         </p>
         <div className="data-sharing-actions">
           <a href={detailsUrl} target="_blank" rel="noreferrer">
