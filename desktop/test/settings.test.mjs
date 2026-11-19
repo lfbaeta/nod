@@ -10346,6 +10346,7 @@ test('the built startup report form requires exact review and keeps uncertain se
   const requests = [];
   let open;
   let send;
+  let refuseSend;
   let repair;
   let failOpening = true;
   let allowRecovery = false;
@@ -10400,8 +10401,9 @@ test('the built startup report form requires exact review and keeps uncertain se
           recipient: 'n8n',
         };
       if (action === 'send')
-        return new Promise((resolve) => {
+        return new Promise((resolve, reject) => {
           send = resolve;
+          refuseSend = reject;
         });
       if (action === 'status') return { submissionId: reportId, status: 'submitted' };
       assert.fail(action);
@@ -10555,6 +10557,23 @@ test('the built startup report form requires exact review and keeps uncertain se
   button('Review').click();
   await settle(() => button('Send report'));
   assert.equal(requests.filter(([action]) => action === 'send').length, 3);
+  send = undefined;
+  button('Send report').click();
+  await settle(() => send);
+  refuseSend(new page.window.Error('Review the report again before sending it.'));
+  await settle(() => button('Review') && !button('Review').disabled);
+  assert.equal(button('Send report'), undefined);
+  assert.equal(recoveredDescription.value, 'Synthetic recovered report.');
+  button('Review').click();
+  await settle(() => button('Send report'));
+  send = undefined;
+  contextValue.pending = { submissionId: reportId, status: 'unknown' };
+  button('Send report').click();
+  await settle(() => send);
+  refuseSend(new page.window.Error('Synthetic uncertain send transport failure.'));
+  await settle(() => button('Check status') && !button('Check status').disabled);
+  assert.equal(button('Review'), undefined);
+  assert.equal(button('Send report'), undefined);
   button('Close').click();
   await settle(() => closes === 2 && !page.window.document.querySelector('[role="dialog"]'));
   assert.equal(retries, 0);

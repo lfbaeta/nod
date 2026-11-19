@@ -263,11 +263,22 @@ export function StartupFeedback({
               disabled={busy}
               onClick={() =>
                 void run(async () => {
-                  const value = (await desktop.startupFeedback(
-                    'send',
-                    review.reviewId,
-                  )) as FeedbackReceipt;
-                  if (active.current) setReceipt(value);
+                  const id = review.reviewId;
+                  try {
+                    const value = (await desktop.startupFeedback('send', id)) as FeedbackReceipt;
+                    if (active.current) setReceipt(value);
+                  } catch (cause) {
+                    if (active.current) setReceipt({ submissionId: id, status: 'unknown' });
+                    try {
+                      const value = (await desktop.startupFeedback('context')) as Context;
+                      if (active.current) {
+                        setContext(value);
+                        setReceipt(value.pending?.submissionId === id ? value.pending : null);
+                        setReview(undefined);
+                      }
+                    } catch {}
+                    throw cause;
+                  }
                 })
               }
             >

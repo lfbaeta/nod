@@ -410,10 +410,9 @@ export function createStartupFeedback(options: {
               [error, rollback],
               'The report was not sent. The previous saved report status could not be restored.',
             );
-          } finally {
-            pending = previousPending;
-            receipt = previousReceipt;
           }
+          pending = previousPending;
+          receipt = previousReceipt;
           throw error;
         }
         receipt = await options.delivery.submit(envelope);

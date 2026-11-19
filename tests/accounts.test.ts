@@ -8166,6 +8166,11 @@ test('environment secret collection covers every model key and token segment bef
       'FEEDBACK_TOKEN',
       'TRACES_TOKEN',
       'UPDATES_TOKEN',
+      'AWS_SECRET_ACCESS_KEY',
+      'PRIVATE_KEY',
+      'ENCRYPTION_KEY',
+      'PASSPHRASE',
+      'ACCESS_KEY_ID',
     ].map((key, index) => [`SYNTHETIC_${key}`, `synthetic-legacy-key-${index}`]),
   );
   const environment = {
@@ -8184,6 +8189,12 @@ test('environment secret collection covers every model key and token segment bef
   for (const [key, value] of Object.entries(environment))
     assert.equal(secrets.includes(value), key !== 'PORT', key);
   assert.ok(secrets.includes('synthetic+database/password'));
+  const malformed = 'synthetic%2Gprivate-password';
+  assert.ok(
+    environmentSecrets({
+      DATABASE_URL: `postgresql://synthetic:${malformed}@127.0.0.1/nod_synthetic`,
+    }).includes(malformed),
+  );
   assert.deepEqual(
     environmentSecrets({
       EMPTY_TOKEN: '',
@@ -8383,6 +8394,91 @@ test('startup recovery refuses a failed durable backup and retries a recovered s
     syncBuiltinESMExports();
   }
 });
+
+test(
+  'startup keeps the saved submission fence when durable save and rollback both fail',
+  { skip: process.platform === 'win32' },
+  async (t) => {
+    const { createStartupFeedback } = await import('../src/server/startup-feedback.ts');
+    const filesystem = (await import('node:fs/promises')).default;
+    const { syncBuiltinESMExports } = await import('node:module');
+    const root = await mkdtemp(join(tmpdir(), 'nod-report-rollback-'));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const path = join(root, 'startup-feedback.json');
+    let submits = 0;
+    const options = {
+      dataRoot: root,
+      secrets: [],
+      names: [],
+      status: { phase: 'error' },
+      context: {
+        appVersion: '0.9.0',
+        appRelease: 'a'.repeat(40),
+        appModified: false,
+        development: false,
+        source: 'desktop' as const,
+        platform: 'darwin-arm64',
+      },
+      delivery: {
+        configured: true,
+        recipient: 'n8n',
+        async submit(value: import('../src/ports/feedback.ts').FeedbackEnvelope) {
+          submits++;
+          return { submissionId: value.submissionId, status: 'submitted' as const };
+        },
+        async status(id: string) {
+          return { submissionId: id, status: 'unknown' as const };
+        },
+      },
+    };
+    const service = createStartupFeedback(options);
+    const review = await service.review({
+      feedback: 'Synthetic durable report.',
+      includeReport: false,
+    });
+    const directory = await filesystem.open(root, 'r');
+    const prototype = Object.getPrototypeOf(directory);
+    const originalSync = prototype.sync;
+    const originalRm = filesystem.rm;
+    await directory.close();
+    try {
+      prototype.sync = async function (this: import('node:fs/promises').FileHandle) {
+        if ((await this.stat()).isDirectory())
+          throw Object.assign(new Error('EIO: Synthetic directory save failure.'), { code: 'EIO' });
+        return originalSync.call(this);
+      };
+      filesystem.rm = (async (...args: Parameters<typeof originalRm>) => {
+        if (String(args[0]) === path)
+          throw Object.assign(new Error('EPERM: Synthetic rollback refusal.'), { code: 'EPERM' });
+        return originalRm(...args);
+      }) as typeof originalRm;
+      syncBuiltinESMExports();
+      await assert.rejects(
+        service.send(review.reviewId),
+        /previous saved report status could not be restored/,
+      );
+      assert.equal(
+        JSON.parse(await filesystem.readFile(path, 'utf8')).submissionId,
+        review.reviewId,
+      );
+      assert.equal((await service.context()).pending?.submissionId, review.reviewId);
+      assert.equal((await service.send(review.reviewId)).status, 'unknown');
+      await assert.rejects(
+        service.review({ feedback: 'Synthetic replacement.', includeReport: false }),
+        /previous report status/,
+      );
+      assert.equal(submits, 0);
+      assert.equal(
+        (await createStartupFeedback(options).context()).pending?.submissionId,
+        review.reviewId,
+      );
+    } finally {
+      prototype.sync = originalSync;
+      filesystem.rm = originalRm;
+      syncBuiltinESMExports();
+    }
+  },
+);
 
 test('startup exports and receipts hide original overlapping private spans before text changes', async (t) => {
   const { createStartupFeedback } = await import('../src/server/startup-feedback.ts');
