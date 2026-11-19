@@ -1288,6 +1288,16 @@ test(
             ],
           );
           assert.equal(await monthly(), null);
+          await db.pool.query(
+            "UPDATE model_usage SET cost_usd=0,details=details || jsonb_build_object('pricing','sdk_estimate') WHERE id=$1",
+            [unpricedReview],
+          );
+          assert.equal(await monthly(), null);
+          await db.pool.query(
+            "UPDATE model_usage SET details=details || jsonb_build_object('pricing','reported') WHERE id=$1",
+            [unpricedReview],
+          );
+          await expectRunCost(3.26);
           await db.pool.query('DELETE FROM model_usage WHERE id=$1', [unpricedReview]);
           await db.pool.query('UPDATE model_usage SET cost_usd=0 WHERE turn_id=$1', [run.turnId]);
           await setModel(schedule.id, light);

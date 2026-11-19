@@ -69,7 +69,8 @@ const monthStart = `(date_trunc('month', now() AT TIME ZONE ${zone}) AT TIME ZON
 const spentThisMonth = `COALESCE((SELECT sum(cost_usd::text::numeric) FROM model_usage WHERE owner_id=$1 AND created_at>=${monthStart}),0)::float8`;
 const pageSize = 30;
 const planUsage = `(cost_usd IS NULL AND (details->>'estimateUsd')::float8>0)`;
-const unpricedUsage = `(details->>'status'='succeeded' AND COALESCE(cost_usd,(details->>'estimateUsd')::float8,0)=0)`;
+const unpricedUsage = (prefix = '') =>
+  `(${prefix}details->>'status'='succeeded' AND COALESCE(${prefix}cost_usd,(${prefix}details->>'estimateUsd')::float8,0)=0)`;
 const cost = (value: number | null | undefined) =>
   typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
 const titleMarkdown = unified().use(remarkParse).use(remarkGfm);
@@ -865,9 +866,12 @@ export function createLedger({
     const otherCoverage = includePlanEstimates
       ? ''
       : `, count(*) FILTER (
-        WHERE ${other} AND m.cost_usd IS NULL AND m.details->>'estimateUsd' IS NULL
-          AND (COALESCE(m.details->>'status','succeeded') NOT IN ('failed','cancelled')
-               OR GREATEST(${tokenColumns.join(',')})>0)
+        WHERE ${other} AND (
+          (${costWithPlan} IS NULL
+           AND (COALESCE(m.details->>'status','succeeded') NOT IN ('failed','cancelled')
+                OR GREATEST(${tokenColumns.join(',')})>0))
+          OR (${unpricedUsage('m.')} AND m.details->>'pricing' IS DISTINCT FROM 'reported')
+        )
       )>0 AS "unpricedOther"`;
     return {
       thresholds,
@@ -1045,7 +1049,7 @@ export function createLedger({
            WHERE a.turn_id=u.id AND a.owner_id=$1) AS actions
        FROM turns u
        LEFT JOIN LATERAL (SELECT count(*) AS used,sum(cost_usd)::float8 AS cost,
-           bool_or(${planUsage}) AS plan,bool_or(${unpricedUsage}) AS unpriced,
+           bool_or(${planUsage}) AS plan,bool_or(${unpricedUsage()}) AS unpriced,
            jsonb_agg(DISTINCT jsonb_build_object(
              'provider',NULLIF(details->>'provider',''),
              'model',NULLIF(details->>'model',''),
@@ -1230,7 +1234,7 @@ export function createLedger({
              AND ${planUsage} AND created_at>now()-interval '7 days')::float8 AS week_plan,
            (SELECT COALESCE(sum((details->>'estimateUsd')::float8),0) FROM model_usage WHERE owner_id=$1
              AND ${planUsage} AND created_at>=${monthStart})::float8 AS month_plan,
-           EXISTS(SELECT 1 FROM model_usage WHERE owner_id=$1 AND ${unpricedUsage}
+           EXISTS(SELECT 1 FROM model_usage WHERE owner_id=$1 AND ${unpricedUsage()}
              AND created_at>=${monthStart}) AS unpriced,
            EXISTS(SELECT 1 FROM model_usage WHERE owner_id=$1 AND cost_usd IS NULL AND details ? 'estimateUsd'
              AND created_at>=${monthStart}) AS plan_usage,
