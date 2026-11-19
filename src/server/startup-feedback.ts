@@ -188,11 +188,12 @@ export function createStartupFeedback(options: {
   function present(value: FeedbackReceipt) {
     if (reviewed && reviewed.expiresAt <= Date.now()) reviewed = undefined;
     if (!pending) throw new StartupFeedbackError('original_required');
+    const safe = startupReceiptFacts(value, pending.submissionId);
     return {
-      ...startupReceiptFacts(value, pending.submissionId),
-      ...(value.status === 'partial' && {
+      ...safe,
+      ...(safe.status === 'partial' && {
         canRetryAttachments: Boolean(
-          reviewed?.envelope.submissionId === value.submissionId &&
+          reviewed?.envelope.submissionId === safe.submissionId &&
           reviewed.envelope.report &&
           reviewed.expiresAt > Date.now(),
         ),
@@ -271,7 +272,10 @@ export function createStartupFeedback(options: {
     if (sending) return sending;
     if (!pending) return null;
     if (refresh || !receipt || receipt.status === 'unknown')
-      receipt = await options.delivery.status(pending.submissionId, pending.payloadHash);
+      receipt = startupReceiptFacts(
+        await options.delivery.status(pending.submissionId, pending.payloadHash),
+        pending.submissionId,
+      );
     return present(receipt);
   }
 
@@ -370,7 +374,7 @@ export function createStartupFeedback(options: {
           receipt = previousReceipt;
           throw error;
         }
-        receipt = await options.delivery.submit(envelope);
+        receipt = startupReceiptFacts(await options.delivery.submit(envelope), id);
         return present(receipt);
       })().finally(() => {
         sending = undefined;
@@ -394,7 +398,10 @@ export function createStartupFeedback(options: {
       const envelope = reviewed.envelope;
       receipt = undefined;
       sending = (async () => {
-        receipt = await options.delivery.submit({ ...envelope, action: 'repair' });
+        receipt = startupReceiptFacts(
+          await options.delivery.submit({ ...envelope, action: 'repair' }),
+          id,
+        );
         return present(receipt);
       })().finally(() => {
         sending = undefined;

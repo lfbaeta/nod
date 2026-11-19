@@ -10677,12 +10677,14 @@ test('a closed startup helper timer cannot stop its replacement', async (t) => {
   client.close();
 });
 
-test('startup report helper keeps its own environment secrets through initialize and snapshot', async () => {
-  const secret = 'synthetic-collector-private-token';
+test('startup report helper keeps prose out of facts and returns bounded local failures', async (t) => {
+  const { createStartupFeedback } = await import('../../src/server/startup-feedback.ts');
+  const root = await mkdtemp(join(tmpdir(), 'nod-fact-helper-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const secret = 'synthetic-private-helper-value';
   const port = new EventEmitter();
   const replies = [];
   port.postMessage = (value) => replies.push(value);
-  let configuration;
   const source = (await readFile(new URL('../main/feedback.mjs', import.meta.url), 'utf8'))
     .replace(/^import[\s\S]*?;\n/gm, '')
     .replace(/^const \{[^\n]+\} = await import\('[^']+'\);\n/gm, '');
@@ -10690,64 +10692,71 @@ test('startup report helper keeps its own environment secrets through initialize
     process: { env: { NOD_FEEDBACK_TOKEN: secret }, parentPort: port },
     register() {},
     trustSystemCertificates() {},
-    basename,
-    homedir: () => '/home/synthetic',
-    hostname: () => 'synthetic-device',
-    userInfo: () => ({ username: 'synthetic' }),
-    environmentSecrets: (environment) => [environment.NOD_FEEDBACK_TOKEN],
-    createFeedbackDelivery: () => ({}),
-    createFeedbackRedactor: ({ secrets }) => ({
-      text: (value) =>
-        secrets.reduce((result, secret) => result.replaceAll(secret, '[redacted]'), value),
+    StartupFeedbackError,
+    startupFailureMessage,
+    createStartupFeedback,
+    createFeedbackDelivery: () => ({
+      configured: true,
+      recipient: 'n8n',
+      submit: () => assert.fail('Review cannot submit.'),
+      status: () => assert.fail('No receipt is saved.'),
     }),
-    createStartupFeedback: (options) => {
-      configuration = options;
-      return {
-        context: async () => ({ ready: true }),
-        review: async () => {
-          throw Object.assign(new Error('Synthetic validation failure.'), {
-            name: 'ZodError',
-            issues: [{ path: ['feedback'], message: `Synthetic field reason ${secret}` }],
-          });
-        },
-      };
-    },
   });
   const message = async (id, action, input) => {
     port.emit('message', { data: { id, action, input } });
-    for (let attempt = 0; attempt < 100 && !replies.some((reply) => reply.id === id); attempt++)
-      await new Promise((resolve) => setImmediate(resolve));
-    const reply = replies.find((reply) => reply.id === id);
+    for (let attempt = 0; attempt < 300 && !replies.some((value) => value.id === id); attempt++)
+      await new Promise((resolve) => setTimeout(resolve, 2));
+    const reply = replies.find((value) => value.id === id);
     assert.ok(reply);
     return reply;
   };
-  await message(1, 'initialize', { secrets: ['synthetic-runtime-secret'] });
-  assert.deepEqual(Array.from(configuration.secrets), ['synthetic-runtime-secret', secret]);
-  await message(2, 'snapshot', { status: { phase: 'error' }, secrets: [] });
-  assert.deepEqual(Array.from(configuration.secrets), [secret]);
-  assert.equal((await message(3, 'context')).value.ready, true);
-  const invalid = await message(4, 'review', {});
-  assert.match(invalid.error, /feedback: Synthetic field reason/);
-  assert.ok(invalid.error.includes('[redacted]'));
+  await message(1, 'initialize', {
+    dataRoot: root,
+    context: {
+      appVersion: '0.9.0',
+      appRelease: 'a'.repeat(40),
+      appModified: false,
+      development: false,
+      source: 'desktop',
+      platform: 'darwin-arm64',
+    },
+    status: {
+      phase: 'error',
+      error: secret,
+      failure: { name: 'TypeError', code: 'EACCES', syscall: 'open', message: secret },
+    },
+    startupLog: { entries: [{ ageMs: 5, line: secret }], truncated: false },
+  });
+  const review = await message(2, 'review', {
+    feedback: 'Synthetic helper report.',
+    includeReport: true,
+  });
+  assert.equal(JSON.parse(review.value.content).startup.failure.errno, 'EACCES');
+  assert.equal(
+    JSON.parse(review.value.content).startupLog.entries[0].event,
+    'diagnostic_text_omitted',
+  );
+  await message(3, 'snapshot', {
+    status: { phase: 'error', error: secret },
+    startupLog: { entries: [{ ageMs: 5, line: secret }], truncated: false },
+  });
+  assert.ok((await message(4, 'review', {})).error);
   assert.ok(!JSON.stringify(replies).includes(secret));
 });
 
-test('startup report events survive retry and disk failure with bounded memory and current secrets', async (t) => {
+test('startup report facts survive retry and disk failure without keeping diagnostic prose', async (t) => {
   const calls = [];
   let attempts = 0;
-  const resourcesPath = '/Applications/Synthetic Owner Name/Nod.app/Contents/Resources';
-  const customEngineRoot = join(resourcesPath, 'engine');
+  const privateText =
+    'synthetic-private-owner@example.test /Applications/Synthetic Owner/private-contract';
   const f = await runningDesktop(t, async () => assert.fail('The failed engine is not needed.'), {
     initialState: 'idle',
     packaged: true,
-    resourcesPath,
+    resourcesPath: '/Applications/Synthetic Owner/Nod.app/Contents/Resources',
     allowStart: true,
     prepareRuntime: async () => {
       attempts++;
-      throw new Error(
-        (`Synthetic startup attempt ${attempts} ` + 'detail '.repeat(400)).slice(0, 1980) +
-          `${customEngineRoot}/startup`,
-      );
+      throw Object.assign(new Error(privateText), { code: 'EACCES', syscall: 'open' });
     },
     startupFeedbackAction: async (message) => {
       calls.push(message);
@@ -10761,24 +10770,14 @@ test('startup report events survive retry and disk failure with bounded memory a
   await f.prepare({ retry: true }).catch(() => {});
   assert.equal(attempts, 2);
   assert.equal(f.children.length, 0);
-  assert.ok(f.status().error.endsWith('<engine>/startup'));
-  for (const [root, marker] of [
-    [f.engineRoot, '<engine>'],
-    [f.profileRoot, '<profile>'],
-  ]) {
-    for (const variant of new Set([root, root.replaceAll('\\', '/')])) {
-      const clipped = f.bounded(
-        ('Synthetic failure ' + 'detail '.repeat(400)).slice(0, 1980) + variant + '/startup',
-      );
-      assert.ok(clipped.endsWith(marker + '/startup'));
-      assert.ok(!clipped.includes(variant.slice(0, 20)));
-    }
-  }
-  for (let index = 0; index < 105; index++)
-    await f.writeDiagnostic(`Synthetic retry event ${index}`);
-  f.knownSecrets.add('synthetic-current-runtime-key');
-  await f.writeDiagnostic(`Synthetic roots ${f.engineRoot}/startup ${f.profileRoot}/startup`);
-  f.status().details = `Synthetic status failure ${f.engineRoot}/helper ${f.profileRoot}/startup`;
+  f.knownSecrets.add('/');
+  f.knownSecrets.add('@');
+  for (let index = 0; index < 105; index++) await f.writeDiagnostic(privateText + index);
+  await f.writeDiagnostic(privateText, {
+    event: 'runtime_failed',
+    error: Object.assign(new TypeError(privateText), { code: 'EIO' }),
+    durationMs: 5,
+  });
   f.showFeedback();
   for (
     let attempt = 0;
@@ -10796,75 +10795,40 @@ test('startup report events survive retry and disk failure with bounded memory a
   const initial = calls.find((call) => call.action === 'initialize').input;
   assert.equal(initial.startupLog.entries.length, 100);
   assert.equal(initial.startupLog.truncated, true);
-  assert.ok(!initial.startupLog.entries.some((entry) => entry.line === 'Synthetic retry event 0'));
-  assert.ok(initial.startupLog.entries.some((entry) => entry.line === 'Synthetic retry event 104'));
-  assert.ok(initial.secrets.includes('synthetic-current-runtime-key'));
-  assert.ok(initial.secrets.includes(f.engineRoot));
-  assert.ok(initial.secrets.includes(f.profileRoot));
-  const roots = initial.startupLog.entries.find((entry) =>
-    entry.line.startsWith('Synthetic roots'),
+  assert.equal(initial.status.failure.errno, 'EACCES');
+  assert.equal(initial.status.failure.syscall, 'open');
+  assert.equal(initial.status.detailsOmitted, true);
+  assert.equal(initial.secrets, undefined);
+  const encoded = JSON.stringify({ status: initial.status, log: initial.startupLog });
+  for (const value of [
+    privateText,
+    'synthetic-private-owner',
+    'private-contract',
+    'Synthetic Owner',
+  ])
+    assert.ok(!encoded.includes(value));
+  assert.ok(
+    initial.startupLog.entries.some(
+      (row) => row.event === 'runtime_failed' && row.error.errno === 'EIO',
+    ),
   );
-  assert.ok(roots.line.includes('<engine>/startup'));
-  assert.ok(roots.line.includes('<profile>/startup'));
-  assert.ok(!roots.line.includes(f.engineRoot));
-  assert.ok(!roots.line.includes(f.profileRoot));
-  const { createStartupFeedback } = await import('../../src/server/startup-feedback.ts');
-  const reportOptions = {
-    ...initial,
-    names: [],
-    delivery: {
-      configured: true,
-      recipient: 'n8n',
-      submit: () => assert.fail('A review must not send the report.'),
-      status: () => assert.fail('An unsent report has no receipt.'),
-    },
-  };
-  const service = createStartupFeedback(reportOptions);
-  const exported = await service.review({ feedback: 'Synthetic roots.', includeReport: true });
-  assert.ok(!exported.content.includes(f.engineRoot));
-  assert.ok(!exported.content.includes('Synthetic Owner Name'));
-  assert.ok(!JSON.parse(exported.content).startup.error.includes(f.engineRoot.slice(0, 20)));
-  assert.ok(!exported.content.includes(f.profileRoot));
-  await f.writeDiagnostic('Synthetic oversized event ' + 'x'.repeat(48_000));
-  for (let index = 0; index < 3; index++)
-    await f.writeDiagnostic(`Synthetic large event ${index} ` + 'x '.repeat(12_000));
+  assert.ok(
+    initial.startupLog.entries.every((row) => row.line === undefined && row.textOmitted === true),
+  );
+  assert.ok(Buffer.byteLength(JSON.stringify(initial.startupLog)) < 48000);
   const path = join(f.profileRoot, 'logs', 'startup.log');
   await rm(path);
   await mkdir(path);
-  await assert.rejects(f.writeDiagnostic('Synthetic event kept after disk failure'));
-  await assert.rejects(f.writeDiagnostic('Synthetic rotated key synthetic-new-runtime-key'));
-  f.knownSecrets.add('synthetic-new-runtime-key');
-  await action(event, 'review', { feedback: 'Synthetic failure.', includeReport: true });
+  await assert.rejects(
+    f.writeDiagnostic(privateText, {
+      event: 'startup_failed',
+      error: Object.assign(new Error(privateText), { code: 'ENOSPC' }),
+    }),
+  );
+  await action(event, 'review', { feedback: 'Synthetic current facts.', includeReport: true });
   const snapshot = calls.findLast((call) => call.action === 'snapshot').input;
-  assert.ok(
-    snapshot.startupLog.entries.reduce(
-      (bytes, entry) => bytes + Buffer.byteLength(entry.line),
-      0,
-    ) <= 48_000,
-  );
-  assert.ok(
-    snapshot.startupLog.entries.every(
-      (entry) => !entry.line.startsWith('Synthetic oversized event'),
-    ),
-  );
-  assert.ok(
-    snapshot.startupLog.entries.some(
-      (entry) => entry.line === 'Synthetic event kept after disk failure',
-    ),
-  );
-  assert.ok(snapshot.secrets.includes('synthetic-new-runtime-key'));
-  assert.ok(snapshot.secrets.includes(f.engineRoot));
-  assert.ok(snapshot.secrets.includes(f.profileRoot));
-  assert.ok(snapshot.secrets.includes('synthetic-current-runtime-key'));
-  Object.assign(reportOptions, snapshot);
-  const updated = await service.review({
-    feedback: 'Synthetic updated roots.',
-    includeReport: true,
-  });
-  assert.ok(!updated.content.includes('synthetic-new-runtime-key'));
-  assert.ok(!updated.content.includes(f.engineRoot));
-  assert.ok(!updated.content.includes('Synthetic Owner Name'));
-  assert.ok(!updated.content.includes(f.profileRoot));
+  assert.ok(snapshot.startupLog.entries.some((row) => row.error?.errno === 'ENOSPC'));
+  assert.ok(!JSON.stringify(snapshot.startupLog).includes(privateText));
 });
 
 test('startup reports do not wait for a stalled disk log write', async (t) => {
@@ -10910,7 +10874,7 @@ test('startup reports do not wait for a stalled disk log write', async (t) => {
     const initial = calls.find((call) => call.action === 'initialize').input;
     assert.ok(
       initial.startupLog.entries.some(
-        (entry) => entry.line === 'Synthetic event with a stalled disk write',
+        (entry) => entry.event === 'diagnostic_text_omitted' && entry.textOmitted,
       ),
     );
     await f.handlers.get('nod:startup-feedback:action')(event, 'review', {
@@ -10985,11 +10949,11 @@ test('startup status hides environment credentials before preparation errors and
       const event = { sender: window.webContents, senderFrame: window.webContents.mainFrame };
       await f.handlers.get('nod:startup-feedback:action')(event, 'context');
       const initial = calls.find((call) => call.action === 'initialize').input;
-      assert.ok(initial.secrets.includes(secret));
+      assert.equal(initial.secrets, undefined);
+      assert.ok(f.knownSecrets.has(secret));
       const { createStartupFeedback } = await import('../../src/server/startup-feedback.ts');
       const service = createStartupFeedback({
         ...initial,
-        names: [],
         delivery: {
           configured: true,
           recipient: 'n8n',
@@ -11001,7 +10965,8 @@ test('startup status hides environment credentials before preparation errors and
         feedback: 'Synthetic startup failure.',
         includeReport: true,
       });
-      assert.ok(!JSON.parse(review.content).startup.error.includes(secret.slice(0, kept)));
+      assert.ok(!review.content.includes(secret.slice(0, kept)));
+      assert.equal(JSON.parse(review.content).startup.detailsOmitted, true);
       assert.equal(f.children.length, 0);
     });
 });
@@ -11076,7 +11041,6 @@ test('startup status masks overlapping credentials and private roots in one pass
   const { createStartupFeedback } = await import('../../src/server/startup-feedback.ts');
   const service = createStartupFeedback({
     ...initial,
-    names: [],
     delivery: {
       configured: true,
       recipient: 'n8n',

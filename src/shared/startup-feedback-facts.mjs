@@ -139,18 +139,16 @@ const integer = (value, min, max) =>
 export function startupErrorFacts(value) {
   const result = { detailsOmitted: true };
   for (const [key, selected] of [
-    ['class', choice(classes, data(value, 'class') ?? data(value, 'name'))],
-    ['errno', choice(errnos, data(value, 'errno') ?? data(value, 'code'))],
+    ['class', choice(classes, data(value, 'class')) ?? choice(classes, data(value, 'name'))],
+    ['errno', choice(errnos, data(value, 'errno')) ?? choice(errnos, data(value, 'code'))],
     ['syscall', choice(syscalls, data(value, 'syscall'))],
     [
       'httpStatus',
-      integer(
-        data(value, 'httpStatus') ?? data(value, 'statusCode') ?? data(value, 'status'),
-        100,
-        599,
-      ),
+      integer(data(value, 'httpStatus'), 100, 599) ??
+        integer(data(value, 'statusCode'), 100, 599) ??
+        integer(data(value, 'status'), 100, 599),
     ],
-    ['exitCode', integer(data(value, 'exitCode'), -2147483648, 2147483647)],
+    ['exitCode', integer(data(value, 'exitCode'), -2147483648, 4294967295)],
     ['signal', choice(signals, data(value, 'signal'))],
   ])
     if (selected !== undefined) result[key] = selected;
@@ -184,7 +182,7 @@ export function startupEventFacts(event, details) {
     ['stage', choice(stages, data(details, 'stage'))],
     ['durationMs', integer(data(details, 'durationMs'), 0, 86400000)],
     ['count', integer(data(details, 'count'), 0, 1000000)],
-    ['exitCode', integer(data(details, 'exitCode'), -2147483648, 2147483647)],
+    ['exitCode', integer(data(details, 'exitCode'), -2147483648, 4294967295)],
     ['signal', choice(signals, data(details, 'signal'))],
     ['httpStatus', integer(data(details, 'httpStatus'), 100, 599)],
   ])
@@ -279,14 +277,13 @@ export function startupReceiptFacts(value, submissionId) {
     choice(new Set(['submitted', 'partial', 'unknown', 'rejected']), data(value, 'status')) ??
     'unknown';
   const httpStatus = integer(data(value, 'httpStatus'), 100, 599);
-  const issueUrl = data(value, 'issueUrl');
   const limited = data(value, 'reason') === 'rate_limited';
   return {
     submissionId,
     status,
-    ...(typeof issueUrl === 'string' && { issueUrl }),
     ...(httpStatus !== undefined && { httpStatus }),
     ...(limited && { reason: 'rate_limited', message: 'Please try again in a minute.' }),
-    ...(data(value, 'message') !== undefined && !limited && { messageOmitted: true }),
+    ...((data(value, 'message') !== undefined || data(value, 'messageOmitted') === true) &&
+      !limited && { messageOmitted: true }),
   };
 }
