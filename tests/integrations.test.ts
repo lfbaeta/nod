@@ -3820,8 +3820,9 @@ fetch('/v2/connect/verify',{method:'POST',headers:{'Content-Type':'application/j
     const pending = new Map<number, (reply: BrowserReply) => void>();
     socket.addEventListener('message', (event) => {
       const reply = JSON.parse(String(event.data)) as BrowserReply;
+      if (!reply || !Number.isSafeInteger(reply.id) || !pending.has(reply.id)) return;
       const receive = pending.get(reply.id);
-      if (receive) {
+      if (typeof receive === 'function') {
         pending.delete(reply.id);
         receive(reply);
       }
