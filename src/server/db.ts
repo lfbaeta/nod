@@ -101,6 +101,7 @@ export async function initializeDatabase() {
       summary text NOT NULL, created_at timestamptz NOT NULL DEFAULT now()
     );
     CREATE INDEX IF NOT EXISTS turn_events_turn_time ON turn_events(turn_id,created_at);
+    CREATE INDEX IF NOT EXISTS turn_events_progress ON turn_events(turn_id,created_at,id) WHERE type IN ('step','steered');
     ALTER TABLE turn_events ADD COLUMN IF NOT EXISTS run_id uuid;
     ALTER TABLE turn_events ADD COLUMN IF NOT EXISTS parent_run_id uuid;
     ALTER TABLE turn_events ADD COLUMN IF NOT EXISTS session_id uuid;
