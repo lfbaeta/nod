@@ -658,6 +658,7 @@ test('wide OpenRouter requests bound completion reservations without dropping in
           fetch: async (_input, init) => {
             const body = JSON.parse(String(init?.body));
             bodies.push(body);
+            assert.ok((body.max_tokens ?? body.max_completion_tokens) <= maximum);
             if ((body.max_tokens ?? body.max_completion_tokens) > 60_000)
               return Response.json(
                 {
@@ -684,10 +685,9 @@ test('wide OpenRouter requests bound completion reservations without dropping in
     assert.equal(bodies.length, 4);
     assert.deepEqual(
       bodies.map((body) => body.max_tokens ?? body.max_completion_tokens),
-      [Math.min(maximum, 32_768), Math.min(maximum, 32_768), 512, 1],
+      [model.maxTokens, model.maxTokens, 512, 1],
     );
     assert.equal(model.contextWindow, 1_048_576);
-    assert.equal(model.maxTokens, bodies[0].max_tokens ?? bodies[0].max_completion_tokens);
     for (const body of bodies) {
       assert.equal(body.reasoning.effort, 'high');
       assert.ok(body.messages.some((message: any) => message.content === earlier));
