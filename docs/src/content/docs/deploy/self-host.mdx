@@ -169,7 +169,7 @@ On first launch, the setup screen is already open. If you've already set up Nod,
 
 At the bottom of the setup screen, choose **Connect to a server**. If the app already uses a server, the button says **Change server**. Enter the server address and the value of `NOD_AUTH_TOKEN`, then select **Connect and restart app**.
 
-Use the server's HTTPS address. Nod accepts HTTP only for loopback addresses such as `localhost`. For an HTTP-only server on another device, [open an SSH tunnel](#open-a-remote-server-without-a-domain) and enter `http://localhost:4310`.
+Use the server's HTTPS address. Nod accepts HTTP only for loopback addresses such as `localhost`. For an HTTP-only server on another device, [open an SSH tunnel](#open-a-remote-server-without-a-domain) and enter `http://localhost:<port>` using the tunnel's local port (`4310` by default).
 
 The app uses the server's conversation, files, models, and connected accounts. Closing the app does not stop the server.
 
