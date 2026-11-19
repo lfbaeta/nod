@@ -781,7 +781,9 @@ export function createSchedules(dependencies: ScheduleDependencies) {
       )
     ).rows;
     const sessions = runs.map((run) => run.turn_id);
-    const usage = await dependencies.sessionUsage?.(sessions);
+    const usage = dependencies.workPricing
+      ? await dependencies.sessionUsage?.(sessions)
+      : undefined;
     const costs = usage ? {} : await dependencies.sessionCosts(sessions);
     const forecast = (
       spent: WorkUsage | undefined,

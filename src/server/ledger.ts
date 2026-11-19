@@ -849,9 +849,8 @@ export function createLedger({
     const agent = "m.details->>'category'='agent'";
     const other = "m.details->>'category' IS DISTINCT FROM 'agent'";
     const tokenColumns = Object.values(tokens);
-    const billed = includePlanEstimates
-      ? "COALESCE(m.cost_usd,(m.details->>'estimateUsd')::float8)"
-      : 'm.cost_usd';
+    const costWithPlan = "COALESCE(m.cost_usd,(m.details->>'estimateUsd')::float8)";
+    const agentCost = includePlanEstimates ? costWithPlan : 'm.cost_usd';
     const sum = (column: string, filter: string) =>
       `COALESCE(sum(${column}) FILTER (WHERE ${filter}),0)::float8`;
     const base = Object.entries(tokens).map(([key, column]) => `${sum(column, agent)} AS "${key}"`);
@@ -873,11 +872,11 @@ export function createLedger({
     return {
       thresholds,
       columns: `${base.join(',')},
-        ${sum(billed, agent)} AS "agentUsd",
-        ${sum(billed, other)} AS "otherUsd",
+        ${sum(agentCost, agent)} AS "agentUsd",
+        ${sum(costWithPlan, other)} AS "otherUsd",
         COALESCE(array_agg(DISTINCT m.details->>'model') FILTER (WHERE ${agent} AND m.details->>'model' IS NOT NULL),'{}') AS models,
-        COALESCE(array_agg(DISTINCT CASE WHEN ${billed} IS NOT NULL THEN m.details->>'pricingSignature' END) FILTER (
-          WHERE ${agent} AND GREATEST(${billed},${tokenColumns.join(',')})>0
+        COALESCE(array_agg(DISTINCT CASE WHEN ${agentCost} IS NOT NULL THEN m.details->>'pricingSignature' END) FILTER (
+          WHERE ${agent} AND GREATEST(${costWithPlan},${tokenColumns.join(',')})>0
         ),'{}') AS "pricingSignatures",
         ARRAY[${bands.join(',')}]::float8[] AS "tokensAbove"${otherCoverage}`,
     };

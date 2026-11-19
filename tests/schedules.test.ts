@@ -1259,7 +1259,7 @@ test(
           plan = true;
           assert.equal(await monthly(), null);
           plan = false;
-          await expectRunCost(3.25);
+          await expectRunCost(3.26);
           await db.pool.query(
             "UPDATE model_usage SET cost_usd=(details->>'estimateUsd')::float8,details=details-'estimateUsd' WHERE turn_id=$1",
             [run.turnId],
