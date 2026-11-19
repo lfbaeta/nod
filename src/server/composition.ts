@@ -3622,6 +3622,17 @@ async function initializeApplication(
       messageAccepted: ownerMessageAccepted,
       answer: (text, channel, replyToMessageId) =>
         userMessages.answer(text, { channel, replyToMessageId }),
+      acceptApproval: async (client, input) => {
+        const { threadId, messageId, approvalId, approved, channel, stopSignal } = input;
+        await userMessages.submit(approved ? 'Approve' : 'Cancel', [], {
+          client,
+          threadId,
+          channel,
+          replyToMessageId: messageId,
+          approvalAnswer: { approvalId, approved },
+          stopSignal,
+        });
+      },
     });
     channels.registerRoutes(app);
     await channelSettings?.recover();

@@ -162,10 +162,10 @@ Set `TELEGRAM_MODE=webhook` and `TELEGRAM_WEBHOOK_SECRET_TOKEN`, then [apply the
 | ---------------------- | ------------------------------------------------------------- |
 | `url`                  | Your public HTTPS origin followed by `/api/webhooks/telegram` |
 | `secret_token`         | The same value as `TELEGRAM_WEBHOOK_SECRET_TOKEN`             |
-| `allowed_updates`      | `["message", "message_reaction"]`                             |
+| `allowed_updates`      | `["message", "message_reaction", "callback_query"]`           |
 | `drop_pending_updates` | `false`                                                       |
 
-Nod does not register environment-managed webhooks for you. Check [getWebhookInfo](https://core.telegram.org/bots/api#getwebhookinfo) for the saved URL, update types, and delivery errors. Register again after changing the public URL or webhook secret, or to enable reactions on an existing webhook.
+For an existing environment-managed webhook, register it again after changing the public URL or webhook secret. Include `message_reaction` for reactions and `callback_query` for approval buttons. Until you enable `callback_query`, answer approvals by replying directly to the question. Check the saved URL, update types, and delivery errors with [getWebhookInfo](https://core.telegram.org/bots/api#getwebhookinfo).
 
 To switch to polling, remove the webhook with Telegram's [deleteWebhook method](https://core.telegram.org/bots/api#deletewebhook), keeping `drop_pending_updates=false`. Set `TELEGRAM_MODE=polling` and apply the configuration. Telegram does not allow polling while a webhook is registered.
 
