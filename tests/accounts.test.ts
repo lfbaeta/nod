@@ -1949,6 +1949,7 @@ describe('account routes', () => {
       delivered.push(trace);
     }, '0.3.0');
     traces.configure({
+      userId: `local:${randomUUID()}`,
       secrets: ['fixture-model-key-8c41f2'],
       profile: async () => ({ names: ['Marta Vidal'], region: 'ES' }),
     });
@@ -2018,10 +2019,9 @@ describe('account routes', () => {
     await settle(1);
     assert.equal(delivered.length, 1);
     const sent = JSON.stringify(delivered[0]);
-    const privateContent = [delivered[0].metadata.thread_id, delivered[0].metadata.turn_id].reduce(
-      (text, id) => text.replaceAll(id, '[id]'),
-      sent,
-    );
+    const privateContent = [delivered[0].metadata.thread_id, delivered[0].metadata.turn_id]
+      .map(String)
+      .reduce((text, id) => text.replaceAll(id, '[id]'), sent);
     for (const value of [
       'Marta',
       'Vidal',
@@ -2044,10 +2044,15 @@ describe('account routes', () => {
       assert.ok(!privateContent.includes(value), value);
     assert.match(sent, /order 123456 on 2026-10-19/);
     assert.match(sent, /192\.168\.1\.1\.example/);
-    assert.deepEqual(Object.keys(delivered[0].metadata), ['turn_id', 'thread_id', 'app_version']);
+    assert.deepEqual(Object.keys(delivered[0].metadata), [
+      'turn_id',
+      'thread_id',
+      'user_id',
+      'app_version',
+    ]);
     assert.equal(delivered[0].metadata.app_version, '0.3.0');
-    assert.match(delivered[0].metadata.thread_id, /^[0-9a-f]{32}$/);
-    assert.match(delivered[0].metadata.turn_id, /^[0-9a-f]{32}$/);
+    assert.match(String(delivered[0].metadata.thread_id), /^[0-9a-f]{32}$/);
+    assert.match(String(delivered[0].metadata.turn_id), /^[0-9a-f]{32}$/);
     assert.ok(!sent.includes('fixture-session') && !sent.toLowerCase().includes(turnId));
     assert.ok(sent.includes(`task ${delivered[0].metadata.turn_id}`));
     assert.ok(!sent.includes(homedir()) && sent.includes('~/Library/nod.json'));

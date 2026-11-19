@@ -4092,6 +4092,40 @@ test('each model call yields one chat-format trace without image data', async ()
     undefined,
   );
   assert.ok(!JSON.stringify(trace).includes(image));
+  assert.equal(trace.metadata.error_type, undefined);
+  for (const [error, expected, phase = 'response'] of [
+    ['Your credit balance is too low. (HTTP 400)', 'billing'],
+    ['Insufficient credits. (HTTP 402)', 'billing'],
+    ['Prepayment credits are depleted.', 'billing'],
+    ['429 {"error":{"details":[{"quotaValue":"0"}]}}', 'quota'],
+    ['Quota exceeded. Check billing details. (HTTP 429)', 'quota'],
+    ['Quota exceeded. See billing docs for quota limits. (HTTP 429)', 'quota'],
+    ['Quota exceeded: GenerateRequestsPerDayPerProjectPerModel-FreeTier (HTTP 429)', 'quota'],
+    ['Rate limit exceeded: tokens per minute. (HTTP 429)', 'rate_limit'],
+    ['Quota exceeded for tokens per minute. (HTTP 429)', 'rate_limit'],
+    ['Too many requests. (HTTP 429)', 'rate_limit'],
+    ['fetch failed (transport cause: ECONNRESET)', 'connection'],
+    ['The request timed out.', 'connection'],
+    [
+      'Automatic preparation stopped because this model has no cost estimate.',
+      'model_config',
+      'prepare',
+    ],
+    ['The selected model connection is unavailable.', 'model_config', 'prepare'],
+    ['The provider gave no reason. (HTTP 402)', 'unknown'],
+    ['Synthetic provider error.', 'unknown'],
+  ] as const) {
+    const failed = piModelTrace(
+      {
+        ...calls[0],
+        request: { requestPhase: phase, requestKind: 'regular' },
+        message: { ...calls[0].message, stopReason: 'error', errorMessage: error },
+      },
+      {},
+    );
+    assert.equal(failed.metadata.error_type, expected, error);
+    assert.equal(failed.error, error);
+  }
   const { untrustedBlock } = await import('../src/shared/untrusted.ts');
   const result = (toolCallId: string, toolName: string, text: string) => ({
     role: 'toolResult' as const,
@@ -4221,6 +4255,185 @@ test('each model call yields one chat-format trace without image data', async ()
     assert.ok(!JSON.stringify(selectedTrace).includes(privateFact));
     assert.ok(JSON.stringify(selectedTrace).includes(selectedContext.prompt));
   }
+});
+
+test('agent and curator traces share analytics IDs across parallel turns and separate consent switches', async (t) => {
+  const { createAnalytics } = await import('../src/server/analytics.ts');
+  const { createModelTraces } = await import('../src/server/traces.ts');
+  const { createN8nTraces } = await import('../src/providers/n8n/traces.ts');
+  const { piModelTrace } = await import('../src/providers/pi/traces.ts');
+  type PiModelCall = import('../src/providers/pi/traces.ts').PiModelCall;
+  const sent: Array<{
+    run: {
+      metadata: Record<string, string | number>;
+      error?: string;
+      usage: { total_cost?: number };
+    };
+  }> = [];
+  const events: Parameters<import('../src/ports/analytics.ts').ProductAnalytics['capture']>[0][] =
+    [];
+  const root = await mkdtemp(join(tmpdir(), 'nod-trace-identity-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const analytics = await createAnalytics({
+    provider: { capture: (event) => events.push(event), shutdown: async () => {} },
+    environment: 'production',
+    dataRoot: root,
+  });
+  t.after(() => analytics.shutdown());
+  const traces = createModelTraces(
+    createN8nTraces({
+      url: 'https://traces.example.test/',
+      token: 'synthetic-trace-token',
+      request: async (_url, request) => {
+        sent.push(JSON.parse(String(request?.body)));
+        return new Response(null, { status: 202 });
+      },
+    }),
+    '0.9.0',
+  );
+  traces.configure({
+    enabled: true,
+    userId: analytics.distinctId,
+    profile: async () => ({ names: ['Marta Vidal'] }),
+  });
+  const model = { id: 'fixture-model', provider: 'fixture' } as PiModelCall['model'];
+  const message = {
+    ...fauxAssistantMessage('{"ok":true}'),
+    usage: {
+      input: 10,
+      output: 2,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 12,
+      cost: { input: 0.01, output: 0.02, cacheRead: 0, cacheWrite: 0, total: 0.03 },
+    },
+  };
+  const call = (): PiModelCall => ({
+    model,
+    context: { messages: [] },
+    message,
+    startedAt: new Date().toISOString(),
+  });
+  const curator = createPiMemoryCurator({
+    provider: 'fixture',
+    model: model.id,
+    apiKey: 'synthetic-key',
+    traces,
+    runtime: {
+      setRuntimeApiKey: async () => {},
+      getModel: () => model,
+      completeSimple: async () => message,
+    } as never,
+  });
+  const sessionId = randomUUID();
+  const turns = ['user', 'schedule', 'event', 'resume', 'task'] as const;
+  analytics.setUsageData('synthetic-owner', true);
+  await Promise.all(
+    turns.map(async (source) => {
+      const turnId = randomUUID();
+      await traces.withTurn({ sessionId, turnId }, (ids) =>
+        analytics.withRun(
+          'synthetic-owner',
+          async () => {
+            await Promise.resolve();
+            traces.record(
+              piModelTrace(call(), { source: 'agent', turn_id: turnId, run_id: randomUUID() }),
+            );
+            traces.record(
+              piModelTrace(call(), {
+                source: 'agent',
+                parent_run_id: randomUUID(),
+                run_id: randomUUID(),
+              }),
+            );
+            await curator.curate({
+              task: 'plan',
+              instructions: 'Return JSON.',
+              input: {},
+              automatic: source !== 'user',
+            });
+            analytics.capture('synthetic-owner', {
+              event: 'turn_started',
+              properties: {
+                source,
+                channel: 'web',
+                background: source !== 'user',
+                work_type:
+                  source === 'schedule'
+                    ? 'scheduled'
+                    : source === 'user'
+                      ? 'immediate'
+                      : 'background',
+                owner_requested: source === 'user',
+              },
+            });
+          },
+          ids,
+        ),
+      );
+    }),
+  );
+  const settle = async (count: number) => {
+    for (let attempt = 0; attempt < 100 && sent.length < count; attempt++) await setTimeout(5);
+    assert.equal(sent.length, count);
+  };
+  await settle(15);
+  assert.equal(events.length, 5);
+  assert.equal(new Set(sent.map(({ run }) => run.metadata.thread_id)).size, 1);
+  assert.equal(new Set(sent.map(({ run }) => run.metadata.turn_id)).size, 5);
+  for (const event of events) {
+    const runs = sent.filter(({ run }) => run.metadata.turn_id === event.properties.turn_id);
+    assert.equal(runs.length, 3);
+    assert.ok(runs.some(({ run }) => run.metadata.source === 'curator'));
+    for (const { run } of runs) {
+      assert.equal(run.metadata.user_id, event.distinctId);
+      assert.equal(run.metadata.thread_id, event.properties.thread_id);
+      assert.equal(run.metadata.cost_usd, 0.03);
+      assert.equal(run.usage.total_cost, 0.03);
+      assert.equal(run.metadata.session_id, undefined);
+    }
+  }
+  assert.ok(!JSON.stringify(sent).includes(sessionId));
+  analytics.setUsageData('synthetic-owner', false);
+  await curator.curate({ task: 'brief', instructions: 'Return JSON.', input: {} });
+  await settle(16);
+  assert.equal(sent.at(-1)!.run.metadata.user_id, analytics.distinctId);
+  assert.match(String(sent.at(-1)!.run.metadata.thread_id), /^[0-9a-f]{32}$/);
+  assert.match(String(sent.at(-1)!.run.metadata.turn_id), /^[0-9a-f]{32}$/);
+  assert.equal(events.length, 5);
+  const failed = piModelTrace(
+    {
+      ...call(),
+      message: {
+        ...message,
+        stopReason: 'error',
+        errorMessage:
+          'Marta Vidal <marta@example.com>: quota exceeded. Token synthetic-private-key.',
+      },
+    },
+    {},
+  );
+  traces.configure({ secrets: ['synthetic-private-key'] });
+  traces.record(failed);
+  await settle(17);
+  assert.doesNotMatch(
+    sent.at(-1)!.run.error!,
+    /Marta|Vidal|marta@example.com|synthetic-private-key/,
+  );
+  for (const cost of [0, null]) {
+    traces.record({ ...piModelTrace(call(), {}), usage: { ...failed.usage, costUsd: cost } });
+    await settle(cost === 0 ? 18 : 19);
+    assert.equal(sent.at(-1)!.run.metadata.cost_usd, cost ?? undefined);
+    assert.equal(sent.at(-1)!.run.usage.total_cost, cost ?? undefined);
+  }
+  traces.configure({ enabled: false });
+  traces.record(piModelTrace(call(), {}));
+  await setTimeout(10);
+  assert.equal(sent.length, 19);
+  const standalone = await createAnalytics({ environment: 'production', dataRoot: root });
+  assert.equal(standalone.distinctId, analytics.distinctId);
+  assert.equal(standalone.configuration('synthetic-owner').enabled, false);
+  await standalone.shutdown();
 });
 
 test('a long tool call does not send model requests without usage records', async (t) => {
@@ -11322,6 +11535,7 @@ test('invalid tool calls stop before another model request and a valid repair re
 });
 
 test('preparation reserves model cost before dispatch and blocks a request without a price', async () => {
+  const { piModelTrace } = await import('../src/providers/pi/traces.ts');
   for (const price of ['known', 'missing', 'negative']) {
     const priced = price === 'known';
     let calls = 0;
@@ -11358,7 +11572,10 @@ test('preparation reserves model cost before dispatch and blocks a request witho
         };
       },
     };
-    const { runtime, model } = await createPiModelRuntime(access);
+    const traced: import('../src/providers/pi/traces.ts').PiModelCall[] = [];
+    const { runtime, model } = await createPiModelRuntime(access, {
+      trace: (call) => traced.push(call),
+    });
     const result = await runtime.completeSimple(
       model,
       {
@@ -11379,6 +11596,12 @@ test('preparation reserves model cost before dispatch and blocks a request witho
     assert.equal(reservations, 1);
     assert.equal(calls, priced ? 1 : 0);
     assert.equal(result.stopReason, 'error');
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(traced.length, 1);
+    assert.equal(
+      piModelTrace(traced[0], {}).metadata.error_type,
+      priced ? 'unknown' : 'model_config',
+    );
     assert.equal(settlements.length, priced ? 1 : 0);
     if (!priced) assert.match(result.errorMessage!, /Synthetic preparation price is unknown/);
   }

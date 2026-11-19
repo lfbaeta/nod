@@ -59,7 +59,9 @@ Nod:    Sends to [email]:
         anything is missing. [owner]
 ```
 
-The trace also includes Nod's instructions, the model name, token counts, and cost. Its conversation ID changes after 30 minutes without a request to the model and whenever Nod restarts.
+The trace also includes Nod's instructions, the model name, token counts, cost, and fixed error classes. Its conversation ID changes after 30 minutes without a request to the model and whenever Nod restarts.
+
+Traces carry the same installation ID as usage analytics, even when usage sharing is off. This ID can link traces to earlier usage data, About you choices, and an email submitted for updates. Server usage events and traces also share pseudonymous conversation and work IDs. One work ID is a request, schedule fire, background batch, or continuation, not a user-message count.
 
 "Jordi" is still there. Nod spots details by their shape, such as email addresses, phone numbers, and bank accounts. It also knows your name from your connected accounts. It can't spot every name in a sentence, so traces are pseudonymised, not anonymous.
 

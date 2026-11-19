@@ -128,9 +128,7 @@ export async function createAnalytics(options: {
   appVersion?: string;
 }) {
   const appVersion = analyticsVersion.safeParse(options.appVersion).data;
-  const localId = options.provider
-    ? await installationId(options.dataRoot, options.installationId).catch(() => null)
-    : null;
+  const localId = await installationId(options.dataRoot, options.installationId).catch(() => null);
   const available = Boolean(options.provider && localId);
   const personProfileAvailable = Boolean(options.provider?.setPersonProperties && localId);
   const states = new Map<
@@ -142,6 +140,7 @@ export async function createAnalytics(options: {
     owner: string;
     id: string;
     consent: ReturnType<typeof consent>;
+    traceIds?: { thread_id: string; turn_id: string };
     model?: ReturnType<typeof analyticsModel>;
     work?: { work_type: 'immediate' | 'scheduled' | 'background'; owner_requested: boolean };
   }>();
@@ -239,6 +238,7 @@ export async function createAnalytics(options: {
             capture_source: 'server',
             ...(version ? { app_version: version } : {}),
             ...(runId ? { run_id: runId } : {}),
+            ...(run?.traceIds ?? {}),
             ...(run?.work ??
               (system
                 ? {
@@ -329,14 +329,27 @@ export async function createAnalytics(options: {
     }
   }
   return {
+    distinctId: localId ? `local:${localId}` : undefined,
     configuration,
     consent,
     personProfileAvailable,
     setOnboardingProfileAnswers,
     setOnboardingProfileProperties,
     setUpdatesEmail,
-    withRun<T>(owner: string, operation: () => T): T {
-      return runs.run({ owner, id: randomUUID(), consent: consent(owner) }, operation);
+    withRun<T>(
+      owner: string,
+      operation: () => T,
+      traceIds?: { thread_id: string; turn_id: string },
+    ): T {
+      const ids = traceIds && {
+        thread_id: traceIds.thread_id,
+        turn_id: traceIds.turn_id,
+      };
+      const valid = ids && Object.values(ids).every((id) => /^[0-9a-f]{32}$/.test(id));
+      return runs.run(
+        { owner, id: randomUUID(), consent: consent(owner), ...(valid ? { traceIds: ids } : {}) },
+        operation,
+      );
     },
     withSystemWork<T>(
       owner: string,

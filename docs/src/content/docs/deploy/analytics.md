@@ -95,6 +95,8 @@ The server SDK adds its name and version, event timestamp and UUID, and a consta
 
 Server events captured within a turn add a random analytics `run_id`, `work_type` (`immediate`, `scheduled`, or `background`), and `owner_requested`. Resumed work retains its originating execution mode. The separate `task_type` describes the request's purpose. UI presentation and artifact events don't include `run_id`. Private turn and message IDs are excluded.
 
+After desktop v0.9.0, server turn events also carry pseudonymous `thread_id` and `turn_id` fields. This change is not released yet. These IDs match [conversation traces](/trust/conversation-traces/#ids-errors-and-cost). A turn is one unit of Nod's work, such as a request, schedule fire, observer batch, or continuation. It is not a user-message count. Trace `user_id` equals the PostHog `distinct_id`. Join on that ID, `thread_id`, and `turn_id` to connect model calls to the turn's source and task classification. The analytics `run_id` remains separate from the trace's agent `run_id`.
+
 Owner-authored messages in Tasks are owner-requested background work. Agent-created child tasks can also retain the original owner request, so `owner_requested=true` doesn't establish a new owner message. Work category and owner request are separate dimensions; autonomous event and schedule starts aren't owner-requested.
 
 Autonomous work outside a turn uses `work_type=background`, `owner_requested=false`, and `system_activity` (`memory_learning`, `onboarding`, or `writing_style`). It has no run ID. Model requests without an established context use `work_type=unclassified` so their usage remains visible; this doesn't mean they were owner-requested or free.
