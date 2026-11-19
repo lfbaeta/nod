@@ -1,10 +1,14 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
-import { mkdir, open, rename, rm } from 'node:fs/promises';
+import { lstat, mkdir, open, rename, rm, type FileHandle } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
 import type { FeedbackDelivery, FeedbackEnvelope } from '../ports/feedback.ts';
-import type { FeedbackContext, FeedbackReceipt } from '../shared/feedback.ts';
+import type {
+  FeedbackContext,
+  FeedbackReceipt,
+  StartupFeedbackContext,
+} from '../shared/feedback.ts';
 import { feedbackLimits } from '../shared/feedback.ts';
 import { feedbackTechnicalContext } from './feedback-context.ts';
 import { createFeedbackRedactor } from './feedback-redaction.ts';
@@ -17,6 +21,14 @@ const pendingSchema = z
     payloadHash: z.string().regex(/^[a-f0-9]{64}$/),
   })
   .strict();
+class SavedStatusError extends Error {
+  readonly canPreserve: boolean;
+  constructor(message: string, canPreserve = false) {
+    super(message);
+    this.canPreserve = canPreserve;
+  }
+}
+
 const reviewSchema = z
   .object({
     feedback: z.string().trim().min(1).max(feedbackLimits.text),
@@ -38,27 +50,95 @@ export function createStartupFeedback(options: {
 }) {
   const context = feedbackTechnicalContext(options.context);
   const pendingPath = join(options.dataRoot, 'startup-feedback.json');
-  let reviewed:
-    { envelope: FeedbackEnvelope; content: string | null; expiresAt: number } | undefined;
+  let reviewed: { envelope: FeedbackEnvelope; expiresAt: number } | undefined;
+  let reviewTimer: ReturnType<typeof setTimeout> | undefined;
   let sending: Promise<FeedbackReceipt> | undefined;
   let receipt: FeedbackReceipt | undefined;
   let pending: z.infer<typeof pendingSchema> | undefined;
-  const restored = open(pendingPath, constants.O_RDONLY | constants.O_NOFOLLOW)
-    .then(async (file) => {
+  let restored: Promise<void> | undefined;
+  let restoredState = false;
+  let restoreFailure: { message: string; canPreserve: boolean } | undefined;
+  let recovering: Promise<void> | undefined;
+
+  async function readBytes(file: FileHandle, limit: number) {
+    const bytes = Buffer.alloc(limit + 1);
+    let length = 0;
+    while (length < bytes.length) {
+      const result = await file.read(bytes, length, bytes.length - length, length);
+      if (!result.bytesRead) break;
+      length += result.bytesRead;
+    }
+    return bytes.subarray(0, length);
+  }
+
+  async function openStatus() {
+    const before = await lstat(pendingPath);
+    if (!before.isFile() || before.nlink !== 1)
+      throw new SavedStatusError('The saved report status is not one regular file.');
+    const file = await open(pendingPath, constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+      const info = await file.stat();
+      if (!info.isFile() || info.nlink !== 1 || info.dev !== before.dev || info.ino !== before.ino)
+        throw new SavedStatusError('The saved report status changed while it was opened.');
+      return { file, info };
+    } catch (error) {
+      await file.close();
+      throw error;
+    }
+  }
+
+  function restore() {
+    if (restoredState) return Promise.resolve();
+    return (restored ??= (async () => {
       try {
-        const info = await file.stat();
-        if (!info.isFile() || info.nlink !== 1 || info.size > 1024)
-          throw new Error('The saved report status is invalid.');
-        pending = pendingSchema.parse(JSON.parse(await file.readFile('utf8')));
-      } finally {
-        await file.close();
+        const { file, info } = await openStatus();
+        let value;
+        try {
+          const bytes = await readBytes(file, 1024);
+          if (bytes.length > 1024)
+            throw new SavedStatusError(
+              'The saved report status is larger than 1024 bytes.',
+              info.size <= 65_536,
+            );
+          let parsed;
+          try {
+            parsed = JSON.parse(bytes.toString('utf8'));
+          } catch {
+            throw new SavedStatusError('The saved report status has invalid JSON.', true);
+          }
+          const checked = pendingSchema.safeParse(parsed);
+          if (!checked.success)
+            throw new SavedStatusError('The saved report status has invalid fields.', true);
+          value = checked.data;
+        } finally {
+          await file.close();
+        }
+        pending = value;
+        restoredState = true;
+        restoreFailure = undefined;
+      } catch (cause) {
+        const error = cause as NodeJS.ErrnoException;
+        if (error.code === 'ENOENT' && !restoreFailure) {
+          restoredState = true;
+          return;
+        }
+        const code =
+          typeof error.code === 'string' && /^[A-Z0-9_]{1,32}$/.test(error.code)
+            ? error.code
+            : 'read failure';
+        restoreFailure =
+          cause instanceof SavedStatusError
+            ? { message: cause.message, canPreserve: cause.canPreserve }
+            : {
+                message: `The saved report status could not be read (${code}).`,
+                canPreserve: false,
+              };
+        throw new Error(restoreFailure.message, { cause });
       }
-    })
-    .catch((error: NodeJS.ErrnoException) => {
-      if (error.code !== 'ENOENT')
-        throw new Error('The saved report status could not be read.', { cause: error });
-    });
-  restored.catch(() => {});
+    })().finally(() => {
+      restored = undefined;
+    }));
+  }
 
   async function syncStatusDirectory() {
     if (process.platform === 'win32') return;
@@ -143,26 +223,113 @@ export function createStartupFeedback(options: {
     );
   }
 
-  async function status() {
-    await restored;
+  function present(value: FeedbackReceipt) {
+    if (reviewed && reviewed.expiresAt <= Date.now()) reviewed = undefined;
+    return {
+      ...value,
+      ...(value.status === 'partial' && {
+        canRetryAttachments: Boolean(
+          reviewed?.envelope.submissionId === value.submissionId &&
+          reviewed.envelope.report &&
+          reviewed.expiresAt > Date.now(),
+        ),
+      }),
+    };
+  }
+
+  function recover(input: unknown) {
+    z.object({ confirm: z.literal(true) })
+      .strict()
+      .parse(input);
+    return (recovering ??= (async () => {
+      await restore().catch(() => {});
+      if (restoredState || !restoreFailure?.canPreserve)
+        throw new Error('Check the saved report status again before starting a new report.');
+      const { file, info } = await openStatus();
+      let bytes;
+      try {
+        bytes = await readBytes(file, 65_536);
+        const after = await file.stat();
+        if (bytes.length > 65_536)
+          throw new Error('The saved report status is too large to preserve automatically.');
+        if (
+          info.size !== bytes.length ||
+          info.size !== after.size ||
+          info.mtimeMs !== after.mtimeMs ||
+          info.ctimeMs !== after.ctimeMs
+        )
+          throw new Error('The saved report status changed. Check it again.');
+      } finally {
+        await file.close();
+      }
+      const backupPath = join(options.dataRoot, `startup-feedback-recovered-${randomUUID()}.bin`);
+      let created = false;
+      let preserved = false;
+      try {
+        const backup = await open(backupPath, 'wx', 0o600);
+        created = true;
+        try {
+          await backup.writeFile(bytes);
+          await backup.sync();
+        } finally {
+          await backup.close();
+        }
+        await syncStatusDirectory();
+        preserved = true;
+        const current = await lstat(pendingPath);
+        if (
+          !current.isFile() ||
+          current.nlink !== 1 ||
+          current.dev !== info.dev ||
+          current.ino !== info.ino ||
+          current.size !== info.size ||
+          current.mtimeMs !== info.mtimeMs ||
+          current.ctimeMs !== info.ctimeMs
+        )
+          throw new Error('The saved report status changed. Check it again.');
+        await rm(pendingPath);
+        pending = undefined;
+        receipt = undefined;
+        reviewed = undefined;
+        clearTimeout(reviewTimer);
+        restoreFailure = undefined;
+        restoredState = true;
+        await syncStatusDirectory();
+      } catch (error) {
+        if (created && !preserved) await rm(backupPath, { force: true }).catch(() => {});
+        throw error;
+      }
+    })().finally(() => {
+      recovering = undefined;
+    }));
+  }
+
+  async function status(refresh = false) {
+    await restore();
     if (sending) return sending;
     if (!pending) return null;
-    if (!receipt || receipt.status === 'unknown')
+    if (refresh || !receipt || receipt.status === 'unknown')
       receipt = await options.delivery.status(pending.submissionId, pending.payloadHash);
-    return receipt;
+    return present(receipt);
   }
 
   return {
-    async context() {
-      return {
+    async context(): Promise<StartupFeedbackContext> {
+      const value = {
         ...context,
         enabled: options.delivery.configured,
         recipient: options.delivery.recipient,
-        pending: await status(),
       };
+      try {
+        await restore();
+      } catch (error) {
+        if (!restoreFailure) throw error;
+        return { ...value, pending: null, recovery: { ...restoreFailure } };
+      }
+      return { ...value, pending: await status() };
     },
     async review(input: unknown) {
-      await restored;
+      await restore();
       const value = reviewSchema.parse(input);
       if (!options.delivery.configured) throw new Error('Bug reports are turned off.');
       if (sending || (pending && (!receipt || receipt.status === 'unknown')))
@@ -194,9 +361,14 @@ export function createStartupFeedback(options: {
           report: attachment,
           payloadHash: hash(JSON.stringify(canonical)),
         },
-        content,
         expiresAt: Date.now() + 3_600_000,
       };
+      clearTimeout(reviewTimer);
+      const reviewId = canonical.submissionId;
+      reviewTimer = setTimeout(() => {
+        if (reviewed?.envelope.submissionId === reviewId) reviewed = undefined;
+      }, 3_600_000);
+      reviewTimer.unref();
       return {
         reviewId: canonical.submissionId,
         feedback: value.feedback,
@@ -205,7 +377,7 @@ export function createStartupFeedback(options: {
       };
     },
     async send(input: unknown) {
-      await restored;
+      await restore();
       const id = uuid.parse(input);
       if (pending?.submissionId === id) return (await status())!;
       if (!reviewed || reviewed.envelope.submissionId !== id || reviewed.expiresAt <= Date.now())
@@ -238,12 +410,40 @@ export function createStartupFeedback(options: {
           throw error;
         }
         receipt = await options.delivery.submit(envelope);
-        return receipt;
+        return present(receipt);
       })().finally(() => {
         sending = undefined;
       });
       return sending;
     },
-    status,
+    async repair(input: unknown) {
+      await restore();
+      const id = uuid.parse(input);
+      if (!pending || pending.submissionId !== id)
+        throw new Error('Check the original report before sending its attachment again.');
+      if (sending) return sending;
+      if (receipt?.status !== 'partial')
+        throw new Error('Check the report status before sending its attachment again.');
+      if (
+        !reviewed ||
+        reviewed.envelope.submissionId !== id ||
+        !reviewed.envelope.report ||
+        reviewed.expiresAt <= Date.now()
+      )
+        throw new Error(
+          'The original report bytes are no longer available. Start a new report to review new bytes.',
+        );
+      const envelope = reviewed.envelope;
+      receipt = undefined;
+      sending = (async () => {
+        receipt = await options.delivery.submit({ ...envelope, action: 'repair' });
+        return present(receipt);
+      })().finally(() => {
+        sending = undefined;
+      });
+      return sending;
+    },
+    recover,
+    status: () => status(true),
   };
 }

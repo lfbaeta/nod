@@ -7945,7 +7945,11 @@ test('startup reports omit unavailable event snapshots and refuse invalid input 
   );
   await writeFile(join(dataRoot, 'startup-feedback.json'), '{"submissionId":"bad"}');
   const corrupt = createStartupFeedback(options);
-  await assert.rejects(corrupt.context(), /saved report status could not be read/);
+  assert.equal((await corrupt.context()).recovery?.canPreserve, true);
+  await assert.rejects(
+    corrupt.review({ feedback: 'Synthetic blocked report.', includeReport: false }),
+    /saved report status/,
+  );
   assert.equal(sends, 1);
 });
 
@@ -8188,4 +8192,289 @@ test('environment secret collection covers every model key and token segment bef
     }),
     ['synthetic-invalid-url'],
   );
+});
+
+test('startup status recovery preserves corrupt bytes before a fresh reviewed submission', async (t) => {
+  const { createStartupFeedback } = await import('../src/server/startup-feedback.ts');
+  const { writeFile, readFile, readdir, stat } = await import('node:fs/promises');
+  const { randomUUID } = await import('node:crypto');
+  const root = await mkdtemp(join(tmpdir(), 'nod-status-recovery-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const path = join(root, 'startup-feedback.json');
+  const untrustedId = randomUUID();
+  const bytes = Buffer.from(
+    `{"submissionId":"${untrustedId}","private":"synthetic-private-state"\n`,
+  );
+  await writeFile(path, bytes);
+  const sent: import('../src/ports/feedback.ts').FeedbackEnvelope[] = [];
+  let lookups = 0;
+  const options = {
+    dataRoot: root,
+    secrets: [],
+    names: [],
+    status: { phase: 'error' },
+    context: {
+      appVersion: '0.9.0',
+      appRelease: 'a'.repeat(40),
+      appModified: false,
+      development: false,
+      source: 'desktop' as const,
+      platform: 'darwin-arm64',
+    },
+    delivery: {
+      configured: true,
+      recipient: 'n8n',
+      async submit(value: import('../src/ports/feedback.ts').FeedbackEnvelope) {
+        sent.push(value);
+        return { submissionId: value.submissionId, status: 'submitted' as const };
+      },
+      async status(id: string) {
+        lookups++;
+        return { submissionId: id, status: 'unknown' as const };
+      },
+    },
+  };
+  const service = createStartupFeedback(options);
+  const blocked = await service.context();
+  assert.equal(blocked.recovery?.canPreserve, true);
+  assert.match(blocked.recovery!.message, /invalid JSON/);
+  assert.ok(!JSON.stringify(blocked).includes('synthetic-private-state'));
+  await assert.rejects(
+    service.review({ feedback: 'Synthetic failure.', includeReport: true }),
+    /invalid JSON/,
+  );
+  await assert.rejects(service.send(untrustedId), /invalid JSON/);
+  assert.equal(lookups, 0);
+  assert.throws(() => service.recover({ confirm: false }));
+  assert.deepEqual(await readFile(path), bytes);
+  await service.recover({ confirm: true });
+  const names = await readdir(root);
+  const backups = names.filter((name) => /^startup-feedback-recovered-.*\.bin$/.test(name));
+  assert.equal(backups.length, 1);
+  assert.deepEqual(await readFile(join(root, backups[0])), bytes);
+  if (process.platform !== 'win32')
+    assert.equal((await stat(join(root, backups[0]))).mode & 0o777, 0o600);
+  await assert.rejects(readFile(path), { code: 'ENOENT' });
+  assert.equal((await service.context()).pending, null);
+  assert.equal(sent.length, 0);
+  const fresh = await service.review({ feedback: 'Synthetic fresh report.', includeReport: true });
+  assert.notEqual(fresh.reviewId, untrustedId);
+  assert.ok(!fresh.content!.includes('synthetic-private-state'));
+  assert.equal(sent.length, 0);
+  await service.send(fresh.reviewId);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].submissionId, fresh.reviewId);
+  await assert.rejects(service.recover({ confirm: true }), /Check the saved report status/);
+  const restored = createStartupFeedback(options);
+  assert.equal((await restored.context()).pending?.submissionId, fresh.reviewId);
+  assert.equal(sent.length, 1);
+});
+
+test('startup recovery refuses a failed durable backup and retries a recovered status read', async (t) => {
+  const { createStartupFeedback } = await import('../src/server/startup-feedback.ts');
+  const filesystem = (await import('node:fs/promises')).default;
+  const { syncBuiltinESMExports } = await import('node:module');
+  const { randomUUID } = await import('node:crypto');
+  const root = await mkdtemp(join(tmpdir(), 'nod-status-preserve-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const path = join(root, 'startup-feedback.json');
+  const bytes = Buffer.from('Synthetic corrupt state\u0000private');
+  await filesystem.writeFile(path, bytes);
+  let submits = 0;
+  let lookups = 0;
+  const options = {
+    dataRoot: root,
+    secrets: [],
+    names: [],
+    status: { phase: 'error' },
+    context: {
+      appVersion: '0.9.0',
+      appRelease: 'a'.repeat(40),
+      appModified: false,
+      development: false,
+      source: 'desktop' as const,
+      platform: 'darwin-arm64',
+    },
+    delivery: {
+      configured: true,
+      recipient: 'n8n',
+      async submit(value: import('../src/ports/feedback.ts').FeedbackEnvelope) {
+        submits++;
+        return { submissionId: value.submissionId, status: 'submitted' as const };
+      },
+      async status(id: string) {
+        lookups++;
+        return { submissionId: id, status: 'unknown' as const };
+      },
+    },
+  };
+  const service = createStartupFeedback(options);
+  assert.equal((await service.context()).recovery?.canPreserve, true);
+  const probe = await filesystem.open(path, 'r');
+  const prototype = Object.getPrototypeOf(probe);
+  const originalSync = prototype.sync;
+  await probe.close();
+  try {
+    prototype.sync = async function (this: import('node:fs/promises').FileHandle) {
+      const info = await this.stat();
+      if (info.isFile())
+        throw Object.assign(new Error('EIO: Synthetic backup sync failure.'), { code: 'EIO' });
+      return originalSync.call(this);
+    };
+    await assert.rejects(service.recover({ confirm: true }), /EIO/);
+    assert.deepEqual(await filesystem.readFile(path), bytes);
+    assert.equal((await service.context()).recovery?.canPreserve, true);
+    await assert.rejects(
+      service.review({ feedback: 'Synthetic blocked report.', includeReport: false }),
+    );
+    assert.equal(submits, 0);
+  } finally {
+    prototype.sync = originalSync;
+  }
+  if (process.platform !== 'win32') {
+    try {
+      prototype.sync = async function (this: import('node:fs/promises').FileHandle) {
+        if ((await this.stat()).isDirectory())
+          throw Object.assign(new Error('EIO: Synthetic backup directory sync failure.'), {
+            code: 'EIO',
+          });
+        return originalSync.call(this);
+      };
+      await assert.rejects(service.recover({ confirm: true }), /EIO/);
+      assert.deepEqual(await filesystem.readFile(path), bytes);
+      assert.equal((await service.context()).recovery?.canPreserve, true);
+    } finally {
+      prototype.sync = originalSync;
+    }
+  }
+  await service.recover({ confirm: true });
+  assert.equal((await service.context()).pending, null);
+  const id = randomUUID();
+  await filesystem.writeFile(
+    path,
+    JSON.stringify({ submissionId: id, payloadHash: 'b'.repeat(64) }),
+  );
+  const originalOpen = filesystem.open;
+  let fail = true;
+  const retrying = createStartupFeedback(options);
+  try {
+    filesystem.open = (async (...args: Parameters<typeof originalOpen>) => {
+      if (fail && String(args[0]) === path)
+        throw Object.assign(new Error('EACCES: Synthetic transient read failure.'), {
+          code: 'EACCES',
+        });
+      return originalOpen(...args);
+    }) as typeof originalOpen;
+    syncBuiltinESMExports();
+    const unavailable = await retrying.context();
+    assert.equal(unavailable.recovery?.canPreserve, false);
+    assert.match(unavailable.recovery!.message, /EACCES/);
+    fail = false;
+    assert.equal((await retrying.context()).pending?.submissionId, id);
+    await assert.rejects(retrying.recover({ confirm: true }), /Check the saved report status/);
+    await assert.rejects(
+      retrying.review({ feedback: 'Synthetic duplicate refusal.', includeReport: false }),
+      /previous report status/,
+    );
+    assert.equal(lookups, 1);
+    assert.equal(submits, 0);
+  } finally {
+    filesystem.open = originalOpen;
+    syncBuiltinESMExports();
+  }
+});
+
+test('startup attachment repair keeps the original ID and bytes and never repeats the description', async (t) => {
+  const { createStartupFeedback } = await import('../src/server/startup-feedback.ts');
+  const root = await mkdtemp(join(tmpdir(), 'nod-report-repair-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const calls: import('../src/ports/feedback.ts').FeedbackEnvelope[] = [];
+  let release!: (value: import('../src/shared/feedback.ts').FeedbackReceipt) => void;
+  let dispatch!: () => void;
+  const dispatched = new Promise<void>((resolve) => {
+    dispatch = resolve;
+  });
+  let hold = true;
+  let remote: 'partial' | 'submitted' = 'partial';
+  const options = {
+    dataRoot: root,
+    secrets: ['synthetic-private-key'],
+    names: [],
+    status: { phase: 'error', error: 'Synthetic failure synthetic-private-key' },
+    context: {
+      appVersion: '0.9.0',
+      appRelease: 'a'.repeat(40),
+      appModified: false,
+      development: false,
+      source: 'desktop' as const,
+      platform: 'darwin-arm64',
+    },
+    delivery: {
+      configured: true,
+      recipient: 'n8n',
+      async submit(
+        value: import('../src/ports/feedback.ts').FeedbackEnvelope,
+      ): Promise<import('../src/shared/feedback.ts').FeedbackReceipt> {
+        calls.push(value);
+        if (value.action === 'repair' && hold) {
+          dispatch();
+          return new Promise((resolve) => {
+            release = resolve;
+          });
+        }
+        return {
+          submissionId: value.submissionId,
+          status: value.action === 'repair' ? 'submitted' : 'partial',
+        };
+      },
+      async status(id: string) {
+        return { submissionId: id, status: remote };
+      },
+    },
+  };
+  const service = createStartupFeedback(options);
+  const review = await service.review({
+    feedback: 'Synthetic original description.',
+    includeReport: true,
+  });
+  assert.equal((await service.send(review.reviewId)).canRetryAttachments, true);
+  const repairing = service.repair(review.reviewId);
+  await dispatched;
+  const duplicate = service.repair(review.reviewId);
+  assert.equal(calls.length, 2);
+  const { action, ...same } = calls[1];
+  assert.equal(action, 'repair');
+  assert.deepEqual(same, calls[0]);
+  release({ submissionId: review.reviewId, status: 'unknown' });
+  assert.equal((await repairing).status, 'unknown');
+  assert.equal((await duplicate).status, 'unknown');
+  await assert.rejects(service.repair(review.reviewId), /Check the report status/);
+  await assert.rejects(
+    service.review({ feedback: 'Synthetic new description.', includeReport: true }),
+    /previous report status/,
+  );
+  assert.equal((await service.status())?.status, 'partial');
+  hold = false;
+  assert.equal((await service.repair(review.reviewId)).status, 'submitted');
+  assert.equal(calls.filter((value) => !value.action).length, 1);
+  const second = await service.review({
+    feedback: 'Synthetic second report.',
+    includeReport: true,
+  });
+  await service.send(second.reviewId);
+  const restarted = createStartupFeedback(options);
+  assert.equal((await restarted.context()).pending?.canRetryAttachments, false);
+  await assert.rejects(restarted.repair(second.reviewId), /original report bytes/);
+  assert.equal(calls.filter((value) => !value.action).length, 2);
+  const fresh = await restarted.review({ feedback: 'Synthetic fresh bytes.', includeReport: true });
+  assert.notEqual(fresh.reviewId, second.reviewId);
+  const originalNow = Date.now;
+  try {
+    Date.now = () => originalNow() + 3_600_001;
+    assert.equal((await service.status())?.canRetryAttachments, false);
+    await assert.rejects(service.repair(second.reviewId), /original report bytes/);
+  } finally {
+    Date.now = originalNow;
+  }
+  assert.equal(calls.filter((value) => !value.action).length, 2);
 });

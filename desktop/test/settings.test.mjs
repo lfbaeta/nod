@@ -10343,6 +10343,10 @@ test('the built startup report form requires exact review and keeps uncertain se
   const requests = [];
   let open;
   let send;
+  let repair;
+  let failOpening = true;
+  let allowRecovery = false;
+  let contextValue = { enabled: true, recipient: 'n8n', pending: null };
   let retries = 0;
   let closes = 0;
   const reportId = randomUUID();
@@ -10361,6 +10365,10 @@ test('the built startup report form requires exact review and keeps uncertain se
       open = listener;
     },
     openStartupFeedback: async () => {
+      if (failOpening) {
+        failOpening = false;
+        throw new page.window.Error('Synthetic report form failure.');
+      }
       open();
       await opening.promise;
     },
@@ -10369,7 +10377,18 @@ test('the built startup report form requires exact review and keeps uncertain se
     },
     startupFeedback: async (action, input) => {
       requests.push([action, input]);
-      if (action === 'context') return { enabled: true, recipient: 'n8n', pending: null };
+      if (action === 'context') return contextValue;
+      if (action === 'repair')
+        return new Promise((resolve) => {
+          repair = resolve;
+        });
+      if (action === 'recover') {
+        assert.equal(input.confirm, true);
+        if (!allowRecovery)
+          throw new page.window.Error('EIO: Synthetic status preservation failed.');
+        contextValue = { enabled: true, recipient: 'n8n', pending: null };
+        return null;
+      }
       if (action === 'review')
         return {
           reviewId: reportId,
@@ -10396,6 +10415,10 @@ test('the built startup report form requires exact review and keeps uncertain se
       (value) => value.textContent === name,
     );
   await settle(() => button('Report bug'));
+  button('Report bug').click();
+  await settle(() => page.window.document.querySelector('.ob-native-error[role="alert"]'));
+  assert.ok(page.window.document.body.textContent.includes('Synthetic report form failure.'));
+  assert.ok(!page.window.document.body.textContent.includes('Trying again'));
   button('Report bug').click();
   await settle(
     () =>
@@ -10461,8 +10484,76 @@ test('the built startup report form requires exact review and keeps uncertain se
     page.window.document.body.textContent.includes('Sent without the diagnostic report.'),
   );
   assert.equal(requests.filter(([action]) => action === 'send').length, 2);
+  assert.equal(button('Send diagnostic report'), undefined);
+  button('New report').click();
+  await settle(() => page.window.document.querySelector('#startup-feedback-text')?.value === '');
+  const repairedDescription = page.window.document.querySelector('#startup-feedback-text');
+  Object.getOwnPropertyDescriptor(page.window.HTMLTextAreaElement.prototype, 'value').set.call(
+    repairedDescription,
+    'Synthetic report with attachment.',
+  );
+  repairedDescription.dispatchEvent(new page.window.Event('input', { bubbles: true }));
+  page.window.document.querySelector('.startup-feedback-choice input').click();
+  await settle(() => !button('Review').disabled);
+  button('Review').click();
+  await settle(() => button('Send report'));
+  send = undefined;
+  button('Send report').click();
+  await settle(() => send);
+  send({ submissionId: reportId, status: 'partial', canRetryAttachments: true });
+  await settle(
+    () => button('Send diagnostic report') && !button('Send diagnostic report').disabled,
+  );
+  button('Send diagnostic report').click();
+  button('Send diagnostic report')?.click();
+  await settle(() => repair);
+  assert.equal(requests.filter(([action]) => action === 'repair').length, 1);
+  assert.equal(requests.find(([action]) => action === 'repair')[1], reportId);
+  repair({ submissionId: reportId, status: 'unknown' });
+  await settle(() => button('Check status') && !button('Check status').disabled);
+  assert.equal(button('Send diagnostic report'), undefined);
+  assert.equal(requests.filter(([action]) => action === 'send').length, 3);
+  button('Check status').click();
+  await settle(() => page.window.document.body.textContent.includes('Your report was sent.'));
   button('Close').click();
   await settle(() => closes === 1 && !page.window.document.querySelector('[role="dialog"]'));
+  contextValue = {
+    enabled: true,
+    recipient: 'n8n',
+    pending: null,
+    recovery: { message: 'Synthetic invalid saved status.', canPreserve: true },
+  };
+  button('Report bug').click();
+  await settle(() => button('Start a new report') && !button('Start a new report').disabled);
+  assert.ok(
+    page.window.document.body.textContent.includes(
+      'The previous report may already have been sent.',
+    ),
+  );
+  const recoveredDescription = page.window.document.querySelector('#startup-feedback-text');
+  Object.getOwnPropertyDescriptor(page.window.HTMLTextAreaElement.prototype, 'value').set.call(
+    recoveredDescription,
+    'Synthetic recovered report.',
+  );
+  recoveredDescription.dispatchEvent(new page.window.Event('input', { bubbles: true }));
+  assert.equal(button('Review').disabled, true);
+  assert.equal(button('Send report'), undefined);
+  button('Start a new report').click();
+  await settle(() =>
+    page.window.document.body.textContent.includes('EIO: Synthetic status preservation failed.'),
+  );
+  assert.equal(button('Review').disabled, true);
+  assert.equal(button('Send report'), undefined);
+  allowRecovery = true;
+  button('Start a new report').click();
+  await settle(() => !button('Review').disabled);
+  assert.equal(button('Send report'), undefined);
+  assert.equal(requests.filter(([action]) => action === 'recover').length, 2);
+  button('Review').click();
+  await settle(() => button('Send report'));
+  assert.equal(requests.filter(([action]) => action === 'send').length, 3);
+  button('Close').click();
+  await settle(() => closes === 2 && !page.window.document.querySelector('[role="dialog"]'));
   assert.equal(retries, 0);
 });
 
@@ -10877,4 +10968,82 @@ test('startup status hides environment credentials before preparation errors and
       assert.ok(!JSON.parse(review.content).startup.error.includes(secret.slice(0, kept)));
       assert.equal(f.children.length, 0);
     });
+});
+
+test('startup status masks overlapping credentials and private roots in one pass', async (t) => {
+  const short = 'k7X';
+  const secret = short + '-synthetic-private-tail';
+  const literalSecret = String.raw`synthetic+(private)[value]\key`;
+  const resourcesPath = '/Applications/Synthetic Private Owner/Nod.app/Contents/Resources';
+  const engineRoot = join(resourcesPath, 'engine');
+  const calls = [];
+  const f = await runningDesktop(t, async () => assert.fail('The engine must not start.'), {
+    initialState: 'idle',
+    packaged: true,
+    resourcesPath,
+    allowStart: true,
+    environment: {
+      FIRST_API_KEY: short,
+      SECOND_API_KEY: secret,
+      ROOT_API_KEY: '/',
+      MASK_API_KEY: 'red',
+      LITERAL_API_KEY: literalSecret,
+    },
+    prepareRuntime: async () => {
+      throw new Error(
+        `Synthetic failure ${secret} ${engineRoot.replaceAll('\\', '/')}/worker ${f.profileRoot.replaceAll('\\', '/')}/worker`,
+      );
+    },
+    startupFeedbackAction: async (message) => {
+      calls.push(message);
+      return message.action === 'context'
+        ? { enabled: true, recipient: 'n8n', pending: null }
+        : null;
+    },
+  });
+  t.after(() => f.quit(() => {}));
+  await f.prepare({ retry: true }).catch(() => {});
+  assert.equal(
+    f.status().error,
+    'Synthetic failure [redacted] <engine>[redacted]worker <profile>[redacted]worker',
+  );
+  assert.equal(f.bounded(literalSecret), '[redacted]');
+  assert.equal(f.bounded('syntheticX(private)[value]key'), 'syntheticX(private)[value]key');
+  const prefix = ('Synthetic context ' + 'detail '.repeat(400)).slice(0, 1980);
+  const clipped = f.bounded(prefix + secret);
+  assert.equal(clipped, prefix + '[redacted]');
+  f.status().runtime.error = clipped;
+  f.showFeedback();
+  for (
+    let attempt = 0;
+    attempt < 100 &&
+    !f.windows.some((window) => window.sent.some(([name]) => name === 'nod:startup-feedback:open'));
+    attempt++
+  )
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  const window = f.windows.find((window) =>
+    window.sent.some(([name]) => name === 'nod:startup-feedback:open'),
+  );
+  await f.handlers.get('nod:startup-feedback:action')(
+    { sender: window.webContents, senderFrame: window.webContents.mainFrame },
+    'context',
+  );
+  const initial = calls.find((call) => call.action === 'initialize').input;
+  const { createStartupFeedback } = await import('../../src/server/startup-feedback.ts');
+  const service = createStartupFeedback({
+    ...initial,
+    names: [],
+    delivery: {
+      configured: true,
+      recipient: 'n8n',
+      submit: () => assert.fail('Review cannot send.'),
+      status: () => assert.fail('No receipt is expected.'),
+    },
+  });
+  const review = await service.review({
+    feedback: 'Synthetic overlap failure.',
+    includeReport: true,
+  });
+  assert.ok(!review.content.includes('synthetic-private-tail'));
+  assert.ok(!review.content.includes('Synthetic Private Owner'));
 });

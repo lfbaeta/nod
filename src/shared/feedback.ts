@@ -74,6 +74,11 @@ export interface FeedbackContext {
   platform: string | null;
 }
 
+export interface StartupFeedbackContext extends FeedbackContext {
+  pending: FeedbackReceipt | null;
+  recovery?: { message: string; canPreserve: boolean };
+}
+
 export interface FeedbackReport {
   id: string;
   content: string;

@@ -612,7 +612,11 @@ function Startup() {
             )}
           </div>
         )}
-        {reportError && <p role="alert">{reportError}</p>}
+        {reportError && (
+          <p className="ob-native-error" role="alert">
+            {reportError}
+          </p>
+        )}
       </SetupProgress>
     </>
   );

@@ -429,15 +429,23 @@ function updateReadinessNotice() {
 
 function bounded(value, limit = 2000) {
   let message = String(value || 'The operation could not be completed.');
-  for (const secret of knownSecrets)
-    if (secret.length) message = message.replaceAll(secret, '[redacted]');
-  return message
-    .replaceAll(profileRoot, '<profile>')
-    .replaceAll(profileRoot.replaceAll('\\', '/'), '<profile>')
-    .replaceAll(engineRoot, '<engine>')
-    .replaceAll(engineRoot.replaceAll('\\', '/'), '<engine>')
-    .replace(/\bsk-[A-Za-z0-9_-]+/g, '[redacted]')
-    .slice(0, limit);
+  const masks = new Map([
+    [profileRoot, '<profile>'],
+    [profileRoot.replaceAll('\\', '/'), '<profile>'],
+    [engineRoot, '<engine>'],
+    [engineRoot.replaceAll('\\', '/'), '<engine>'],
+    ...[...knownSecrets].filter(Boolean).map((secret) => [secret, '[redacted]']),
+    ['[redacted]', '[redacted]'],
+    ['<profile>', '<profile>'],
+    ['<engine>', '<engine>'],
+  ]);
+  const pattern = [...masks.keys()]
+    .filter(Boolean)
+    .sort((a, b) => b.length - a.length)
+    .map((value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .join('|');
+  if (pattern) message = message.replace(new RegExp(pattern, 'g'), (value) => masks.get(value));
+  return message.replace(/\bsk-[A-Za-z0-9_-]+/g, '[redacted]').slice(0, limit);
 }
 
 function update(value) {
@@ -3298,7 +3306,10 @@ else {
       });
       ipcMain.handle('nod:startup-feedback:action', (event, action, input) => {
         allowSetup(event);
-        if (!startupFeedbackOpen || !['context', 'review', 'send', 'status'].includes(action))
+        if (
+          !startupFeedbackOpen ||
+          !['context', 'review', 'send', 'status', 'repair', 'recover'].includes(action)
+        )
           throw new Error('This report action is unavailable.');
         return (async () => {
           if (action === 'review') {

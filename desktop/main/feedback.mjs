@@ -28,7 +28,10 @@ process.parentPort.on('message', async ({ data }) => {
       configuration.status = input.status;
       configuration.secrets = [...input.secrets, ...helperSecrets];
       configuration.startupLog = input.startupLog;
-    } else if (!feedback || !['context', 'review', 'send', 'status'].includes(action)) {
+    } else if (
+      !feedback ||
+      !['context', 'review', 'send', 'status', 'repair', 'recover'].includes(action)
+    ) {
       throw new Error('This report action is unavailable.');
     }
     const value = ['initialize', 'snapshot'].includes(action)

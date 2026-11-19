@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { FeedbackContext, FeedbackReceipt } from '../../src/shared/feedback';
+import type { FeedbackReceipt, StartupFeedbackContext } from '../../src/shared/feedback';
 import { feedbackLimits } from '../../src/shared/feedback';
 import { Button, Dialog, DialogContent, DialogTitle } from '../../src/web/components/ui';
 import './feedback.css';
@@ -17,7 +17,7 @@ type Review = {
   content: string | null;
   recipient: string | null;
 };
-type Context = FeedbackContext & { pending: FeedbackReceipt | null };
+type Context = StartupFeedbackContext;
 
 export function StartupFeedback({
   desktop,
@@ -37,17 +37,20 @@ export function StartupFeedback({
   const active = useRef(true);
 
   useEffect(() => {
-    void run(async () => {
-      const value = (await desktop.startupFeedback('context')) as Context;
-      if (active.current) {
-        setContext(value);
-        setReceipt(value.pending);
-      }
-    });
+    void run(loadContext);
     return () => {
       active.current = false;
     };
   }, []);
+
+  async function loadContext() {
+    const value = (await desktop.startupFeedback('context')) as Context;
+    if (active.current) {
+      setContext(value);
+      setReceipt(value.pending);
+      setReview(undefined);
+    }
+  }
 
   async function run(action: () => Promise<void>) {
     if (pending.current) return;
@@ -92,6 +95,13 @@ export function StartupFeedback({
                 : context.recipient || 'Reports are turned off'}
             </strong>
             .
+          </p>
+        )}
+        {context?.recovery && (
+          <p role="alert">
+            {context.recovery.message}{' '}
+            {context.recovery.canPreserve &&
+              'The previous report may already have been sent. Starting a new report can create a duplicate. Nod will first keep a local copy of the unreadable saved status.'}
           </p>
         )}
         {!receipt && (
@@ -156,23 +166,42 @@ export function StartupFeedback({
           <Button type="button" variant="outline" disabled={busy} onClick={close}>
             Close
           </Button>
-          {!context && !busy && (
+          {(!context || context.recovery) && !busy && (
+            <Button type="button" onClick={() => void run(loadContext)}>
+              {context?.recovery ? 'Retry saved status' : 'Try again'}
+            </Button>
+          )}
+          {context?.recovery?.canPreserve && (
             <Button
               type="button"
+              disabled={busy || !context.enabled}
               onClick={() =>
                 void run(async () => {
-                  const value = (await desktop.startupFeedback('context')) as Context;
-                  if (active.current) {
-                    setContext(value);
-                    setReceipt(value.pending);
-                  }
+                  await desktop.startupFeedback('recover', { confirm: true });
+                  await loadContext();
                 })
               }
             >
-              Try again
+              Start a new report
             </Button>
           )}
-          {receipt?.status === 'unknown' && (
+          {receipt?.status === 'partial' && receipt.canRetryAttachments && (
+            <Button
+              type="button"
+              disabled={busy}
+              onClick={() =>
+                void run(async () => {
+                  const id = receipt.submissionId;
+                  setReceipt({ ...receipt, status: 'unknown', canRetryAttachments: false });
+                  const value = (await desktop.startupFeedback('repair', id)) as FeedbackReceipt;
+                  if (active.current) setReceipt(value);
+                })
+              }
+            >
+              Send diagnostic report
+            </Button>
+          )}
+          {(receipt?.status === 'unknown' || receipt?.status === 'partial') && (
             <Button
               type="button"
               disabled={busy}
@@ -214,7 +243,7 @@ export function StartupFeedback({
           {!receipt && !review && (
             <Button
               type="button"
-              disabled={busy || !context?.enabled || !feedback.trim()}
+              disabled={busy || !context?.enabled || Boolean(context.recovery) || !feedback.trim()}
               onClick={() =>
                 void run(async () => {
                   const value = (await desktop.startupFeedback('review', {
