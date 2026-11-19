@@ -31,7 +31,7 @@ function renderIntegrationBrowser(
   const expected = JSON.stringify(continuation).replaceAll('<', '\\u003c');
   const introduction = continuation.id
     ? ''
-    : `${integrationPrivacyNotice}<button id="connect" type="button">Continue to sign in</button>`;
+    : `<div id="introduction">${integrationPrivacyNotice}<button id="connect" type="button">Continue to sign in</button></div>`;
   return String.raw`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Connect your app · Nod</title><style nonce="${nonce}">:root{color-scheme:light dark}body{font:16px system-ui;margin:0;min-height:100svh;display:grid;place-items:center;background:light-dark(#fafafa,#191919);color:light-dark(#191919,#fafafa)}main{max-width:360px;padding:32px;text-align:center}h1{font-size:21px;font-weight:550;letter-spacing:-.4px}p{line-height:1.6;color:light-dark(#676767,#bfbfbf)}button{font:inherit;padding:12px 20px;border:0;border-radius:8px;background:light-dark(#191919,#fafafa);color:light-dark(#fafafa,#191919);cursor:pointer}button:disabled{opacity:.5;cursor:default}a{color:inherit;text-underline-offset:3px}</style></head><body><main${continuation.id ? ' hidden' : ''}><h1 id="heading">${continuation.id ? 'Opening sign-in…' : 'Connect your app'}</h1>${introduction}<p id="status" role="status"></p></main><script nonce="${nonce}">
 const brokerOrigin=${broker};
 const bridgeKey=${secret};
@@ -51,6 +51,7 @@ const request=async(body)=>{const response=await fetch('/start',{method:'POST',c
 if(!expected.id){
 await new Promise(resolve=>document.getElementById('connect').addEventListener('click',resolve,{once:true}));
 document.getElementById('connect').disabled=true;
+document.getElementById('introduction').hidden=true;
 document.getElementById('heading').textContent='Opening sign-in…';
 }
 valid();database=await open();valid();

@@ -7,7 +7,7 @@ import {
 } from '../ports/integrations.ts';
 import { logFailure } from './failure-log.ts';
 
-export const integrationPrivacyNotice = `<p>App data that Nod reads or sends passes through this connection service and Composio. This includes email content for Gmail and Outlook. Both services can read this content. By default, n8n runs the connection service.</p><p>Retention depends on the connection service's settings and Composio plan. Zero Data Retention applies only to covered calls. Metadata, files, triggers and tool searches have separate rules.</p><p><a href="https://nod.n8n.io/docs/trust/privacy/#composio-zero-data-retention" target="_blank" rel="noopener noreferrer">Read about data handling and retention</a></p>`;
+export const integrationPrivacyNotice = `<p>App data that Nod reads or sends passes through this connection service and Composio. This includes email content for Gmail and Outlook. Both services can read this content. By default, n8n runs the connection service.</p><p>Retention depends on the connection service's settings and Composio plan. When Zero Data Retention is on for the project, covered calls keep request arguments, response data and error text out of Composio execution logs. Composio still processes calls and keeps metadata. Calls through Composio Managed OAuth apps need Enterprise for this coverage. Files, triggers and tool searches have separate rules.</p><p><a href="https://nod.n8n.io/docs/trust/privacy/#composio-zero-data-retention" target="_blank" rel="noopener noreferrer">Read about data handling and retention</a></p>`;
 
 const token = z.string().regex(/^[A-Za-z0-9_-]{43}$/);
 const input = z

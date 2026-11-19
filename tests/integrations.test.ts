@@ -3796,7 +3796,8 @@ fetch('/v2/connect/verify',{method:'POST',headers:{'Content-Type':'application/j
       child!.once('close', () => resolve());
     });
     let targets: Array<{ url: string; webSocketDebuggerUrl: string }> = [];
-    for (let attempt = 0; attempt < 15; attempt++) {
+    const targetDeadline = performance.now() + 10_000;
+    while (performance.now() < targetDeadline) {
       try {
         const [port] = (await readFile(join(profile, 'DevToolsActivePort'), 'utf8')).split('\n');
         targets = await (
@@ -3814,24 +3815,38 @@ fetch('/v2/connect/verify',{method:'POST',headers:{'Content-Type':'application/j
     const socket = new WebSocket(target.webSocketDebuggerUrl);
     t.after(() => socket.close());
     await once(socket, 'open');
-    const clicked = new Promise<boolean>((resolve) => {
-      socket.addEventListener('message', (event) => {
-        const result = JSON.parse(String(event.data));
-        if (result.id === 1) resolve(result.result?.result?.value === true);
-      });
+    type BrowserReply = { id: number; result?: { result?: { value?: unknown } } };
+    let commandId = 0;
+    const pending = new Map<number, (reply: BrowserReply) => void>();
+    socket.addEventListener('message', (event) => {
+      const reply = JSON.parse(String(event.data)) as BrowserReply;
+      const receive = pending.get(reply.id);
+      if (receive) {
+        pending.delete(reply.id);
+        receive(reply);
+      }
     });
-    socket.send(
-      JSON.stringify({
-        id: 1,
-        method: 'Runtime.evaluate',
-        params: {
-          expression:
-            "new Promise(resolve => { const click = () => { const button = document.getElementById('connect'); if (!button || button.disabled) return resolve(false); button.click(); button.click(); resolve(true); }; if (document.readyState === 'loading') addEventListener('DOMContentLoaded', click, { once: true }); else click(); })",
-          awaitPromise: true,
-        },
-      }),
+    const evaluate = (expression: string) => {
+      const id = ++commandId;
+      const response = new Promise<BrowserReply>((resolve) => pending.set(id, resolve));
+      socket.send(JSON.stringify({ id, method: 'Runtime.evaluate', params: { expression } }));
+      return response;
+    };
+    let ready = false;
+    for (let attempt = 0; attempt < 200; attempt++) {
+      const reply = await evaluate("Boolean(document.getElementById('connect'))");
+      if (reply.result?.result?.value === true) {
+        ready = true;
+        break;
+      }
+      await delay(25);
+    }
+    assert.equal(ready, true);
+    assert.equal(Boolean(browserKey), false);
+    const clickResult = await evaluate(
+      "(() => { const button = document.getElementById('connect'); if (!button || button.disabled) return false; button.click(); button.click(); return true; })()",
     );
-    assert.equal(await clicked, true);
+    assert.equal(clickResult.result?.result?.value, true, JSON.stringify(clickResult));
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       await Promise.race([
@@ -10860,8 +10875,13 @@ test(
       assert.equal((await discovered.servers())[0].tools[0].name, 'known_tool');
       assert.equal(requests, 2);
       release();
-      await delay(0);
-      assert.equal((await discovered.servers())[0].tools[0].name, 'new_tool');
+      let refreshed = await discovered.servers();
+      for (let attempt = 0; attempt < 100 && refreshed[0].tools[0].name !== 'new_tool'; attempt++) {
+        await delay(10);
+        refreshed = await discovered.servers();
+      }
+      assert.equal(refreshed[0].tools[0].name, 'new_tool');
+      assert.equal(requests, 2);
       await pool.query('DELETE FROM discovered_connections WHERE id=$1', [connectionId]);
       assert.deepEqual(await discovered.servers(), []);
     } finally {
