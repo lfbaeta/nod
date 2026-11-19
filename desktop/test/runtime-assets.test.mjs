@@ -4176,6 +4176,118 @@ test('a failed runtime command names its cause from the end of its output, inclu
   );
 });
 
+test('runtime command results keep stderr diagnostics out of parsed stdout', async () => {
+  const { execute } = await import('../runtime/index.mjs');
+  const networks = [{ Driver: 'bridge', Name: 'nod-control-fixture' }];
+  const warning = [
+    ...Buffer.from(
+      'wsl: Конфигурация прокси-сервера localhost обнаружена, но не отражена в WSL.\r\n',
+      'utf16le',
+    ),
+  ];
+  for (const noisy of [
+    `process.stderr.write(Buffer.from(${JSON.stringify(warning)}));`,
+    `console.error('wsl: A localhost proxy configuration was detected but not mirrored to WSL.');`,
+  ]) {
+    const output = await execute(process.execPath, [
+      '-e',
+      `${noisy} process.stdout.write(${JSON.stringify(JSON.stringify(networks))})`,
+    ]);
+    assert.deepEqual(JSON.parse(output), networks);
+  }
+  const output = await execute(process.execPath, [
+    '-e',
+    `for (let index = 0; index < 50; index++) { process.stderr.write('noise-' + index + '\\n'); process.stdout.write('part' + index + ';'); }`,
+  ]);
+  assert.equal(output, `${Array.from({ length: 50 }, (_, index) => `part${index}`).join(';')};`);
+  assert.equal(await execute(process.execPath, ['-e', "console.error('only noise')"]), '');
+  await assert.rejects(
+    execute(process.execPath, [
+      '-e',
+      'console.log(JSON.stringify({ ok: true })); console.error("Synthetic docker failure"); process.exit(1)',
+    ]),
+    (error) =>
+      error.message.includes('Nod runtime command failed (1)') &&
+      error.details.includes('Synthetic docker failure') &&
+      error.details.includes('{"ok":true}'),
+  );
+});
+
+test('runtime command results are bounded by an explicit limit instead of truncation', async () => {
+  const { execute } = await import('../runtime/index.mjs');
+  const output = await execute(process.execPath, [
+    '-e',
+    "process.stdout.write(JSON.stringify({ entries: Array.from({ length: 20000 }, () => 'synthetic-entry') }))",
+  ]);
+  assert.ok(output.length > 128 * 1024);
+  assert.equal(JSON.parse(output).entries.length, 20000);
+  for (const [character, count, encoding] of [
+    ['x', 9 * 1024 * 1024, 'utf8'],
+    ['€', 3 * 1024 * 1024, 'utf8'],
+    ['x', 5 * 1024 * 1024, 'utf16le'],
+  ]) {
+    await assert.rejects(
+      execute(
+        process.execPath,
+        [
+          '-e',
+          `process.stdout.write(Buffer.from(${JSON.stringify(character)}.repeat(${count}), '${encoding}'))`,
+        ],
+        { encoding },
+      ),
+      { message: 'Nod runtime command produced too much output.' },
+    );
+  }
+});
+
+test('stopping a runtime command reports cancellation and timeouts', async () => {
+  const { execute } = await import('../runtime/index.mjs');
+  await assert.rejects(
+    execute(process.execPath, ['-e', 'setTimeout(() => {}, 60_000)'], {
+      signal: AbortSignal.timeout(200),
+    }),
+    { message: 'Nod setup was cancelled.' },
+  );
+  await assert.rejects(
+    execute(process.execPath, ['-e', 'setTimeout(() => {}, 60_000)'], { timeout: 200 }),
+    { message: 'Nod runtime setup took too long. Please retry.' },
+  );
+});
+
+test('runtime networks parse docker output that arrives with WSL diagnostics', async (t) => {
+  const { execute, ensureNetwork } = await import('../runtime/index.mjs');
+  const directory = await mkdtemp(join(tmpdir(), 'nod-docker-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const network = {
+    Driver: 'bridge',
+    Scope: 'local',
+    EnableIPv6: false,
+    Internal: false,
+    IPAM: { Config: [{ Subnet: '172.30.1.0/24' }] },
+    Options: {
+      'com.docker.network.bridge.name': 'nod-control',
+      'com.docker.network.bridge.enable_icc': 'false',
+    },
+  };
+  const warning = [
+    ...Buffer.from(
+      'wsl: A localhost proxy configuration was detected but not mirrored to WSL.\r\n',
+      'utf16le',
+    ),
+  ];
+  const docker = join(directory, 'docker.mjs');
+  await writeFile(
+    docker,
+    `process.stderr.write(Buffer.from(${JSON.stringify(warning)}));\nprocess.stdout.write(${JSON.stringify(JSON.stringify([network]))});`,
+  );
+  const runDocker = (args, extra = {}) => execute(process.execPath, [docker, ...args], extra);
+  await ensureNetwork(runDocker, {
+    name: 'nod-control-fixture',
+    subnet: '172.30.1.0/24',
+    bridge: 'nod-control',
+  });
+});
+
 test('runtime networks reject isolation drift before any workload can start', async () => {
   const { ensureNetwork } = await import('../runtime/index.mjs');
   const expected = {
