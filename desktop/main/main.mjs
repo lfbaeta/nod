@@ -270,12 +270,12 @@ const startupFeedback = createStartupFeedbackClient({
     ),
   ),
   input: async () => {
-    await diagnosticWrites;
     return {
       dataRoot: profileRoot,
       context: await feedbackContext(),
       status,
       secrets: [...knownSecrets],
+      startupLog: startupLogSnapshot(),
     };
   },
 });
@@ -710,7 +710,32 @@ function showNotificationConfirmation() {
 }
 
 let diagnosticWrites = Promise.resolve();
+const startupEvents = [];
+let startupEventBytes = 0;
+let startupEventsTruncated = false;
+
+function startupLogSnapshot() {
+  const now = Date.now();
+  return {
+    entries: startupEvents.map(({ at, line }) => ({
+      ageMs: Math.min(31_536_000_000, Math.max(0, Math.round(now - at))),
+      line,
+    })),
+    truncated: startupEventsTruncated,
+  };
+}
+
 function writeDiagnostic(value) {
+  const raw = String(value || 'The operation could not be completed.');
+  const bytes = Buffer.byteLength(raw);
+  if (bytes <= 48_000) {
+    startupEvents.push({ at: Date.now(), line: raw });
+    startupEventBytes += bytes;
+    while (startupEvents.length > 100 || startupEventBytes > 48_000) {
+      startupEventBytes -= Buffer.byteLength(startupEvents.shift().line);
+      startupEventsTruncated = true;
+    }
+  } else startupEventsTruncated = true;
   const written = diagnosticWrites.then(async () => {
     const directory = join(profileRoot, 'logs');
     const path = join(directory, 'startup.log');
@@ -3271,8 +3296,11 @@ else {
           throw new Error('This report action is unavailable.');
         return (async () => {
           if (action === 'review') {
-            await diagnosticWrites;
-            await startupFeedback.request('snapshot', { status, secrets: [...knownSecrets] });
+            await startupFeedback.request('snapshot', {
+              status,
+              secrets: [...knownSecrets],
+              startupLog: startupLogSnapshot(),
+            });
           }
           return startupFeedback.request(action, input);
         })();

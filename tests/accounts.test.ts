@@ -7411,6 +7411,10 @@ test('startup reports require review and keep exact redacted content through sen
   };
   const submitted: import('../src/ports/feedback.ts').FeedbackEnvelope[] = [];
   const statusCalls: string[][] = [];
+  let dispatchReady!: () => void;
+  const dispatched = new Promise<void>((resolve) => {
+    dispatchReady = resolve;
+  });
   let release!: (value: import('../src/shared/feedback.ts').FeedbackReceipt) => void;
   let nextStatus: import('../src/shared/feedback.ts').FeedbackReceipt['status'] = 'unknown';
   const options = {
@@ -7418,6 +7422,15 @@ test('startup reports require review and keep exact redacted content through sen
     context,
     secrets: [secret],
     names: [privateName],
+    startupLog: {
+      entries: [
+        {
+          ageMs: 1000,
+          line: `Startup failed ${secret} ${privateName} private@example.test /Users/private-person/record.txt https://private.example.test/account`,
+        },
+      ],
+      truncated: false,
+    },
     status: {
       phase: 'error',
       error: `Synthetic failure for ${privateName} ${secret}`,
@@ -7428,6 +7441,7 @@ test('startup reports require review and keep exact redacted content through sen
       recipient: 'n8n',
       async submit(envelope: import('../src/ports/feedback.ts').FeedbackEnvelope) {
         submitted.push(envelope);
+        dispatchReady();
         return new Promise<import('../src/shared/feedback.ts').FeedbackReceipt>((resolve) => {
           release = resolve;
         });
@@ -7459,10 +7473,9 @@ test('startup reports require review and keep exact redacted content through sen
   assert.match(content, /503/);
   assert.ok(!content.includes('2026-11-19T'));
   assert.equal(typeof JSON.parse(content).startupLog.entries[0].ageMs, 'number');
-  await writeFile(
-    join(root, 'logs', 'startup.log'),
-    `2026-11-19T00:00:00.000Z ${'Synthetic detail '.repeat(234)}${secret} end\n`,
-  );
+  options.startupLog.entries = [
+    { ageMs: 500, line: `${'Synthetic detail '.repeat(234)}${secret} end` },
+  ];
   const boundary = await service.review({
     feedback: 'Synthetic boundary check.',
     includeReport: true,
@@ -7471,12 +7484,15 @@ test('startup reports require review and keep exact redacted content through sen
     !boundary.content!.includes(secret.slice(0, 12)),
     'Redact the whole line before limiting its display length.',
   );
+  const changedSecret = 'synthetic-rotated-startup-key';
+  options.secrets.push(changedSecret);
+  options.startupLog.entries.push({ ageMs: 0, line: `Synthetic rotated key ${changedSecret}` });
   const current = await service.review({ feedback: first.feedback, includeReport: true });
+  assert.ok(!current.content!.includes(changedSecret));
   assert.equal(JSON.parse(content).schema, 'nod-desktop-startup-report-v1');
-  await writeFile(join(root, 'logs', 'startup.log'), 'Synthetic later log not reviewed\n');
+  options.startupLog.entries = [{ ageMs: 0, line: 'Synthetic later event not reviewed' }];
   const sending = service.send(current.reviewId);
-  for (let attempt = 0; attempt < 100 && !release; attempt++)
-    await new Promise((resolve) => setTimeout(resolve, 5));
+  await Promise.race([dispatched, sending]);
   assert.equal(submitted.length, 1);
   assert.equal(Buffer.from(submitted[0].report!.data, 'base64').toString(), current.content);
   assert.equal(submitted[0].feedback, first.feedback);
@@ -7518,7 +7534,7 @@ test('startup reports require review and keep exact redacted content through sen
   assert.notEqual(third.reviewId, second.reviewId);
 });
 
-test('startup reports omit unsafe logs and refuse invalid input or failed durable saves', async (t) => {
+test('startup reports omit unavailable event snapshots and refuse invalid input or failed durable saves', async (t) => {
   const { createStartupFeedback } = await import('../src/server/startup-feedback.ts');
   const { mkdir, writeFile, unlink } = await import('node:fs/promises');
   const root = await mkdtemp(join(tmpdir(), 'nod-startup-feedback-unsafe-'));
@@ -7527,7 +7543,7 @@ test('startup reports omit unsafe logs and refuse invalid input or failed durabl
   await mkdir(join(dataRoot, 'logs'), { recursive: true });
   const target = join(root, 'private.log');
   await writeFile(target, 'Synthetic private target\n');
-  await symlink(target, join(dataRoot, 'logs', 'startup.log'));
+  await writeFile(join(dataRoot, 'logs', 'startup.log'), 'Synthetic disk history is excluded\n');
   let sends = 0;
   const options = {
     dataRoot,
@@ -7703,3 +7719,85 @@ test(
     }
   },
 );
+
+test('startup reports never open log paths and use only current desktop events', async (t) => {
+  const { createStartupFeedback } = await import('../src/server/startup-feedback.ts');
+  const filesystem = (await import('node:fs/promises')).default;
+  const { syncBuiltinESMExports } = await import('node:module');
+  const { mkdir, writeFile } = filesystem;
+  const root = await mkdtemp(join(tmpdir(), 'nod-startup-no-log-read-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const dataRoot = join(root, 'profile');
+  const outside = join(root, 'outside');
+  await mkdir(dataRoot);
+  await mkdir(outside);
+  await writeFile(join(outside, 'startup.log'), 'Synthetic unrelated private file\n');
+  if (process.platform === 'win32') {
+    await mkdir(join(dataRoot, 'logs'));
+    await writeFile(join(dataRoot, 'logs', 'startup.log'), 'Synthetic unrelated private file\n');
+  } else await symlink(outside, join(dataRoot, 'logs'));
+  const opened: string[] = [];
+  const original = filesystem.open;
+  const options = {
+    dataRoot,
+    secrets: [],
+    names: [],
+    status: { phase: 'error' },
+    context: {
+      appVersion: '0.9.0',
+      appRelease: 'a'.repeat(40),
+      appModified: false,
+      platform: 'darwin-arm64',
+      development: false,
+      source: 'desktop' as const,
+    },
+    startupLog: {
+      entries: [{ ageMs: 5, line: 'Synthetic event from this desktop process' }],
+      truncated: true,
+    },
+    delivery: {
+      configured: true,
+      recipient: 'n8n',
+      async submit(envelope: import('../src/ports/feedback.ts').FeedbackEnvelope) {
+        return { submissionId: envelope.submissionId, status: 'submitted' as const };
+      },
+      async status(id: string) {
+        return { submissionId: id, status: 'unknown' as const };
+      },
+    },
+  };
+  try {
+    filesystem.open = (async (
+      path: Parameters<typeof original>[0],
+      ...args: Parameters<typeof original> extends [unknown, ...infer Rest] ? Rest : never
+    ) => {
+      opened.push(String(path));
+      return original(path, ...args);
+    }) as typeof original;
+    syncBuiltinESMExports();
+    const service = createStartupFeedback(options);
+    const snapshot = await service.review({ feedback: 'Synthetic failure.', includeReport: true });
+    const report = JSON.parse(snapshot.content!);
+    assert.equal(report.startupLog.status, 'collected');
+    assert.equal(report.startupLog.scope, 'current-desktop-process');
+    assert.equal(report.startupLog.truncated, true);
+    assert.deepEqual(report.startupLog.entries, options.startupLog.entries);
+    assert.ok(!snapshot.content!.includes('Synthetic unrelated private file'));
+    const malformed = createStartupFeedback({
+      ...options,
+      startupLog: { entries: [{ ageMs: -1, line: 'Synthetic invalid event' }], truncated: false },
+    });
+    const empty = JSON.parse(
+      (await malformed.review({ feedback: 'Synthetic failure.', includeReport: true })).content!,
+    );
+    assert.equal(empty.startupLog.status, 'unavailable');
+    assert.deepEqual(empty.startupLog.entries, []);
+    assert.ok(
+      !opened.some((path) => /[\\/]logs(?:[\\/]|$)/.test(path)),
+      'Preparing a startup report must not open any log path.',
+    );
+  } finally {
+    filesystem.open = original;
+    syncBuiltinESMExports();
+  }
+});

@@ -132,7 +132,10 @@ export function StartupFeedback({
             )}
             {review && (
               <p>
-                Check your description and the report. Only <strong>Send report</strong> sends them.
+                {review.content
+                  ? 'Check your description and the report.'
+                  : 'Check your description.'}{' '}
+                Only <strong>Send report</strong> sends {review.content ? 'them' : 'it'}.
               </p>
             )}
           </>
@@ -142,7 +145,7 @@ export function StartupFeedback({
             {receipt.status === 'submitted'
               ? 'Your report was sent.'
               : receipt.status === 'partial'
-                ? 'Your report was sent, but its attachment is incomplete.'
+                ? 'Sent without the diagnostic report.'
                 : receipt.status === 'rejected'
                   ? receipt.message || 'The report was rejected. You can edit it and try again.'
                   : 'The send result is unknown. Check its status before sending another report.'}

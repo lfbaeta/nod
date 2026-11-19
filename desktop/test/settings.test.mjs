@@ -496,6 +496,7 @@ async function runningDesktop(
     webPreferences = { quietHoursEnabled: false },
     createFiles = createArtifactFiles,
     openFile = open,
+    appendDiagnostic = appendFile,
     environment = {},
     platform = process.platform === 'win32' ? 'win32' : 'darwin',
     packaged = false,
@@ -586,6 +587,7 @@ async function runningDesktop(
     readFileSync: (path) =>
       JSON.stringify(path.endsWith('posthog-host.json') ? posthogHost : appPages),
     appOpenPath,
+    Buffer,
     trustSystemCertificates: trustCertificates,
     createStartupFeedbackClient,
     app: {
@@ -677,7 +679,7 @@ async function runningDesktop(
     pathToFileURL,
     homedir,
     mkdir,
-    appendFile,
+    appendFile: appendDiagnostic,
     readFile: (file, ...args) =>
       buildMetadata && file === fileURLToPath(new URL('../package.json', import.meta.url))
         ? Promise.resolve(nativeMetadataRead()).then(() =>
@@ -1008,6 +1010,8 @@ async function runningDesktop(
       showSettings,
       replayOnboarding,
       showFeedback,
+      writeDiagnostic,
+      knownSecrets,
       saveEngineDownload,
       setReady: (ready) => { status.phase = ready ? 'ready' : 'starting'; },
       status: () => status,
@@ -10331,6 +10335,7 @@ test('the built startup report form requires exact review and keeps uncertain se
   let retries = 0;
   let closes = 0;
   const reportId = randomUUID();
+  const opening = deferred();
   page.window.nodDesktop = {
     ready: async () => {},
     onStatus() {},
@@ -10344,7 +10349,10 @@ test('the built startup report form requires exact review and keeps uncertain se
     onStartupFeedback(listener) {
       open = listener;
     },
-    openStartupFeedback: async () => open(),
+    openStartupFeedback: async () => {
+      open();
+      await opening.promise;
+    },
     closeStartupFeedback: async () => {
       closes++;
     },
@@ -10383,6 +10391,8 @@ test('the built startup report form requires exact review and keeps uncertain se
       button('Review') && !page.window.document.querySelector('[role="dialog"] [aria-busy="true"]'),
   );
   assert.equal(retries, 0);
+  assert.ok(!page.window.document.body.textContent.includes('Trying again'));
+  opening.resolve();
   assert.equal(button('Send report'), undefined);
   const textarea = page.window.document.querySelector('#startup-feedback-text');
   Object.getOwnPropertyDescriptor(page.window.HTMLTextAreaElement.prototype, 'value').set.call(
@@ -10417,6 +10427,29 @@ test('the built startup report form requires exact review and keeps uncertain se
   );
   assert.equal(button('Review').disabled, true);
   assert.equal(requests.filter(([action]) => action === 'send').length, 1);
+  const description = page.window.document.querySelector('#startup-feedback-text');
+  Object.getOwnPropertyDescriptor(page.window.HTMLTextAreaElement.prototype, 'value').set.call(
+    description,
+    'Synthetic report without an attachment.',
+  );
+  description.dispatchEvent(new page.window.Event('input', { bubbles: true }));
+  page.window.document.querySelector('.startup-feedback-choice input').click();
+  await settle(() => !button('Review').disabled);
+  button('Review').click();
+  await settle(() => button('Send report'));
+  assert.equal(page.window.document.querySelector('#startup-feedback-report'), null);
+  assert.ok(
+    !page.window.document.body.textContent.includes('Check your description and the report.'),
+  );
+  assert.ok(page.window.document.body.textContent.includes('Check your description.'));
+  send = undefined;
+  button('Send report').click();
+  await settle(() => send);
+  send({ submissionId: reportId, status: 'partial' });
+  await settle(() =>
+    page.window.document.body.textContent.includes('Sent without the diagnostic report.'),
+  );
+  assert.equal(requests.filter(([action]) => action === 'send').length, 2);
   button('Close').click();
   await settle(() => closes === 1 && !page.window.document.querySelector('[role="dialog"]'));
   assert.equal(retries, 0);
@@ -10531,7 +10564,15 @@ test('startup report helper keeps its own environment secrets through initialize
     }),
     createStartupFeedback: (options) => {
       configuration = options;
-      return { context: async () => ({ ready: true }) };
+      return {
+        context: async () => ({ ready: true }),
+        review: async () => {
+          throw Object.assign(new Error('Synthetic validation failure.'), {
+            name: 'ZodError',
+            issues: [{ path: ['feedback'], message: `Synthetic field reason ${secret}` }],
+          });
+        },
+      };
     },
   });
   const message = async (id, action, input) => {
@@ -10547,5 +10588,140 @@ test('startup report helper keeps its own environment secrets through initialize
   await message(2, 'snapshot', { status: { phase: 'error' }, secrets: [] });
   assert.deepEqual(Array.from(configuration.secrets), [secret]);
   assert.equal((await message(3, 'context')).value.ready, true);
+  const invalid = await message(4, 'review', {});
+  assert.match(invalid.error, /feedback: Synthetic field reason/);
+  assert.ok(invalid.error.includes('[redacted]'));
   assert.ok(!JSON.stringify(replies).includes(secret));
+});
+
+test('startup report events survive retry and disk failure with bounded memory and current secrets', async (t) => {
+  const calls = [];
+  let attempts = 0;
+  const f = await runningDesktop(t, async () => assert.fail('The failed engine is not needed.'), {
+    initialState: 'idle',
+    allowStart: true,
+    prepareRuntime: async () => {
+      attempts++;
+      throw new Error(`Synthetic startup attempt ${attempts}`);
+    },
+    startupFeedbackAction: async (message) => {
+      calls.push(message);
+      return message.action === 'context'
+        ? { enabled: true, recipient: 'n8n', pending: null }
+        : null;
+    },
+  });
+  t.after(() => f.quit(() => {}));
+  await f.prepare({ retry: true }).catch(() => {});
+  await f.prepare({ retry: true }).catch(() => {});
+  assert.equal(attempts, 2);
+  assert.equal(f.children.length, 0);
+  for (let index = 0; index < 105; index++)
+    await f.writeDiagnostic(`Synthetic retry event ${index}`);
+  f.knownSecrets.add('synthetic-current-runtime-key');
+  f.showFeedback();
+  for (
+    let attempt = 0;
+    attempt < 100 &&
+    !f.windows.some((window) => window.sent.some(([name]) => name === 'nod:startup-feedback:open'));
+    attempt++
+  )
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  const window = f.windows.find((window) =>
+    window.sent.some(([name]) => name === 'nod:startup-feedback:open'),
+  );
+  const event = { sender: window.webContents, senderFrame: window.webContents.mainFrame };
+  const action = f.handlers.get('nod:startup-feedback:action');
+  await action(event, 'context');
+  const initial = calls.find((call) => call.action === 'initialize').input;
+  assert.equal(initial.startupLog.entries.length, 100);
+  assert.equal(initial.startupLog.truncated, true);
+  assert.ok(!initial.startupLog.entries.some((entry) => entry.line === 'Synthetic retry event 0'));
+  assert.ok(initial.startupLog.entries.some((entry) => entry.line === 'Synthetic retry event 104'));
+  assert.ok(initial.secrets.includes('synthetic-current-runtime-key'));
+  await f.writeDiagnostic('Synthetic oversized event ' + 'x'.repeat(48_000));
+  for (let index = 0; index < 3; index++)
+    await f.writeDiagnostic(`Synthetic large event ${index} ` + 'x '.repeat(12_000));
+  const path = join(f.profileRoot, 'logs', 'startup.log');
+  await rm(path);
+  await mkdir(path);
+  await assert.rejects(f.writeDiagnostic('Synthetic event kept after disk failure'));
+  f.knownSecrets.add('synthetic-new-runtime-key');
+  await action(event, 'review', { feedback: 'Synthetic failure.', includeReport: true });
+  const snapshot = calls.findLast((call) => call.action === 'snapshot').input;
+  assert.ok(
+    snapshot.startupLog.entries.reduce(
+      (bytes, entry) => bytes + Buffer.byteLength(entry.line),
+      0,
+    ) <= 48_000,
+  );
+  assert.ok(
+    snapshot.startupLog.entries.every(
+      (entry) => !entry.line.startsWith('Synthetic oversized event'),
+    ),
+  );
+  assert.ok(
+    snapshot.startupLog.entries.some(
+      (entry) => entry.line === 'Synthetic event kept after disk failure',
+    ),
+  );
+  assert.ok(snapshot.secrets.includes('synthetic-new-runtime-key'));
+  assert.ok(snapshot.secrets.includes('synthetic-current-runtime-key'));
+});
+
+test('startup reports do not wait for a stalled disk log write', async (t) => {
+  const gate = deferred();
+  const calls = [];
+  const f = await runningDesktop(t, async () => assert.fail('The failed engine is not needed.'), {
+    initialState: 'idle',
+    appendDiagnostic: () => gate.promise,
+    startupFeedbackAction: async (message) => {
+      calls.push(message);
+      return message.action === 'context'
+        ? { enabled: true, recipient: 'n8n', pending: null }
+        : null;
+    },
+  });
+  const logging = f.writeDiagnostic('Synthetic event with a stalled disk write');
+  t.after(async () => {
+    gate.resolve();
+    await logging;
+    await f.quit(() => {});
+  });
+  f.showFeedback();
+  for (
+    let attempt = 0;
+    attempt < 100 &&
+    !f.windows.some((window) => window.sent.some(([name]) => name === 'nod:startup-feedback:open'));
+    attempt++
+  )
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  const window = f.windows.find((window) =>
+    window.sent.some(([name]) => name === 'nod:startup-feedback:open'),
+  );
+  const event = { sender: window.webContents, senderFrame: window.webContents.mainFrame };
+  let deadline;
+  try {
+    const context = await Promise.race([
+      f.handlers.get('nod:startup-feedback:action')(event, 'context'),
+      new Promise((_, reject) => {
+        deadline = setTimeout(() => reject(new Error('The report waited for the disk log.')), 5000);
+      }),
+    ]);
+    assert.equal(context.enabled, true);
+    const initial = calls.find((call) => call.action === 'initialize').input;
+    assert.ok(
+      initial.startupLog.entries.some(
+        (entry) => entry.line === 'Synthetic event with a stalled disk write',
+      ),
+    );
+    await f.handlers.get('nod:startup-feedback:action')(event, 'review', {
+      feedback: 'Synthetic failure.',
+      includeReport: true,
+    });
+    assert.ok(calls.some((call) => call.action === 'snapshot'));
+    assert.equal(f.children.length, 0);
+  } finally {
+    clearTimeout(deadline);
+  }
 });

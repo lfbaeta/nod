@@ -98,7 +98,7 @@ For calendar plans, Pi uses availability tools when available and code for durat
 
 The same check keeps vendor packages (Pi, Composio, chat adapters and agent-browser) inside `providers`. It also stops `runtime`, `ports`, `shared` and `web` from reading `process.env`. Configuration belongs in [`src/server/composition.ts`](https://github.com/n8n-io/nod/blob/main/src/server/composition.ts).
 
-The desktop startup report helper uses the same feedback factory as normal composition: `src/server/feedback-delivery.ts`. This factory imports only the n8n feedback provider and its port type. It does not load `.env`, server configuration, the database, or the runtime. The import check permits this one provider import so a failed engine can still report its startup failure. No other provider selection moves out of `composition.ts`.
+The desktop startup report helper (`desktop/main/feedback.mjs`) uses the same feedback factory as normal composition: `src/server/feedback-delivery.ts`. This factory imports only the n8n feedback provider and its port type. It does not load `.env`, server configuration, the database, or the runtime. The import check permits this one provider import so a failed engine can still report its startup failure. No other provider selection moves out of `composition.ts`.
 
 ## In this section
 

@@ -31,6 +31,10 @@ export function createStartupFeedback(options: {
   secrets: string[];
   names: string[];
   status: unknown;
+  startupLog?: {
+    entries: Array<{ ageMs: number; line: string }>;
+    truncated: boolean;
+  };
 }) {
   const context = feedbackTechnicalContext(options.context);
   const pendingPath = join(options.dataRoot, 'startup-feedback.json');
@@ -99,52 +103,37 @@ export function createStartupFeedback(options: {
       profile: { names: options.names },
     });
     if (!redact.isReady()) throw new Error('The startup report could not be redacted.');
-    let startupLog: unknown[] = [];
-    let collected = false;
-    let truncated = false;
-    try {
-      const file = await open(
-        join(options.dataRoot, 'logs', 'startup.log'),
-        constants.O_RDONLY | constants.O_NOFOLLOW,
-      );
-      try {
-        const info = await file.stat();
-        if (!info.isFile() || info.nlink !== 1) throw new Error();
-        const bytes = Buffer.alloc(Math.min(info.size, 48_000));
-        await file.read(bytes, 0, bytes.length, info.size - bytes.length);
-        const lines = bytes
-          .toString('utf8')
-          .split('\n')
-          .slice(info.size > bytes.length ? 1 : 0)
-          .filter(Boolean);
-        truncated = info.size > bytes.length || lines.length > 100;
-        const now = Date.now();
-        startupLog = lines.slice(-100).map((line) => {
-          const stamp = /^(\d{4}-\d{2}-\d{2}T[\d:.]+Z) /.exec(line);
-          const age = stamp ? now - Date.parse(stamp[1]) : NaN;
-          return {
-            ageMs: Number.isFinite(age)
-              ? Math.min(31_536_000_000, Math.max(0, Math.round(age)))
-              : null,
-            line: redact.text(line.slice(stamp?.[0].length ?? 0)).slice(0, 4000),
-          };
-        });
-        collected = true;
-      } finally {
-        await file.close();
-      }
-    } catch (error) {
-      collected = (error as NodeJS.ErrnoException).code === 'ENOENT';
-    }
+    const log = z
+      .object({
+        entries: z
+          .array(
+            z
+              .object({
+                ageMs: z.number().int().min(0).max(31_536_000_000),
+                line: z.string().max(48_000),
+              })
+              .strict(),
+          )
+          .max(100),
+        truncated: z.boolean(),
+      })
+      .strict()
+      .safeParse(options.startupLog);
     return JSON.stringify(
       {
         schema: 'nod-desktop-startup-report-v1',
         context,
         startup: redact.value(options.status),
         startupLog: {
-          status: collected ? 'collected' : 'unavailable',
-          truncated,
-          entries: startupLog,
+          status: log.success ? 'collected' : 'unavailable',
+          scope: 'current-desktop-process',
+          truncated: log.success && log.data.truncated,
+          entries: log.success
+            ? log.data.entries.map((row) => ({
+                ageMs: row.ageMs,
+                line: redact.text(row.line).slice(0, 4000),
+              }))
+            : [],
         },
         coverage:
           'Desktop startup only. Chat, app content, settings, and database records are not collected.',

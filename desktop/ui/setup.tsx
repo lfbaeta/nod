@@ -286,6 +286,7 @@ function Startup() {
   );
   const [busy, setBusy] = useState(false);
   const [recovering, setRecovering] = useState(false);
+  const [reportError, setReportError] = useState('');
   const [settingsError, setSettingsError] = useState('');
   const [welcome, setWelcome] = useState<WelcomeChoice | null>(null);
   const currentWelcome = useRef<WelcomeChoice | null>(null);
@@ -565,7 +566,16 @@ function Startup() {
               <button
                 type="button"
                 disabled={working}
-                onClick={() => void run(() => desktop.openStartupFeedback())}
+                onClick={() => {
+                  setReportError('');
+                  void desktop
+                    .openStartupFeedback()
+                    .catch((cause) =>
+                      setReportError(
+                        cause instanceof Error ? cause.message : 'The report form could not open.',
+                      ),
+                    );
+                }}
               >
                 Report bug
               </button>
@@ -602,6 +612,7 @@ function Startup() {
             )}
           </div>
         )}
+        {reportError && <p role="alert">{reportError}</p>}
       </SetupProgress>
     </>
   );

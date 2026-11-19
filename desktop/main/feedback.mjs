@@ -27,6 +27,7 @@ process.parentPort.on('message', async ({ data }) => {
     } else if (action === 'snapshot' && feedback) {
       configuration.status = input.status;
       configuration.secrets = [...input.secrets, ...helperSecrets];
+      configuration.startupLog = input.startupLog;
     } else if (!feedback || !['context', 'review', 'send', 'status'].includes(action)) {
       throw new Error('This report action is unavailable.');
     }
@@ -43,7 +44,11 @@ process.parentPort.on('message', async ({ data }) => {
       id,
       error:
         error?.name === 'ZodError'
-          ? 'The report input is invalid. Review the report again.'
+          ? redact
+              .text(
+                `${error.issues?.[0]?.path?.join('.') || 'report'}: ${error.issues?.[0]?.message || 'The report input is invalid.'}`,
+              )
+              .slice(0, 2000)
           : redact
               .text(
                 [

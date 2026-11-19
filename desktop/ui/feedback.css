@@ -42,7 +42,7 @@
 
 .startup-feedback textarea {
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--control-radius);
   padding: 10px 12px;
   color: var(--foreground);
   background: var(--surface);
