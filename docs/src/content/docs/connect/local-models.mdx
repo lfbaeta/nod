@@ -1,6 +1,6 @@
 ---
 title: Local models
-description: Run Nod on a model on your own computer with Ollama, LM Studio, vLLM or llama.cpp, or connect any service with an OpenAI-compatible API.
+description: Run Nod on a model on your own computer with Ollama, LM Studio, Rapid-MLX, vLLM or llama.cpp, or connect any service with an OpenAI-compatible API.
 sidebar:
   order: 2
 ---
@@ -62,6 +62,27 @@ Nod reads each Ollama model's details. When the server reports model capabilitie
 </Steps>
 
 With LM Studio 0.4 or later, Nod reads each model's details. It skips embedding models and models not trained for tool use, sends images to vision models and uses the context length the model is loaded with, so the model list shows when that's too small. On a server with both APIs, Nod uses LM Studio details for the models that its model API lists. It uses Ollama details for the other models.
+
+</TabItem>
+<TabItem label="Rapid-MLX">
+
+<Steps>
+
+1. Install [Rapid-MLX](https://github.com/raullenchai/Rapid-MLX) on an Apple Silicon Mac. Use Python 3.12 or later in a virtual environment.
+
+   ```sh title="Terminal"
+   pip install rapid-mlx
+   ```
+
+2. Start a model that supports tools with a context of 65,536 tokens. This model needs at least 16 GB of memory.
+
+   ```sh title="Terminal"
+   rapid-mlx serve qwen3.5-4b-4bit --port 8000 --context-length 65536 --enable-auto-tool-choice --tool-call-parser hermes
+   ```
+
+3. Use the address `http://localhost:8000/v1` in Nod.
+
+</Steps>
 
 </TabItem>
 <TabItem label="vLLM">
