@@ -26,16 +26,23 @@ The switch is separate from **Share usage data**, and you can turn either on wit
 
 While the switch is on, each request Nod makes to your model becomes one trace, from chats, tasks, helpers and background checks.
 
-| Sent, after scrubbing                                                                                                           | Never sent                                                                              |
-| ------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| The messages and tool results the model saw for that request, including text Nod read from [local files](/connect/local-files/) | The original Nod session ID in trace metadata                                           |
-| Nod's instructions, without your saved memory, learned skills and formats                                                       | Images, which become `[image]`                                                          |
-| The names of the tools the model could use                                                                                      |                                                                                         |
-| The model's reply                                                                                                               | Checks of emails that may give access to an account                                     |
-| The model name, token counts and cost                                                                                           | Requests to decision services                                                           |
-|                                                                                                                                 | Separate requests to the models that write your memory, writing style or learned skills |
-|                                                                                                                                 | Its attention and review tasks, and any codemode step                                   |
-| Whether it came from chat, a task, a helper or a background check                                                               | Your usage analytics, which have their own switch                                       |
+Each trace can include, after redaction:
+
+- The messages and tool results the model saw, including text Nod read from [local files](/connect/local-files/).
+- Nod's instructions, without your saved memory, learned skills and formats.
+- The names of the tools the model could use.
+- The model's reply, name, token counts and cost.
+- Whether the request came from chat, a task, a helper or a background check.
+
+Nod excludes:
+
+- The original Nod session ID in trace metadata.
+- Images, which become `[image]`.
+- Checks of emails that may give access to an account.
+- Requests to decision services.
+- Separate requests to the models that write your memory, writing style or learned skills.
+- Attention and review tasks, and codemode steps.
+- Usage analytics, which have their own switch.
 
 Each trace includes the Nod version as `app_version` metadata when a valid release version or source revision is available.
 
@@ -77,7 +84,7 @@ He can call me on 612 345 678 or at the office, 203.0.113.42. Thanks, Marta
 He can call me on [phone] or at the office, [ip]. Thanks, [owner]
 ```
 
-The invoice number stays because it does not match these redaction rules. Checks that need a valid number, such as the card checksum, keep numbers that do not match, such as order IDs and dates.
+The invoice number stays because it does not match these redaction rules. A checksum check leaves numbers that fail it unchanged. For example, an order ID or date that fails the card checksum stays as it is.
 
 :::caution[Removal is automatic]
 Nod removes what it can recognize. A trace can still contain private content in other forms, such as a short or unrecognized secret, account or device ID, another person's name, a delivery address or other people's messages in an app such as Slack. Turn traces on only if you're comfortable with that.
