@@ -71,17 +71,19 @@ export function DataSharing({
         <ul>
           {usage !== undefined && (
             <Item icon={ChartColumn} title="Usage data" state={state(usage)}>
-              On by default. Feature use, task types, failures, fixed About you choices and survey
-              answers. Survey answers are sent as entered and may contain personal details. Chat
-              messages and memory stay out. Usage data has no screen recordings or session replays.
-              Your email needs separate consent.
+              On by default for new owners. Your saved choice stays unchanged. Feature use, task
+              types, failures, fixed About you choices and survey answers. Survey answers are sent
+              as entered and may contain personal details. Chat messages and memory stay out. Usage
+              data also includes browser details, screen sizes, and analytics session and window
+              IDs. It has no screen recordings or session replays. Your email needs separate
+              consent.
             </Item>
           )}
           {traces !== undefined && (
             <Item icon={MessageSquareText} title="Conversation traces" state={state(traces)}>
-              Off by default. Conversations and app results for the team to review. Nod removes
-              personal details it recognizes. Traces can still identify you. n8n&apos;s default
-              service keeps them for 14 days and never uses them to train AI models.
+              Off by default for new owners. Conversations and app results for the team to review.
+              Nod removes personal details it recognizes. Traces can still identify you. n8n&apos;s
+              default service keeps them for 14 days and never uses them to train AI models.
             </Item>
           )}
           <Item icon={Globe2} title="Your models and connected apps">
