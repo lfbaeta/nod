@@ -122,7 +122,6 @@ Releases from before the rename to Nod are the `desktop-v*` [GitHub releases](ht
 
 </details>
 
-
 More commits are included; review the full Git history.
 [Full changelog](https://github.com/n8n-io/nod/compare/nod-v0.8.4...94fe4b57b42e3a046ac8c6514cab0aa423f95409)
 
