@@ -41,7 +41,8 @@ Nod excludes:
 - Checks of emails that may give access to an account.
 - Requests to decision services.
 - Separate requests to the models that write your memory, writing style or learned skills.
-- Attention and review tasks, and codemode steps.
+- Attention and review tasks.
+- Codemode scripts and results.
 - Usage analytics, which have their own switch.
 
 Each trace includes the Nod version as `app_version` metadata when a valid release version or source revision is available.
@@ -84,7 +85,7 @@ He can call me on 612 345 678 or at the office, 203.0.113.42. Thanks, Marta
 He can call me on [phone] or at the office, [ip]. Thanks, [owner]
 ```
 
-The invoice number stays because it does not match these redaction rules. A checksum check leaves numbers that fail it unchanged. For example, an order ID or date that fails the card checksum stays as it is.
+The invoice number stays because it does not match these redaction rules.
 
 :::caution[Removal is automatic]
 Nod removes what it can recognize. A trace can still contain private content in other forms, such as a short or unrecognized secret, account or device ID, another person's name, a delivery address or other people's messages in an app such as Slack. Turn traces on only if you're comfortable with that.
