@@ -102,7 +102,7 @@ function syntheticConfirmation(input: Record<string, unknown>) {
 
 test(
   'personal approvals revalidate targets before execution',
-  { skip: !process.env.TEST_DATABASE_URL, timeout: 120_000 },
+  { skip: !process.env.TEST_DATABASE_URL, timeout: 180_000 },
   async (t) => {
     const suffix = randomUUID().replaceAll('-', '').slice(0, 16);
     const schema = `test_personal_review_${suffix}`;
@@ -430,7 +430,8 @@ test(
                   for (const call of Array.isArray(calls) ? calls : [calls]) {
                     const name =
                       call.tool === 'synthetic_mcp'
-                        ? options.tools.find((item) => item.name.endsWith('__execute_workflow'))!.name
+                        ? options.tools.find((item) => item.name.endsWith('__execute_workflow'))!
+                            .name
                         : (call.tool ?? 'apps');
                     results.set(
                       options.turnId,

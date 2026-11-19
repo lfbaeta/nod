@@ -5044,6 +5044,109 @@ test(
           }
         },
       );
+      await t.test('file fences follow repeated replies across versions', async (t) => {
+        for (const action of ['LOCAL_FILES_READ', 'LOCAL_FILES_IMPORT'])
+          for (const [state, cached, source] of [
+            ['uncertain', false, 'reply'],
+            ['declined', false, 'reply'],
+            ['uncertain', true, 'reply'],
+            ['declined', true, 'reply'],
+            ['completed', false, 'reply'],
+            ['expired', false, 'reply'],
+            ['uncertain', false, 'missing'],
+          ] as const)
+            await t.test(`${action} ${state} cached=${cached} source=${source}`, async () => {
+              const turnIds: string[] = [];
+              const args = { path: `/synthetic/${randomUUID()}.txt`, version: 'a'.repeat(64) };
+              const ask = async (turn: { turnId: string; threadId: string }) => {
+                await thread.reply(turn, 'Which version should I read?');
+                await db.pool.query(
+                  "UPDATE turns SET status='waiting',waiting_reason='question' WHERE id=$1",
+                  [turn.turnId],
+                );
+                return (
+                  await db.pool.query(
+                    "SELECT id FROM messages WHERE turn_id=$1 AND role='assistant' ORDER BY created_at DESC,id DESC LIMIT 1",
+                    [turn.turnId],
+                  )
+                ).rows[0].id;
+              };
+              try {
+                executionResult = undefined;
+                const first = await begin('Read the synthetic note.');
+                turnIds.push(first.turnId);
+                const original = await propose(first, action, args);
+                await finish(first.turnId);
+                const accepted = await confirm(original, true);
+                assert.ok(accepted && 'turnId' in accepted);
+                turnIds.push(accepted.turnId);
+                await execute(original);
+                const firstResult = (await stored(original)).result;
+                const reply = await messages.submit('Read the same note again.', [], {
+                  replyToMessageId: await ask(accepted),
+                });
+                turnIds.push(reply.turnId);
+                const second = await running(reply.turnId);
+                repeatedAction = 'new';
+                await approvals.request(second, action, args, { allowed: true });
+                const repeated = await proposal(second.turnId);
+                assert.equal(repeated.status, 'pending');
+                assert.equal(repeated.source_message_id, reply.messageId);
+                await finish(second.turnId);
+                const answered = await confirm(repeated.id, state !== 'declined');
+                assert.ok(answered && 'turnId' in answered);
+                turnIds.push(answered.turnId);
+                if (state !== 'declined') {
+                  if (state === 'uncertain' || state === 'expired')
+                    executionResult = () => {
+                      throw Object.assign(new Error('EIO: synthetic repeated file read failed'), {
+                        notRun: state === 'expired',
+                      });
+                    };
+                  await execute(repeated.id);
+                }
+                assert.equal((await stored(repeated.id)).status, state);
+                if (source === 'missing')
+                  await db.pool.query('UPDATE approvals SET source_message_id=NULL WHERE id=$1', [
+                    repeated.id,
+                  ]);
+                const currentArgs = { ...args, version: 'b'.repeat(64) };
+                if (cached)
+                  await db.pool.query(
+                    "INSERT INTO approvals(id,owner_id,thread_id,turn_id,action,args,status,source_message_id,confirmation_message_id,result) SELECT $2,owner_id,thread_id,turn_id,action,$3::jsonb,'completed',source_message_id,confirmation_message_id,result FROM approvals WHERE id=$1",
+                    [original, randomUUID(), currentArgs],
+                  );
+                const next = await messages.submit('Read the current version of that note.', [], {
+                  replyToMessageId: await ask(await running(answered.turnId)),
+                });
+                turnIds.push(next.turnId);
+                const current = await running(next.turnId);
+                let reads = 0;
+                const request = () =>
+                  approvals.request(current, action, currentArgs, {
+                    allowed: true,
+                    run: async () => {
+                      reads++;
+                      return { text: 'Current synthetic bytes' };
+                    },
+                  });
+                const blocked = state === 'uncertain' || state === 'declined';
+                if (blocked) await assert.rejects(request(), /pending or uncertain outcome/);
+                else assert.deepEqual(await request(), { text: 'Current synthetic bytes' });
+                assert.equal(reads, blocked ? 0 : 1);
+                assert.equal(await proposal(current.turnId), undefined);
+                assert.equal((await stored(repeated.id)).status, state);
+                assert.deepEqual((await stored(original)).result, firstResult);
+              } finally {
+                repeatedAction = 'same';
+                executionResult = undefined;
+                await db.pool.query(
+                  "UPDATE turns SET status='succeeded',finished_at=now() WHERE id=ANY($1::uuid[])",
+                  [turnIds],
+                );
+              }
+            });
+      });
       const repeatFixture = async (reply = 'Run the synthetic workflow again.') => {
         const action = 'SYNTHETIC_EXECUTE_WORKFLOW';
         const args = { workflowId: `synthetic-${randomUUID()}` };
