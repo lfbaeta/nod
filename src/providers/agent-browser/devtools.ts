@@ -1169,38 +1169,36 @@ export async function openDevtools(url: string, targetId: string, signal?: Abort
         const quad = quads.find((value) => value.length === 8 && value.every(Number.isFinite));
         if (!quad)
           throw signInFailure('control_hidden', 'The sign-in control is no longer visible.');
-        const point = {
+        const inputPoint = {
           x: (quad[0]! + quad[2]! + quad[4]! + quad[6]!) / 4,
           y: (quad[1]! + quad[3]! + quad[5]! + quad[7]!) / 4,
         };
-        const inputPoint = { ...point };
-        if (session !== page) {
-          const { backendNodeId } = (await send(
-            'DOM.getFrameOwner',
-            { frameId: control.targetFrameId },
-            page,
-          )) as { backendNodeId: number };
-          const { model } = (await send('DOM.getBoxModel', { backendNodeId }, page)) as {
-            model: { content: number[]; border: number[]; width: number; height: number };
-          };
-          const content = model.content;
-          if (
-            content[1] !== content[3] ||
-            content[0] !== content[6] ||
-            content[2] !== content[4] ||
-            content[5] !== content[7] ||
-            model.border[2]! - model.border[0]! !== model.width ||
-            model.border[5]! - model.border[1]! !== model.height
-          )
-            throw signInFailure(
-              'frame_transform',
-              'The sign-in frame could not be located safely.',
-            );
-          point.x += content[0]!;
-          point.y += content[1]!;
-        }
         const check = async () => {
+          const point = { ...inputPoint };
           if (session !== page) {
+            const { backendNodeId } = (await send(
+              'DOM.getFrameOwner',
+              { frameId: control.targetFrameId },
+              page,
+            )) as { backendNodeId: number };
+            const { model } = (await send('DOM.getBoxModel', { backendNodeId }, page)) as {
+              model: { content: number[]; border: number[]; width: number; height: number };
+            };
+            const content = model.content;
+            if (
+              content[1] !== content[3] ||
+              content[0] !== content[6] ||
+              content[2] !== content[4] ||
+              content[5] !== content[7] ||
+              model.border[2]! - model.border[0]! !== model.width ||
+              model.border[5]! - model.border[1]! !== model.height
+            )
+              throw signInFailure(
+                'frame_transform',
+                'The sign-in frame could not be located safely.',
+              );
+            point.x += content[0]!;
+            point.y += content[1]!;
             const { cssVisualViewport: viewport } = (await send(
               'Page.getLayoutMetrics',
               {},

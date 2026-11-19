@@ -1189,6 +1189,18 @@ test(
         return;
       }
       response.setHeader('content-type', 'text/html');
+      if (request.url === '/moving-inner') {
+        response.end(
+          '<body style="margin:0"><form action="/selected" method="post"><button id="primary" style="width:400px;height:60px">Continue</button></form>',
+        );
+        return;
+      }
+      if (request.url === '/moving-frame') {
+        response.end(
+          `<iframe id="frame" style="position:fixed;left:100px;top:60px;width:600px;height:200px;border:0" src="http://localhost:${(server.address() as { port: number }).port}/moving-inner" onload="document.getElementById('ready').textContent='Frame ready'"></iframe><div id="cover" style="display:none;position:fixed;left:360px;top:60px;width:40px;height:60px;z-index:10"></div><p id="ready"></p>`,
+        );
+        return;
+      }
       if (request.url === '/done') {
         response.end('<h1>Selected</h1>');
         return;
@@ -1676,6 +1688,113 @@ test(
           }),
         );
         assert.deepEqual(received, [...before, '/selected']);
+      }
+      for (const covered of [false, true]) {
+        let moved = false;
+        await act({ action: 'open', url: origin + '/moving-frame' });
+        await act({ action: 'wait', text: 'Frame ready' });
+        const movingConnection = await existingDaemonCommand(socketPath, { action: 'cdp_url' });
+        const movingTabs = await existingDaemonCommand(socketPath, { action: 'tab_list' });
+        const movingTab = (movingTabs.tabs as { active: boolean; targetId: string }[]).find(
+          (value) => value.active,
+        )!;
+        const movingInspector = await openDevtools(
+          String(movingConnection.cdpUrl),
+          movingTab.targetId,
+        );
+        const beforeMove = [...received];
+        const movingInputs: string[] = [];
+        let parentSession: string | undefined;
+        let mutationError: unknown;
+        let mutationTimer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          const movingControl = await movingInspector.signInControl({ selector: '#primary' });
+          const original = WebSocket.prototype.send;
+          const sending = t.mock.method(
+            WebSocket.prototype,
+            'send',
+            function (this: WebSocket, data: Parameters<WebSocket['send']>[0]) {
+              const message = typeof data === 'string' ? JSON.parse(data) : undefined;
+              if (message?.method === 'DOM.getFrameOwner') parentSession = message.sessionId;
+              if (message?.method === 'Input.dispatchMouseEvent') {
+                movingInputs.push(message.params.type);
+                if (message.params.type === 'mouseMoved' && !moved) {
+                  assert.ok(parentSession);
+                  const changed = (event: MessageEvent) => {
+                    const response = JSON.parse(String(event.data));
+                    if (response.id !== 900_000_001) return;
+                    clearTimeout(mutationTimer);
+                    this.removeEventListener('message', changed);
+                    if (
+                      response.error ||
+                      response.result?.exceptionDetails ||
+                      response.result?.result?.value !== true
+                    ) {
+                      mutationError = new Error('The parent frame mutation failed.');
+                      movingInspector.close();
+                      return;
+                    }
+                    moved = true;
+                    original.call(this, data);
+                  };
+                  this.addEventListener('message', changed);
+                  mutationTimer = setTimeout(() => {
+                    this.removeEventListener('message', changed);
+                    mutationError = new Error('The parent frame mutation did not answer.');
+                    movingInspector.close();
+                  }, 2000);
+                  original.call(
+                    this,
+                    JSON.stringify({
+                      id: 900_000_001,
+                      method: 'Runtime.evaluate',
+                      sessionId: parentSession,
+                      params: {
+                        expression: `(() => { const frame=document.getElementById('frame');const cover=document.getElementById('cover');frame.style.left='180px';cover.style.display='${covered ? 'block' : 'none'}';return frame.getBoundingClientRect().left===180 && document.elementFromPoint(300,90)===frame && document.elementFromPoint(380,90)===${covered ? 'cover' : 'frame'}; })()`,
+                        returnByValue: true,
+                      },
+                    }),
+                  );
+                  return;
+                }
+              }
+              original.call(this, data);
+            },
+          );
+          try {
+            const refusal = await movingInspector.selectSignInControl(movingControl).then(
+              () => undefined,
+              (error: unknown) => error,
+            );
+            t.diagnostic(
+              `Moved control result: ${refusal instanceof Error ? `${refusal.name}: ${refusal.message}` : String(refusal)}; guard: ${String(Object(refusal).signInGuard)}; input: ${movingInputs.join(',')}.`,
+            );
+            assert.equal(mutationError, undefined);
+            assert.equal(moved, true);
+            if (covered) {
+              assert.equal(Object(refusal).signInGuard, 'control_covered');
+            } else {
+              assert.equal(refusal, undefined);
+              const deadline = Date.now() + 500;
+              while (received.length === beforeMove.length && Date.now() < deadline)
+                await delay(10);
+            }
+          } finally {
+            clearTimeout(mutationTimer);
+            sending.mock.restore();
+            t.diagnostic(
+              `Frame moved: ${moved}; covered: ${covered}; new submissions: ${received.length - beforeMove.length}.`,
+            );
+          }
+          assert.equal(moved, true);
+          assert.deepEqual(
+            movingInputs,
+            covered ? ['mouseMoved'] : ['mouseMoved', 'mousePressed', 'mouseReleased'],
+          );
+          assert.deepEqual(received, covered ? beforeMove : [...beforeMove, '/selected']);
+        } finally {
+          movingInspector.close();
+        }
       }
       const guards = failures.map((failure) => failure.context?.signInGuard);
       for (const guard of [
