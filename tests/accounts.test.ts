@@ -2015,16 +2015,20 @@ describe('account routes', () => {
     await settle(4);
     assert.equal(delivered[3].metadata.user_id, userId);
     assert.equal(delivered[3].metadata.thread_id, ids.thread_id);
-    restarted.configure({ userId: 'invalid' });
+    restarted.configure({ userId: undefined });
     restarted.record(trace(25));
     await settle(5);
     assert.equal(delivered[4].metadata.user_id, undefined);
     assert.equal(delivered[4].metadata.thread_id, ids.thread_id);
+    restarted.configure({ userId: 'invalid' });
+    restarted.record(trace(26));
+    await settle(6);
+    assert.equal(delivered[5].metadata.user_id, undefined);
     restarted.withTurn({ sessionId: randomUUID(), turnId: randomUUID() }, () =>
       restarted.record(trace(26)),
     );
-    await settle(6);
-    assert.notEqual(delivered[5].metadata.thread_id, ids.thread_id);
+    await settle(7);
+    assert.notEqual(delivered[6].metadata.thread_id, ids.thread_id);
     const key = await readFile(join(root, 'trace-key'), 'utf8');
     assert.equal((await lstat(join(root, 'trace-key'))).mode & 0o077, 0);
     for (const privateValue of [sessionId, turnId, key, 'private-forged-id', 'lena@example.test'])

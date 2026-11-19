@@ -137,12 +137,14 @@ export function createModelTraces(deliver?: ModelTraceDelivery, appVersion?: str
           throw new Error('The trace conversation key must contain 32 bytes.');
         conversationKey = Buffer.from(options.conversationKey);
       }
-      if (options.userId !== undefined)
-        userId = /^local:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(
-          options.userId,
-        )
-          ? options.userId
-          : undefined;
+      if ('userId' in options)
+        userId =
+          typeof options.userId === 'string' &&
+          /^local:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(
+            options.userId,
+          )
+            ? options.userId
+            : undefined;
       if (options.enabled !== undefined) enabled = options.enabled;
       if (!enabled) {
         cache.clear();
