@@ -3118,6 +3118,133 @@ test('on-device speech decodes a real WAV into bounded mono samples and refuses 
   });
 });
 
+test('local speech distinguishes tokenizer overflow before inference from waveform duration failures', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'nod-speech-limits-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const harness = join(root, 'worker.mjs');
+  await writeFile(
+    harness,
+    `import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { EventEmitter } from 'node:events';
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
+import { createRequire, stripTypeScriptTypes } from 'node:module';
+import { SourceTextModule, SyntheticModule, createContext } from 'node:vm';
+import { pathToFileURL } from 'node:url';
+const workerPath = process.argv[2];
+const cache = process.argv[3];
+const require = createRequire(workerPath);
+const hf = await import(pathToFileURL(require.resolve('@huggingface/transformers')));
+const { phonemizeSpeech } = await import(new URL('./phonemizer.ts', pathToFileURL(workerPath)));
+const tokenizer = new hf.PreTrainedTokenizer({
+  model: { type: 'WordLevel', vocab: { '[UNK]': 0 }, unk_token: '[UNK]' },
+  added_tokens: [], normalizer: null, post_processor: null, decoder: null,
+  pre_tokenizer: { type: 'Split', pattern: { Regex: '.' }, behavior: 'Isolated', invert: false },
+}, { unk_token: '[UNK]' });
+await fs.mkdir(path.join(cache, 'kokoro', 'voices'), { recursive: true });
+await fs.writeFile(path.join(cache, 'kokoro', 'voices', 'af_heart.bin'), Buffer.alloc(522240));
+let inferenceCalls = 0;
+let sampleCount = 24000;
+let modelFailure = false;
+let sent;
+const handlers = new Map();
+const context = createContext({
+  process: { argv: ['node', 'worker', cache], send: (value) => { sent = value; }, on: (name, fn) => handlers.set(name, fn), exit: () => { throw Error('unexpected exit'); } },
+  Float32Array, Uint8Array, BigInt, AbortSignal, fetch,
+});
+const source = await fs.readFile(workerPath, 'utf8');
+const worker = new SourceTextModule(stripTypeScriptTypes(source), { context });
+const modules = {
+  'node:crypto': { createHash }, 'node:fs/promises': fs, 'node:path': path,
+  '@huggingface/transformers': {
+    env: { backends: { onnx: {} } }, pipeline: async () => ({}),
+    RawAudio: hf.RawAudio, Tensor: hf.Tensor,
+    AutoTokenizer: { from_pretrained: async () => tokenizer },
+    StyleTextToSpeech2Model: { from_pretrained: async () => async () => {
+      inferenceCalls++;
+      if (modelFailure) throw new Error('synthetic model failure');
+      return { waveform: { data: new Float32Array(sampleCount) } };
+    } },
+  },
+  '@pedrobef/vozz/g2p': { phonemize: () => { throw new Error('unused language'); } },
+  './phonemizer.ts': { phonemizeSpeech }, './models.ts': { localSpeechModels: [] },
+  './audio.ts': { decodeLocalAudio: () => { throw new Error('unused decoder'); } },
+  './cache.ts': { localSpeechCacheMarker: '{}', localTranscriptionCacheMarker: '{}', matchesSpeechFile: async () => true, verifySpeechCache: async () => true },
+};
+await worker.link(async (specifier) => {
+  const exports = modules[specifier];
+  assert.ok(exports, specifier);
+  return new SyntheticModule(Object.keys(exports), function () {
+    for (const [key, value] of Object.entries(exports)) this.setExport(key, value);
+  }, { context });
+});
+await worker.evaluate();
+let id = 0;
+async function synthesize(text) {
+  sent = undefined;
+  inferenceCalls = 0;
+  await handlers.get('message')({ id: ++id, method: 'synthesize', voice: 'af_heart', text });
+  return sent;
+}
+const overflow = '1234567890 '.repeat(27).trim();
+for (const text of [overflow, 'Это короткая проверка речи. Сегодня ясный день и тихая погода. Мы читаем небольшой текст для простой проверки. Проверка завершена успешно.']) {
+  const reply = await synthesize(text);
+  assert.equal(reply.type, 'failed');
+  assert.equal(inferenceCalls, 0);
+  assert.equal(reply.reason, 'tokens');
+}
+assert.equal((await synthesize('red fox '.repeat(37))).type, 'audio');
+assert.equal(inferenceCalls, 1);
+sampleCount = 24000 * 301;
+assert.equal((await synthesize('red fox')).reason, 'length');
+assert.equal(inferenceCalls, 1);
+const { createLocalSpeechProvider } = await import(new URL('./index.ts', pathToFileURL(workerPath)));
+const { SpeechProviderError } = await import(new URL('../../ports/speech.ts', pathToFileURL(workerPath)));
+const child = new EventEmitter();
+child.send = (message, callback) => {
+  handlers.get('message')(message).then(() => child.emit('message', sent));
+  callback();
+};
+child.kill = () => true;
+const provider = createLocalSpeechProvider({ cacheDir: cache, fork: () => child });
+async function failure(text) {
+  let error;
+  try { await provider.synthesize(text); } catch (caught) { error = caught; }
+  assert.ok(error instanceof SpeechProviderError);
+  assert.equal(error.statusCode, 400);
+  return error;
+}
+try {
+  await provider.prepare();
+  modelFailure = true;
+  const generic = await failure('red fox');
+  modelFailure = false;
+  const duration = await failure('red fox');
+  sampleCount = 24000;
+  inferenceCalls = 0;
+  const tokens = await failure(overflow);
+  assert.equal(inferenceCalls, 0);
+  assert.notEqual(tokens.message, duration.message);
+  assert.notEqual(tokens.message, generic.message);
+} finally { await provider.close(); }
+`,
+  );
+  const result = await runProcess(
+    process.execPath,
+    [
+      '--experimental-vm-modules',
+      '--import',
+      import.meta.resolve('tsx'),
+      harness,
+      fileURLToPath(new URL('../src/providers/local-speech/worker.ts', import.meta.url)),
+      join(root, 'models'),
+    ],
+    { timeoutMs: 30_000 },
+  );
+  assert.equal(result.exitCode, 0, result.stderr);
+});
+
 test('local speech exports chunked audio as WAV and finds the silence token without loading a model', async () => {
   const { RawAudio, PreTrainedTokenizer } = await import('@huggingface/transformers');
   const samples = Float32Array.from(
