@@ -1079,6 +1079,201 @@ test('codemode app calls keep untrusted output and stop after an approval', asyn
     });
 });
 
+test('a failed Codemode script keeps the outcomes of calls it already started', async (t) => {
+  for (const mode of ['write', 'approval', 'rejection', 'stop'] as const)
+    await t.test(mode, { timeout: 10_000 }, async (t) => {
+      const directory = await mkdtemp(join(tmpdir(), 'nod-script-outcomes-'));
+      t.after(() => rm(directory, { recursive: true, force: true }));
+      let entered!: () => void;
+      const started = new Promise<void>((resolve) => (entered = resolve));
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => (release = resolve));
+      const stop = new AbortController();
+      const dispatched: string[] = [];
+      const outcomes: Array<{ name: string; output?: unknown; status: string }> = [];
+      const requests: string[] = [];
+      let writes = 0;
+      let approvals = 0;
+      let round = 0;
+      const runtime = createAgentRuntime({
+        agent: createPiAgent({
+          provider: 'openai',
+          apiKey: 'fixture-key',
+          sessionRoot: join(directory, 'sessions'),
+          createSession: async (options) => {
+            const result = await createAgentSession(options);
+            result.session.agent.streamFunction = (_model, request) => {
+              requests.push(
+                JSON.stringify(request.messages.filter((item) => item.role === 'toolResult')),
+              );
+              const first = round++ === 0;
+              const message = fauxAssistantMessage(
+                first
+                  ? [
+                      {
+                        type: 'toolCall',
+                        id: 'synthetic-script',
+                        name: 'codemode',
+                        arguments: {
+                          code: 'await Promise.all([tools.apps({action:"SYNTHETIC_FAILED_READ",args:{}}),tools.apps({action:"SYNTHETIC_SIBLING",args:{}})]); await tools.apps({action:"SYNTHETIC_LATE_WRITE",args:{}});',
+                        },
+                      },
+                    ]
+                  : 'The synthetic check finished.',
+                { stopReason: first ? 'toolUse' : 'stop' },
+              );
+              const stream = createAssistantMessageEventStream();
+              stream.push({ type: 'start', partial: message });
+              stream.push({ type: 'done', reason: first ? 'toolUse' : 'stop', message });
+              return stream;
+            };
+            return result;
+          },
+        }),
+        computer: fakeComputer(),
+        workspace: fakeWorkspace(),
+        observe: (_id, event) => {
+          if (event.type === 'tool_end') outcomes.push(event);
+        },
+      });
+      t.after(() => runtime.dispose());
+      const pending = runtime.runTurn({
+        ...context(directory),
+        turnId: randomUUID(),
+        signal: stop.signal,
+        integration: async (action, _args, _signal, admit) => {
+          await admit?.(false);
+          dispatched.push(action);
+          if (action === 'SYNTHETIC_FAILED_READ') {
+            await started;
+            throw new Error('Synthetic read failed before dispatch.');
+          }
+          assert.equal(action, 'SYNTHETIC_SIBLING');
+          entered();
+          if (mode === 'stop') await held;
+          else await setTimeout(75);
+          if (mode === 'rejection') throw new Error('Synthetic sibling failed after the script.');
+          if (mode === 'approval') {
+            approvals++;
+            return { [appConfirmation]: 'Synthetic approval question.' };
+          }
+          if (mode === 'write') writes++;
+          return { status: 'completed' };
+        },
+      });
+      try {
+        await started;
+        if (mode === 'stop') {
+          const rejected = assert.rejects(pending, /abort|stop/i);
+          await setTimeout(75);
+          stop.abort(new Error('Owner stopped the synthetic turn.'));
+          await rejected;
+          release();
+          await setTimeout(25);
+          assert.equal(requests.length, 1);
+        } else {
+          const result = await pending;
+          assert.equal(result.status, mode === 'approval' ? 'waiting_user' : 'succeeded');
+          if (mode === 'approval') {
+            assert.equal(result.waitingFor, 'approval');
+            assert.equal(requests.length, 1);
+          } else {
+            const response = requests.at(-1)!;
+            assert.doesNotMatch(response, /apps \(cancelled\)|"status":"unfinished"/);
+            assert.match(
+              response,
+              mode === 'write' ? /apps \(error\), apps \(ok\)/ : /apps \(error\), apps \(error\)/,
+            );
+            assert.equal(requests.length, 2);
+            const script = outcomes.findIndex((event) => event.name === 'codemode');
+            assert.equal(outcomes.filter((event) => event.name === 'apps').length, 2);
+            assert.equal(script, 2);
+          }
+        }
+        assert.deepEqual(dispatched, ['SYNTHETIC_FAILED_READ', 'SYNTHETIC_SIBLING']);
+        assert.equal(writes, Number(mode === 'write'));
+        assert.equal(approvals, Number(mode === 'approval'));
+      } finally {
+        stop.abort();
+        release();
+        await pending.catch(() => {});
+      }
+    });
+});
+
+test(
+  'Stop ends the Codemode wait even when a nested tool ignores its signal',
+  { timeout: 5_000 },
+  async () => {
+    const { executeCodemode } = await import(
+      new URL(
+        '../node_modules/@earendil-works/pi-coding-agent/dist/extensions/codemode/execute.js',
+        import.meta.url,
+      ).href
+    );
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => (entered = resolve));
+    let reject!: (error: Error) => void;
+    const held = new Promise<never>((_resolve, refuse) => (reject = refuse));
+    const stop = new AbortController();
+    const calls: string[] = [];
+    const pending = executeCodemode(
+      'synthetic-direct-stop',
+      {
+        code: 'await Promise.all([tools.synthetic_fail({}),tools.synthetic_wait({})]); await tools.synthetic_late({});',
+      },
+      stop.signal,
+      undefined,
+      {
+        tools: ['synthetic_fail', 'synthetic_wait', 'synthetic_late'].map((name) => ({
+          name,
+          label: name,
+          description: 'Synthetic tool.',
+          parameters: Type.Object({}),
+          execute: async () => ({ content: [], details: {} }),
+        })),
+        sessionManager: SessionManager.inMemory(process.cwd()),
+        executeTool: async (name: string) => {
+          calls.push(name);
+          if (name === 'synthetic_wait') {
+            entered();
+            await held;
+          }
+          await started;
+          return {
+            toolCall: {
+              type: 'toolCall',
+              id: `synthetic-direct-stop/${calls.length}`,
+              name,
+              arguments: {},
+            },
+            result: { content: [{ type: 'text', text: 'Synthetic tool failed.' }], details: {} },
+            isError: true,
+          };
+        },
+      },
+    );
+    try {
+      await started;
+      await setTimeout(75);
+      let finished = false;
+      void pending.then(() => (finished = true));
+      await setTimeout(25);
+      assert.equal(finished, false);
+      stop.abort(new Error('Owner stopped the synthetic script.'));
+      const result = await pending;
+      assert.equal(result.isError, true);
+      assert.deepEqual(calls, ['synthetic_fail', 'synthetic_wait']);
+      reject(new Error('Synthetic tool rejected after Stop.'));
+      await setTimeout(25);
+    } finally {
+      stop.abort();
+      reject(new Error('Synthetic tool cleanup.'));
+      await pending;
+    }
+  },
+);
+
 test('a new Pi request follows refreshed owner context after an approval pause', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'nod-pi-approval-next-'));
   const requests: string[] = [];

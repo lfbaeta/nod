@@ -1,0 +1,63 @@
+diff --git a/dist/extensions/codemode/execute.js b/dist/extensions/codemode/execute.js
+index 6f1f86f34b7a04a8014ec8803f90ad4d302d6c5c..87030409547b80f898362f2ef398ce96bafe8e8d 100644
+--- a/dist/extensions/codemode/execute.js
++++ b/dist/extensions/codemode/execute.js
+@@ -431,6 +431,14 @@ export async function executeCodemode(toolCallId, input, signal, onUpdate, ctx,
+     const startedAt = performance.now();
+     const { code, options: sourceOptions } = parseCodemodeSource(input.code);
+     const calls = [];
++    const pendingCalls = new Set();
++    const track = (run) => {
++        const pending = run();
++        pendingCalls.add(pending);
++        const finish = () => pendingCalls.delete(pending);
++        void pending.then(finish, finish);
++        return pending;
++    };
+     // Usage of the script's `models.*` calls. Nested tool calls report theirs through the session.
+     let modelUsage;
+     // Images returned by `models.generateImages()`, to notice a script that never shows them.
+@@ -452,7 +460,7 @@ export async function executeCodemode(toolCallId, input, signal, onUpdate, ctx,
+     const sandboxTools = callable.map((tool) => ({
+         name: tool.name,
+         description: samples.get(tool.name),
+-        execute: async (args, { signal: callSignal }) => {
++        execute: (args, { signal: callSignal }) => track(async () => {
+             const record = {
+                 id: `${toolCallId}/?`,
+                 name: tool.name,
+@@ -469,7 +477,7 @@ export async function executeCodemode(toolCallId, input, signal, onUpdate, ctx,
+             record.id = outcome.toolCall.id;
+             record.durationMs = performance.now() - callStartedAt;
+             if (outcome.isError) {
+-                record.status = callSignal.aborted ? "cancelled" : "error";
++                record.status = signal?.aborted ? "cancelled" : "error";
+                 record.error = truncateText(textOf(outcome.result) || `Tool "${tool.name}" failed`, ERROR_PREVIEW_CHARS);
+             }
+             else {
+@@ -477,7 +485,7 @@ export async function executeCodemode(toolCallId, input, signal, onUpdate, ctx,
+             }
+             publish();
+             return toScriptValue(tool, outcome);
+-        },
++        }),
+     }));
+     // The wait for a worker counts toward the script's deadline.
+     const deadline = sourceOptions.timeoutMs ?? Number.POSITIVE_INFINITY;
+@@ -537,6 +545,16 @@ export async function executeCodemode(toolCallId, input, signal, onUpdate, ctx,
+             releaseCodemodeWorker();
+         }
+     }
++    if (pendingCalls.size && !signal?.aborted) {
++        await new Promise((resolve) => {
++            const finish = () => {
++                signal?.removeEventListener("abort", finish);
++                resolve();
++            };
++            signal?.addEventListener("abort", finish, { once: true });
++            void Promise.allSettled([...pendingCalls]).then(finish);
++        });
++    }
+     // Calls still marked running were cut off by the script ending, a timeout, or an abort.
+     for (const call of calls) {
+         if (call.status === "running")
