@@ -3061,8 +3061,7 @@ test(
           await entered;
           controller.abort(stopped);
           release();
-          const rejection = action === 'NOD_workspace_command' ? provider : stopped;
-          await assert.rejects(checking, (error: unknown) => error === rejection);
+          await assert.rejects(checking, (error: unknown) => error === stopped);
           assert.equal(logged.length, 0);
 
           const failure = withFailureLog(sink, () => checker.check(turn, action, args));
