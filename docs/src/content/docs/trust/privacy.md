@@ -90,8 +90,6 @@ On a fresh packaged desktop profile, the default-on usage setting can send the f
 
 Select **How Nod uses your data** next to the **Privacy & data** heading to see this summary in Nod.
 
-![The How Nod uses your data panel, with usage data on and conversation traces off.](../../../assets/screens/how-nod-uses-your-data.png)
-
 ## Where your data lives
 
 |                 | Desktop app                                                                                                                                                                                          | Source install                     | Self-hosted server                 |
