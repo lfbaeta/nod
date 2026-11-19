@@ -17,6 +17,7 @@ import type { Computer } from '../src/ports/computer.ts';
 import { createBrowserConnections } from '../src/server/browser-connections.ts';
 import { createAnalytics } from '../src/server/analytics.ts';
 import type { ProductAnalytics } from '../src/ports/analytics.ts';
+import { withFailureLog } from '../src/ports/failure-log.ts';
 
 test(
   'browser profiles require an explicit observed sign-in outcome and retain owner and turn fences',
@@ -1188,6 +1189,15 @@ test(
     };
     const worker = await harness({ computer: makeComputer });
     const client = worker.client(directory, { timeoutMs: 30_000 });
+    const failures: Array<{ event: string; error: unknown; context?: Record<string, unknown> }> =
+      [];
+    const record = (event: string, error: unknown, context?: Record<string, unknown>) => {
+      failures.push({ event, error, context });
+    };
+    const inspectMethods = client.signInMethods!;
+    const selectMethod = client.selectSignInMethod!;
+    client.signInMethods = (...args) => withFailureLog(record, () => inspectMethods(...args));
+    client.selectSignInMethod = (...args) => withFailureLog(record, () => selectMethod(...args));
     const act = (input: BrowserAction) => client.act('fixture', input);
     const choices = [
       { label: 'Misleading label', selector: '#primary span' },
@@ -1197,9 +1207,13 @@ test(
       await act({ action: 'open', url: origin });
       await assert.rejects(
         client.signInMethods!('fixture', origin, [
-          { label: 'First', selector: '#primary' },
+          { label: 'picker-private@example.test/private-account', selector: '#primary' },
           { label: 'Second', selector: '#primary span' },
         ]),
+        (error: unknown) => {
+          assert.equal(Object(error).signInGuard, 'choice_duplicate');
+          return true;
+        },
       );
       const bound = await client.signInMethods!('fixture', origin, choices);
       assert.deepEqual(
@@ -1215,11 +1229,17 @@ test(
         to: origin + '/alternate',
       });
       const selection = { origin, document: bound.document, methodId: bound.methods[0]!.id };
-      await assert.rejects(client.selectSignInMethod!('other', selection));
+      await assert.rejects(client.selectSignInMethod!('other', selection), (error: unknown) => {
+        assert.equal(Object(error).signInGuard, 'browser_unavailable');
+        return true;
+      });
       await client.selectSignInMethod!('fixture', selection);
       await act({ action: 'wait', url: '**/done' });
       assert.deepEqual(received, ['/selected']);
-      await assert.rejects(client.selectSignInMethod!('fixture', selection));
+      await assert.rejects(client.selectSignInMethod!('fixture', selection), (error: unknown) => {
+        assert.equal(Object(error).signInGuard, 'selection_missing');
+        return true;
+      });
       await assert.rejects(
         client.selectSignInMethod!('fixture', { ...selection, methodId: bound.methods[1]!.id }),
       );
@@ -1261,6 +1281,10 @@ test(
       assert.equal(byRef.methods[0]!.label, 'Continue with Example');
       await assert.rejects(
         client.signInMethods!('fixture', origin, [{ label: 'Ignored', selector: '@e9999' }]),
+        (error: unknown) => {
+          assert.equal(Object(error).signInGuard, 'reference_missing');
+          return true;
+        },
       );
       await act({ action: 'open', url: origin + '/covered' });
       await act({ action: 'click', selector: '#change' });
@@ -1273,6 +1297,10 @@ test(
       );
       await assert.rejects(
         client.signInMethods!('fixture', origin, [{ label: 'Ignored', selector: 'button' }]),
+        (error: unknown) => {
+          assert.equal(Object(error).signInGuard, 'selector_rejected');
+          return true;
+        },
       );
       await act({ action: 'open', url: origin + '/duplicate' });
       await assert.rejects(
@@ -1501,6 +1529,21 @@ test(
         );
         assert.deepEqual(received, [...before, '/selected']);
       }
+      const guards = failures.map((failure) => failure.context?.signInGuard);
+      for (const guard of [
+        'choice_duplicate',
+        'browser_unavailable',
+        'selection_missing',
+        'selection_origin_changed',
+        'document_changed',
+        'reference_missing',
+        'selector_rejected',
+        'control_changed',
+        'control_covered',
+        'frame_changed',
+      ])
+        assert.ok(guards.includes(guard), `The native report did not keep ${guard}.`);
+      assert.ok(!JSON.stringify(failures).includes('picker-private@example.test'));
     } finally {
       await worker.close();
       server.closeAllConnections();
