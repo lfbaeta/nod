@@ -81,9 +81,11 @@ export function DataSharing({
           )}
           {traces !== undefined && (
             <Item icon={MessageSquareText} title="Conversation traces" state={state(traces)}>
-              Off by default for new owners. Conversations and app results for the team to review.
-              Nod removes personal details it recognizes. Traces can still identify you. n8n&apos;s
-              default service keeps them for 14 days and never uses them to train AI models.
+              Off by default for new owners. With n8n&apos;s default trace service, the Nod team can
+              review conversations and app results. A custom trace service sends them to its
+              operator. Nod removes personal details it recognizes. Traces can still identify you.
+              n8n&apos;s default service keeps them for 14 days and never uses them to train AI
+              models.
             </Item>
           )}
           <Item icon={Globe2} title="Your models and connected apps">
