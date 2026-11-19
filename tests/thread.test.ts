@@ -3401,6 +3401,15 @@ test(
         const drafts = (await db.pool.query('SELECT count(*) FROM feedback_drafts')).rows[0].count;
         const failed = await thread.submitUserMessage('tool refusal fixture');
         await waitFor(settled(failed.turnId));
+        await waitFor(
+          async () =>
+            (
+              await db.pool.query(
+                "SELECT 1 FROM messages WHERE turn_id=$1 AND role='assistant' AND stream_id=$2",
+                [failed.turnId, `failure:${failed.turnId}`],
+              )
+            ).rowCount === 1,
+        );
         const shown = (
           await db.pool.query(
             "SELECT text,presentation FROM messages WHERE turn_id=$1 AND role='assistant' AND stream_id=$2",

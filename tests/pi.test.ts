@@ -9728,60 +9728,64 @@ test('turn-bound reviews and memory writes can finish slowly and still stop befo
         );
 });
 
-test('review timeouts retain their cause and failed usage while Stop ends retry backoff', async (t) => {
+test('turn-bound review and memory timeouts retain their cause while Stop ends retry backoff', async (t) => {
   const { setImmediate } = await import('node:timers/promises');
   const { modelFirstEventMs } = await import('../src/providers/pi/models.ts');
-  for (const stopped of [false, true])
-    await t.test(stopped ? 'stopped in backoff' : 'provider timed out', async (t) => {
-      const access = smallContextAccess('compatible', 'fixture-timeout-review', 128000);
-      access.provider = 'openai';
-      access.definition.spec = { ...access.definition.spec, provider: 'openai' };
-      access.read = async () => ({ type: 'api_key', key: 'fixture-review-key' });
-      t.mock.timers.enable({ apis: ['setTimeout'] });
-      const reports: Array<Partial<ProviderUsageEvent>> = [];
-      let calls = 0;
-      let sent = () => {};
-      t.mock.method(globalThis, 'fetch', (_url: RequestInfo | URL, init?: RequestInit) => {
-        calls++;
-        const result = new Promise<Response>((_resolve, reject) => {
-          const abort = () => reject(new DOMException('Synthetic abort.', 'AbortError'));
-          if (init?.signal?.aborted) abort();
-          else init?.signal?.addEventListener('abort', abort, { once: true });
-        });
-        sent();
-        return result;
-      });
-      const curator = createPiMemoryCurator({
-        provider: access.provider,
-        configured: () => true,
-        resolve: async () => access,
-      });
-      const stop = new AbortController();
-      const result = curator.curate(
-        { task: 'review', instructions: 'Check the synthetic action.', input: {} },
-        stop.signal,
-        (usage) => reports.push(usage),
+  for (const task of ['review', 'skill', 'remember'] as const)
+    for (const stopped of [false, true])
+      await t.test(
+        `${task} ${stopped ? 'stopped in backoff' : 'provider timed out'}`,
+        async (t) => {
+          const access = smallContextAccess('compatible', 'fixture-timeout-review', 128000);
+          access.provider = 'openai';
+          access.definition.spec = { ...access.definition.spec, provider: 'openai' };
+          access.read = async () => ({ type: 'api_key', key: 'fixture-review-key' });
+          t.mock.timers.enable({ apis: ['setTimeout'] });
+          const reports: Array<Partial<ProviderUsageEvent>> = [];
+          let calls = 0;
+          let sent = () => {};
+          t.mock.method(globalThis, 'fetch', (_url: RequestInfo | URL, init?: RequestInit) => {
+            calls++;
+            const result = new Promise<Response>((_resolve, reject) => {
+              const abort = () => reject(new DOMException('Synthetic abort.', 'AbortError'));
+              if (init?.signal?.aborted) abort();
+              else init?.signal?.addEventListener('abort', abort, { once: true });
+            });
+            sent();
+            return result;
+          });
+          const curator = createPiMemoryCurator({
+            provider: access.provider,
+            configured: () => true,
+            resolve: async () => access,
+          });
+          const stop = new AbortController();
+          const result = curator.curate(
+            { task, instructions: 'Check the synthetic action.', input: {} },
+            stop.signal,
+            (usage) => reports.push(usage),
+          );
+          const checked = assert.rejects(result, stopped ? /unavailable|abort/i : /timed out/);
+          for (let attempt = 1; attempt <= (stopped ? 1 : 3); attempt++) {
+            if (calls < attempt) await new Promise<void>((resolve) => (sent = resolve));
+            t.mock.timers.tick(modelFirstEventMs);
+            await setImmediate();
+            if (stopped) stop.abort();
+            else if (attempt < 3) t.mock.timers.tick(250 * 2 ** (attempt - 1));
+          }
+          await checked;
+          assert.equal(calls, stopped ? 1 : 3);
+          assert.deepEqual(
+            reports.map(({ status }) => status),
+            Array(calls).fill('failed'),
+          );
+          assert.deepEqual(
+            reports.map(({ attempt }) => attempt),
+            stopped ? [1] : [1, 2, 3],
+          );
+          assert.equal(new Set(reports.map(({ id }) => id)).size, calls);
+        },
       );
-      const checked = assert.rejects(result, stopped ? /unavailable|abort/i : /timed out/);
-      for (let attempt = 1; attempt <= (stopped ? 1 : 3); attempt++) {
-        if (calls < attempt) await new Promise<void>((resolve) => (sent = resolve));
-        t.mock.timers.tick(modelFirstEventMs);
-        await setImmediate();
-        if (stopped) stop.abort();
-        else if (attempt < 3) t.mock.timers.tick(250 * 2 ** (attempt - 1));
-      }
-      await checked;
-      assert.equal(calls, stopped ? 1 : 3);
-      assert.deepEqual(
-        reports.map(({ status }) => status),
-        Array(calls).fill('failed'),
-      );
-      assert.deepEqual(
-        reports.map(({ attempt }) => attempt),
-        stopped ? [1] : [1, 2, 3],
-      );
-      assert.equal(new Set(reports.map(({ id }) => id)).size, calls);
-    });
 });
 
 test('action review failures identify the task, model, provider, and bounded provider reason', async (t) => {

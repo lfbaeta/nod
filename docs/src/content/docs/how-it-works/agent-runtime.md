@@ -59,7 +59,7 @@ Nod repairs incomplete assistant text and thinking blocks when it restores or sa
 
 Pi validates tool arguments as JSON Schema with `@earendil-works/pi-schema`. It can convert a numeric string to a number or a single value to an array. This also applies to MCP tools. TypeBox refinements and custom TypeBox formats do not run. Nod's tool checks, turn guard, and trust check still apply before an action runs.
 
-When an action has one matching input form, a rejected call names its missing or invalid fields. Five repeated input, tool availability, sign-in binding, or action review failures for the same tool end the run before another model request. A successful call to that tool clears its count. Parent and helper sessions have separate counts. The failure keeps its last specific cause after secret removal. This limit does not repeat any tool or bypass an approval.
+When an action has one matching input form, a rejected call names its missing or invalid fields. Five repeated input, tool availability, sign-in binding, or action review failures for the same tool end the run before another model request. A successful call to that tool clears its count. Parent and helper sessions have separate counts. The failure keeps its last specific cause after secret removal. Nod reports it without creating an unexpected-error report. This limit does not repeat any tool or bypass an approval.
 
 Nod applies provider settings when it opens a model connection. Groq Qwen uses the system message role. OpenRouter MiMo V2.6 Flash uses tools without optional strict sampling, so tools with different sampling settings can share a request. A tool that requires strict sampling still refuses a model that cannot supply it. OpenRouter's free route keeps reasoning enabled because a routed model can require it. Its picker does not offer Off; a saved Off choice uses the lowest supported effort. Ollama models with on or off thinking use boolean controls instead of a named effort. OpenCode helper calls get a separate session ID for each helper request, shared by that request's model retries.
 
@@ -301,8 +301,6 @@ Nod derives live activity from the current work. For longer work and activity ch
 | After               | Make at most one relevant offer. Do not repeat an offer the user ignored or declined.                              | Keep follow-up useful and easy to dismiss.                              |
 
 A turn that stops on an error tells you what stopped it, in your language. A failed schedule run, or a failed task Nod started on its own, names that work in its failure message. A task's planned check resumes the task's own session when it's due.
-
-Five repeated input or permission failures from the same tool stop the turn. A successful call to that tool clears its failure count. Nod reports the last failure without creating an unexpected-error report. A refused workspace command does not run.
 
 Nod reports progress when you can use a result now, a change affects your next step, or it needs your help. A claim that work was created, updated or completed needs a successful tool result. The message includes the result, an attachment or a checked link you can open. Internal record changes and private preparation stay quiet unless you ask about them. These instructions guide the model. For a proactive nudge, the server also adds the saved result's verified link.
 

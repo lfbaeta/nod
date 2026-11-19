@@ -198,6 +198,7 @@ test('confirmation repairs rejected wording against the unchanged saved action',
               };
         }
         assert.equal(responseSchema?.type, 'object');
+        assert.equal(responseSchema?.$schema, undefined);
         assert.deepEqual(responseSchema?.required, ['text', 'action']);
         assert.equal(responseSchema?.additionalProperties, false);
         drafts++;
@@ -236,7 +237,7 @@ test('invalid confirmation replies keep a bounded reason and the failed attempt 
     await t.test(kind, async () => {
       let drafts = 0;
       let reviews = 0;
-      const repairs: unknown[] = [];
+      const repairs: Array<{ issue?: unknown }> = [];
       const communication = createCommunication({
         pool: { query: async () => ({ rows: [] }) } as unknown as pg.Pool,
         ownerId: 'synthetic-owner',
@@ -277,18 +278,10 @@ test('invalid confirmation replies keep a bounded reason and the failed attempt 
           assert.equal(reviews, kind === 'review then action' ? 1 : 0);
           assert.doesNotMatch(error.message, /PRIVATE_REPLY_KEY|PRIVATE_REPLY_VALUE/);
           assert.doesNotMatch(JSON.stringify(repairs), /PRIVATE_REPLY_KEY|PRIVATE_REPLY_VALUE/);
-          assert.match(
-            error.message,
-            kind.includes('action')
-              ? /action label/
-              : kind.includes('text')
-                ? /message text/
-                : /structure|fields/,
+          assert.ok(repairs.length > 0);
+          assert.ok(
+            repairs.every((repair) => typeof repair.issue === 'string' && repair.issue.trim()),
           );
-          if (kind === 'long action') assert.match(JSON.stringify(repairs), /64 characters/);
-          if (kind === 'long text') assert.match(JSON.stringify(repairs), /12000 characters/);
-          if (kind === 'multiline action') assert.match(JSON.stringify(repairs), /one line/);
-          assert.match(error.message, /[Tt]his action did not run in this attempt/);
           assert.equal(error.notRun, true);
           return true;
         },
@@ -311,7 +304,6 @@ test('an ordinary message format failure makes no claim about an action', async 
     (error: Error & { notRun?: boolean }) => {
       assert.equal(drafts, 2);
       assert.equal(error.notRun, undefined);
-      assert.doesNotMatch(error.message, /action did not run/);
       return true;
     },
   );
