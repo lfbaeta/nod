@@ -37,6 +37,8 @@ With an API model selected, select this month's total to see a chart and a forec
 
 Model and schedule forecasts reuse the cost of the main model requests when the model and its recorded rates match the current choice. If the rates changed or were never saved, Nod prices those recorded tokens at the current rates, including long-context tiers. Supporting model work, such as reviews or memory updates, contributes its recorded charge or API-price estimate. A model whose catalog lists zero token rates can still have supporting costs.
 
+A schedule forecast cannot use a run if a successful model request has no known cost and no token counts. A cancelled request with no usage does not prevent the forecast.
+
 Older cache writes without a saved duration use the standard cache-write rate. The usage record combines text and audio tokens, which have different input rates. Native audio forecasts therefore need matching recorded rates. The original amounts are available in Usage and schedule history.
 
 To spend less on work you don't watch, choose a lighter model for schedules or for work Nod starts on its own. See [Models for each kind of work](/connect/models/#models-for-each-kind-of-work).

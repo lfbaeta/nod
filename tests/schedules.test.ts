@@ -1331,6 +1331,33 @@ test(
           await expectRunCost(3.26);
           assert.equal((await ledger.sessionCosts([run.turnId]))[run.turnId], null);
           await db.pool.query('DELETE FROM model_usage WHERE id=$1', [cancelledUsageId]);
+          const unpricedAgent = randomUUID();
+          await db.pool.query(
+            'INSERT INTO model_usage(id,owner_id,turn_id,cost_usd,details) VALUES($1,$2,$3,NULL,$4)',
+            [
+              unpricedAgent,
+              ownerId,
+              run.turnId,
+              { category: 'agent', status: 'succeeded', model: main.modelId },
+            ],
+          );
+          for (const pricingSignature of [undefined, modelPricingSignature(originalPrice)]) {
+            await db.pool.query('UPDATE model_usage SET details=$2 WHERE id=$1', [
+              agentUsageId,
+              { ...agentUsage, pricingSignature },
+            ]);
+            assert.equal(await monthly(), null);
+            await db.pool.query('UPDATE model_usage SET cost_usd=0 WHERE id=$1', [unpricedAgent]);
+            assert.equal(await monthly(), null);
+            await db.pool.query('UPDATE model_usage SET cost_usd=NULL WHERE id=$1', [
+              unpricedAgent,
+            ]);
+          }
+          await db.pool.query('DELETE FROM model_usage WHERE id=$1', [unpricedAgent]);
+          await db.pool.query('UPDATE model_usage SET details=$2 WHERE id=$1', [
+            agentUsageId,
+            agentUsage,
+          ]);
           const unpricedReview = randomUUID();
           await db.pool.query(
             'INSERT INTO model_usage(id,owner_id,turn_id,cost_usd,details) VALUES($1,$2,$3,NULL,$4)',

@@ -838,9 +838,6 @@ export function createLedger({
     return Object.fromEntries(rows.map(({ sessionId, costUsd }) => [sessionId, costUsd]));
   }
 
-  const unpricedOtherZero = `(m.details->>'category' IS DISTINCT FROM 'agent'
-    AND ${unpricedUsage('m.')} AND m.details->>'pricing' IS DISTINCT FROM 'reported')`;
-
   const tokens = {
     input: "(m.details->>'inputTokens')::float8",
     output: "(m.details->>'outputTokens')::float8",
@@ -851,6 +848,10 @@ export function createLedger({
   const tokenColumns = Object.values(tokens);
   const forecastAgent = "m.details->>'category'='agent'";
   const costWithPlan = "COALESCE(m.cost_usd,(m.details->>'estimateUsd')::float8)";
+  const needsCost = `(m.details->>'category' IS DISTINCT FROM 'agent'
+    OR COALESCE(GREATEST(${tokenColumns.join(',')}),0)=0)`;
+  const unpricedZero = `(${needsCost} AND ${unpricedUsage('m.')}
+    AND m.details->>'pricing' IS DISTINCT FROM 'reported')`;
 
   function usageForecastColumns(firstParameter: number, includePlanEstimates = true) {
     const thresholds = [...new Set(pricingThresholds?.() ?? [])];
@@ -872,11 +873,11 @@ export function createLedger({
     const otherCoverage = includePlanEstimates
       ? ''
       : `, count(*) FILTER (
-        WHERE (${other} AND ${costWithPlan} IS NULL
+        WHERE (${needsCost} AND ${costWithPlan} IS NULL
           AND (COALESCE(m.details->>'status','succeeded') NOT IN ('failed','cancelled')
                OR GREATEST(${tokenColumns.join(',')})>0))
-          OR ${unpricedOtherZero}
-      )>0 AS "unpricedOther"`;
+          OR ${unpricedZero}
+      )>0 AS unpriced`;
     return {
       thresholds,
       columns: `${base.join(',')},
@@ -892,10 +893,10 @@ export function createLedger({
 
   async function sessionUsage(
     sessionIds: string[],
-  ): Promise<Record<string, WorkUsage & { unpricedOther: boolean }>> {
+  ): Promise<Record<string, WorkUsage & { unpriced: boolean }>> {
     if (!sessionIds.length) return {};
     const { columns, thresholds } = usageForecastColumns(3, false);
-    const { rows } = await pool.query<WorkUsage & { sessionId: string; unpricedOther: boolean }>(
+    const { rows } = await pool.query<WorkUsage & { sessionId: string; unpriced: boolean }>(
       `SELECT u.session_id AS "sessionId",${columns}
        FROM model_usage m JOIN turns u ON u.id=m.turn_id AND u.owner_id=m.owner_id
        WHERE m.owner_id=$1 AND u.session_id=ANY($2::uuid[]) GROUP BY u.session_id`,
@@ -1006,7 +1007,7 @@ export function createLedger({
       ? `OR (sum(${sampleCost})=0 AND bool_or(${forecastAgent} AND GREATEST(${tokenColumns.join(',')})>0))`
       : '';
     const priced = `count(${sampleCost})=count(*) AND (sum(${sampleCost})>0 ${zeroWithTokens})
-      AND count(*) FILTER (WHERE ${unpricedOtherZero})=0`;
+      AND count(*) FILTER (WHERE ${unpricedZero})=0`;
     const { rows } = await pool.query<WorkUsage & { recordedUsd: number }>(
       `WITH recent AS (
         SELECT m.turn_id FROM model_usage m JOIN turns u ON u.id=m.turn_id AND u.owner_id=m.owner_id
