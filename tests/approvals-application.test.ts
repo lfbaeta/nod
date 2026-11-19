@@ -9,7 +9,6 @@ import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promi
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { syncBuiltinESMExports } from 'node:module';
-import { createServer } from 'node:http';
 import { setTimeout as delay } from 'node:timers/promises';
 import test from 'node:test';
 import pg from 'pg';
@@ -5501,6 +5500,9 @@ test(
               method: 'mcp',
               endpoint,
             });
+            assert.equal(second.details.tool.name, 'execute_workflow');
+            assert.deepEqual(second.details.tool, first.details.tool);
+            assert.equal(second.details.verifiedBinding, first.details.verifiedBinding);
             assert.deepEqual(repeatChecks.at(-1), {
               action: 'CONNECTED_MCP_CALL',
               args: first.args,

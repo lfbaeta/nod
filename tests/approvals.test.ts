@@ -5185,6 +5185,41 @@ test(
           await finishRepeat(fixture);
         }
       });
+      await t.test('a declined repeat keeps its fence after restart', async () => {
+        const fixture = await repeatFixture();
+        const before = calls.length;
+        repeatedAction = 'new';
+        let resumed: { turnId: string } | undefined;
+        try {
+          await approvals.request(fixture.turn, fixture.action, fixture.args, { allowed: true });
+          const second = await proposal(fixture.turn.turnId);
+          await finish(fixture.turn.turnId);
+          const answer = await confirm(second.id, false);
+          assert.ok(answer && 'turnId' in answer);
+          const turn = await running(answer.turnId);
+          resumed = turn;
+          assert.equal((await stored(second.id)).status, 'declined');
+          const restarted = await createApprovals(
+            async () => {
+              assert.fail('A declined repeat must not run.');
+            },
+            undefined,
+            undefined,
+            defaultDescription,
+          );
+          await assert.rejects(
+            restarted.request(turn, fixture.action, fixture.args, { allowed: true }),
+            /pending or uncertain outcome/,
+          );
+          assert.equal((await stored(second.id)).status, 'declined');
+          assert.equal((await stored(fixture.firstId)).status, 'completed');
+          assert.equal(await proposal(turn.turnId), undefined);
+          assert.equal(calls.length, before);
+        } finally {
+          if (resumed) await finish(resumed.turnId, 'succeeded');
+          await finishRepeat(fixture);
+        }
+      });
       await t.test('a repeated action preserves every unresolved or refused fence', async () => {
         for (const status of ['pending', 'confirmed', 'executing', 'declined', 'uncertain']) {
           const fixture = await repeatFixture();
