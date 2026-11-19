@@ -91,7 +91,8 @@ export function DataSharing({
           </Item>
           <Item icon={LockKeyhole} title="Saved passwords and cards">
             Encrypted in Vault on your Nod computer or server. Nod fills secret values on websites
-            for sign-ins and payments you allow, without showing them to the model.
+            for sign-ins and payments you allow. Tools that fill saved values do not return them to
+            the model. Private content visible in screenshots can still reach your model services.
           </Item>
         </ul>
         <p>
