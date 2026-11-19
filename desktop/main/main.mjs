@@ -2462,7 +2462,15 @@ async function startEngine({ runtime, signal, pending = false }) {
   const build = buildIdentity(nodBuild);
   const started = Date.now();
   const systemProxy = systemProxyEnvironment(
-    await session.defaultSession.resolveProxy('https://api.openai.com').catch(() => ''),
+    await Promise.all(
+      ['https://api.openai.com', 'https://auth.openai.com', 'https://api.anthropic.com'].map(
+        (url) =>
+          session.defaultSession.resolveProxy(url).catch((error) => {
+            void writeDiagnostic(`System proxy lookup failed for ${url}: ${String(error)}`);
+            return '';
+          }),
+      ),
+    ),
   );
   const environment = {
     ...baseEnvironment(),

@@ -9082,20 +9082,119 @@ test('system proxy detection maps Electron resolve results to engine environment
     HTTPS_PROXY: 'http://10.0.0.1:3128',
     NO_PROXY: loopback,
   });
-  for (const resolved of ['DIRECT', 'SOCKS5 127.0.0.1:1080', 'SOCKS 127.0.0.1:1080', '', undefined])
+  assert.deepEqual(systemProxyEnvironment('SOCKS5 10.0.0.1:1080;PROXY 10.0.0.2:3128'), {
+    HTTP_PROXY: 'http://10.0.0.2:3128',
+    HTTPS_PROXY: 'http://10.0.0.2:3128',
+    NO_PROXY: loopback,
+  });
+  assert.deepEqual(systemProxyEnvironment(['DIRECT', 'PROXY 10.0.0.1:3128;DIRECT']), {
+    HTTP_PROXY: 'http://10.0.0.1:3128',
+    HTTPS_PROXY: 'http://10.0.0.1:3128',
+    NO_PROXY: loopback,
+  });
+  assert.deepEqual(
+    systemProxyEnvironment(['DIRECT', 'SOCKS5 10.0.0.1:1080', 'HTTPS proxy.internal:8443']),
+    {
+      HTTP_PROXY: 'https://proxy.internal:8443',
+      HTTPS_PROXY: 'https://proxy.internal:8443',
+      NO_PROXY: loopback,
+    },
+  );
+  for (const resolved of [
+    'DIRECT',
+    'SOCKS5 127.0.0.1:1080',
+    'SOCKS 127.0.0.1:1080',
+    '',
+    undefined,
+    ['DIRECT', 'DIRECT'],
+    [],
+  ])
     assert.deepEqual(systemProxyEnvironment(resolved), {}, String(resolved));
+});
+
+test('local traffic bypass covers loopback, private ranges and LAN names', async () => {
+  const { localTrafficBypasses } = await import('../main/system-proxy.mjs');
+  for (const hostname of [
+    'localhost',
+    'localhost.',
+    'api.localhost',
+    'LOCALHOST',
+    'ollama-pc',
+    'GPU-STATION',
+    'nas-01',
+    '127.0.0.1',
+    '127.53.0.7',
+    '10.0.0.5',
+    '10.255.255.255',
+    '100.64.7.9',
+    '169.254.10.20',
+    '172.16.0.1',
+    '172.31.255.254',
+    '192.168.0.1',
+    '192.168.50.20',
+    '::1',
+    '[::1]',
+    'fe80::1',
+    'febf::abcd',
+    'fc00::7',
+    'fd12:3456::1',
+    '::ffff:192.168.1.5',
+    '::ffff:10.20.30.40',
+    'studio.local',
+    'server.lan',
+    'gpu.home',
+    'llm.corp',
+    'llm.internal',
+    'router.home.arpa',
+  ])
+    assert.equal(localTrafficBypasses(hostname), true, hostname);
+  for (const hostname of [
+    'api.openai.com',
+    'auth.openai.com',
+    'api.anthropic.com',
+    'nod-e2e.test',
+    '8.8.8.8',
+    '172.32.0.1',
+    '172.15.0.1',
+    '100.63.0.1',
+    '203.0.113.9',
+    '::ffff:8.8.8.8',
+    '2001:db8::1',
+    'local.example.com',
+    'internal.example.org',
+    '',
+    'my-local.example',
+  ])
+    assert.equal(localTrafficBypasses(hostname), false, hostname);
 });
 
 test('engine proxy activation honors proxy variables and keeps loopback direct', async (t) => {
   const { useEnvironmentProxy } = await import('../main/system-proxy.mjs');
-  const { createServer: createHttpServer, get } = await import('node:http');
   let activations = 0;
+  const calls = { direct: 0, proxied: 0 };
+  const counted = (bucket) =>
+    class {
+      dispatch() {
+        calls[bucket]++;
+        return true;
+      }
+      close() {
+        return Promise.resolve();
+      }
+      destroy() {
+        return Promise.resolve();
+      }
+    };
+  let installed;
   const load = async () => ({
-    EnvHttpProxyAgent: class {
-      marker = true;
+    Agent: counted('direct'),
+    EnvHttpProxyAgent: counted('proxied'),
+    Dispatcher: class {
+      kind = 'dispatcher';
     },
     setGlobalDispatcher: (value) => {
-      assert.equal(value.marker, true);
+      assert.equal(typeof value.dispatch, 'function');
+      installed = value;
       activations++;
     },
   });
@@ -9109,8 +9208,20 @@ test('engine proxy activation honors proxy variables and keeps loopback direct',
   assert.equal(activations, 4);
   await useEnvironmentProxy({ NO_PROXY: 'localhost' }, load);
   assert.equal(activations, 4);
-  const { EnvHttpProxyAgent, getGlobalDispatcher, setGlobalDispatcher } = await import('undici');
+  installed.dispatch({ origin: 'https://api.openai.com' }, {});
+  installed.dispatch({ origin: 'http://192.168.1.5:1234' }, {});
+  installed.dispatch({ origin: 'http://ollama-pc:11434' }, {});
+  installed.dispatch({ origin: 'http://10.0.0.7:8080' }, {});
+  installed.dispatch({ origin: 'http://gpu.internal:8000' }, {});
+  installed.dispatch({ origin: 'https://auth.openai.com' }, {});
+  assert.deepEqual(calls, { direct: 4, proxied: 2 });
+});
+
+test('engine proxy dispatcher tunnels remote hosts and keeps local traffic direct', async (t) => {
+  const { createSystemProxyDispatcher } = await import('../main/system-proxy.mjs');
+  const { createServer: createHttpServer } = await import('node:http');
   const { connect, createServer: createTunnel } = await import('node:net');
+  const undici = await import('undici');
   const target = createHttpServer((request, response) => {
     response.end(`served ${request.url}`);
   });
@@ -9123,8 +9234,8 @@ test('engine proxy activation honors proxy variables and keeps loopback direct',
       const line = head.toString('latin1').split('\r\n')[0];
       const [method, authority] = line.split(' ');
       if (method !== 'CONNECT') return client.destroy();
-      const [host, port] = authority.split(':');
-      const upstream = connect(Number(port), host, () => {
+      const port = Number(authority.split(':').pop());
+      const upstream = connect(port, '127.0.0.1', () => {
         tunnels.push(authority);
         sockets.add(upstream);
         client.write('HTTP/1.1 200 Connection Established\r\n\r\n');
@@ -9143,29 +9254,46 @@ test('engine proxy activation honors proxy variables and keeps loopback direct',
   });
   await new Promise((accept) => target.listen(0, '127.0.0.1', accept));
   await new Promise((accept) => proxy.listen(0, '127.0.0.1', accept));
-  const before = getGlobalDispatcher();
-  const envAgent = new EnvHttpProxyAgent({
-    httpProxy: `http://127.0.0.1:${proxy.address().port}`,
-    noProxy: 'localhost',
-  });
+  const environment = { HTTP_PROXY: '', HTTPS_PROXY: '', NO_PROXY: '' };
+  for (const name of Object.keys(environment)) environment[name] = process.env[name];
+  process.env.HTTP_PROXY = `http://127.0.0.1:${proxy.address().port}`;
+  process.env.HTTPS_PROXY = `http://127.0.0.1:${proxy.address().port}`;
+  process.env.NO_PROXY = 'localhost,127.0.0.1,::1';
+  const before = undici.getGlobalDispatcher();
+  const dispatcher = createSystemProxyDispatcher(undici);
+  undici.setGlobalDispatcher(dispatcher);
   t.after(async () => {
-    setGlobalDispatcher(before);
-    await envAgent.close();
+    for (const [name, value] of Object.entries(environment))
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    undici.setGlobalDispatcher(before);
+    await dispatcher.close();
   });
-  setGlobalDispatcher(envAgent);
   const targetPort = target.address().port;
   assert.equal(
     await (
-      await fetch(`http://127.0.0.1:${targetPort}/via-proxy`, { headers: { connection: 'close' } })
+      await fetch(`http://nod-e2e.test:${targetPort}/via-proxy`, {
+        headers: { connection: 'close' },
+      })
     ).text(),
     'served /via-proxy',
   );
-  assert.deepEqual(tunnels, [`127.0.0.1:${targetPort}`]);
+  assert.deepEqual(tunnels, [`nod-e2e.test:${targetPort}`]);
   assert.equal(
     await (
-      await fetch(`http://localhost:${targetPort}/direct`, { headers: { connection: 'close' } })
+      await fetch(`http://127.0.0.1:${targetPort}/direct-ip`, {
+        headers: { connection: 'close' },
+      })
     ).text(),
-    'served /direct',
+    'served /direct-ip',
+  );
+  assert.equal(
+    await (
+      await fetch(`http://localhost:${targetPort}/direct-name`, {
+        headers: { connection: 'close' },
+      })
+    ).text(),
+    'served /direct-name',
   );
   assert.equal(tunnels.length, 1);
 });
