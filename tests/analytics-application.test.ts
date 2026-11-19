@@ -9,6 +9,7 @@ import pg from 'pg';
 import type { ProductAnalytics } from '../src/ports/analytics.ts';
 import { createIntegrationFixture } from '../scripts/e2e-fixtures.ts';
 import { accessCookie, accessKey } from '../src/server/access.ts';
+import { createModelTraces } from '../src/server/traces.ts';
 import { fakeComputer, fakeWorkspace } from './runtime-fixtures.ts';
 
 const gate = () => {
@@ -64,6 +65,7 @@ test(
     const application = await createApplication(
       {
         analytics: { capture: (event) => events.push(event), shutdown: async () => {} },
+        traces: createModelTraces(),
         agent: {
           async open(options) {
             return {
@@ -203,6 +205,11 @@ test(
           assert.equal(started.properties.task_taxonomy_version, 1);
           assert.equal(completed.properties.task_taxonomy_version, 1);
           assert.equal(completed.properties.run_id, started.properties.run_id);
+          assert.match(String(started.properties.thread_id), /^[0-9a-f]{32}$/);
+          assert.match(String(started.properties.turn_id), /^[0-9a-f]{32}$/);
+          assert.notEqual(started.properties.turn_id, id);
+          assert.equal(completed.properties.thread_id, started.properties.thread_id);
+          assert.equal(completed.properties.turn_id, started.properties.turn_id);
           assert.equal(completed.properties.model, 'claude-opus-5-5');
           assert.ok(!events.slice(before).some((event) => event.event === 'task_classified'));
           currentClassification.released.resolve();
@@ -213,6 +220,8 @@ test(
           const classified = events
             .slice(before)
             .find((event) => event.event === 'task_classified')!;
+          assert.equal(classified.properties.thread_id, started.properties.thread_id);
+          assert.equal(classified.properties.turn_id, started.properties.turn_id);
           const costs = events
             .slice(before)
             .filter(

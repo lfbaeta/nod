@@ -134,6 +134,7 @@ export function createPiMemoryCurator(options: {
     },
     async curate({ task, instructions, input, images, automatic = true }, signal, report) {
       signal?.throwIfAborted();
+      const traceTurnId = crypto.randomUUID();
       const bounded = task === 'classify' || task === 'attention' || task === 'check';
       const review = signal !== undefined && (task === 'review' || task === 'access');
       if (options.resolve) loaded = undefined;
@@ -213,7 +214,7 @@ export function createPiMemoryCurator(options: {
           options.traces.record(
             piModelTrace(
               { model: target, context, message: reply, startedAt, request: requestFacts?.(reply) },
-              { source: 'curator', task },
+              { source: 'curator', task, session_id: traceTurnId, turn_id: traceTurnId },
             ),
           );
         return reply;

@@ -83,6 +83,27 @@ test('the broker forwards at most its per-minute limit across all senders', () =
   assert.equal(json.ok, false);
 });
 
+test('the broker keeps trace join IDs, error types and numeric known costs', () => {
+  for (const source of ['agent', 'curator'])
+    for (const cost of [0, 0.03]) {
+      const metadata = {
+        source,
+        user_id: `local:${id}`,
+        thread_id: 'a'.repeat(32),
+        turn_id: 'b'.repeat(32),
+        cost_usd: cost,
+        error_type: 'quota',
+      };
+      const result = checkTrace(trace({ metadata, error: 'Synthetic quota exceeded.' }), 'nod');
+      assert.equal(result.ok, true);
+      for (const [key, value] of Object.entries(metadata))
+        assert.equal(result.run.extra.metadata[key], value);
+      assert.equal(result.run.error, 'Synthetic quota exceeded.');
+    }
+  for (const cost_usd of [-1, NaN, Infinity, '0.03', null])
+    assert.equal(checkTrace(trace({ metadata: { cost_usd } }), 'nod').ok, false);
+});
+
 test('malformed or oversized traces never reach LangSmith', () => {
   for (const changes of [
     { id: 'not-a-uuid' },

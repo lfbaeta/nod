@@ -773,6 +773,12 @@ async function initializeApplication(
     dataRoot,
     installationId: process.env.NOD_ANALYTICS_ID,
     appVersion: process.env.NOD_APP_VERSION,
+    withTraceContext:
+      adapters.traces &&
+      ((operation) => {
+        const turnId = randomUUID();
+        return adapters.traces!.withTurn({ sessionId: turnId, turnId }, operation);
+      }),
   });
   let observeConnections: ((only?: 'apps' | 'models') => Promise<void>) | undefined;
   let observeChannels: (() => Promise<void>) | undefined;
@@ -2146,6 +2152,7 @@ async function initializeApplication(
   });
   adapters.traces?.configure({
     enabled: (await localAccounts.read(ownerId)).traces,
+    userId: analytics.distinctId,
     secrets,
     profile: ownerProfile,
   });
@@ -2445,23 +2452,32 @@ async function initializeApplication(
       },
       desktopRuntime: desktopMode,
       taskClassification: true,
-      observeTurn: (turnId, operation) =>
-        analytics
-          .withRun(ownerId, async () => {
-            try {
-              await operation();
-            } finally {
-              const consent = analytics.currentRun(ownerId)?.consent;
+      observeTurn: (turnId, operation, sessionId) => {
+        const observe = (ids?: { thread_id: string; turn_id: string }) =>
+          analytics
+            .withRun(
+              ownerId,
+              async () => {
+                try {
+                  await operation();
+                } finally {
+                  const consent = analytics.currentRun(ownerId)?.consent;
+                  void admission
+                    .run(() =>
+                      ledger.withTurn(turnId, () => taskClassification.run(turnId, consent)),
+                    )
+                    ?.catch(() => {});
+                }
+              },
+              ids,
+            )
+            .finally(() => {
               void admission
-                .run(() => ledger.withTurn(turnId, () => taskClassification.run(turnId, consent)))
-                ?.catch(() => {});
-            }
-          })
-          .finally(() => {
-            void admission
-              .run(() => proactivity.due())
-              ?.catch((error) => logFailure('proactivity_wake', error));
-          }),
+                .run(() => proactivity.due())
+                ?.catch((error) => logFailure('proactivity_wake', error));
+            });
+        return adapters.traces?.withTurn({ turnId, sessionId }, observe) ?? observe();
+      },
       consumers,
       artifacts,
       writeArtifact: workspace.writeArtifact.bind(workspace),

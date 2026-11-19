@@ -10,6 +10,7 @@ import type {
 import type { ModelTrace } from '../../ports/traces.ts';
 import { piUsageMetrics } from './usage.ts';
 import { untrustedParts } from '../../shared/untrusted.ts';
+import { modelQuotaFailure } from '../../shared/model-quota.ts';
 
 const omitted = '[owner context omitted]';
 const learnedSkill = untrustedParts('learned skill').open;
@@ -29,6 +30,41 @@ export interface PiModelCall {
   context: Context;
   message: AssistantMessage;
   startedAt: string;
+}
+
+function errorType(error: string, phase?: ModelRequestFacts['requestPhase']) {
+  const quota = modelQuotaFailure(error);
+  if (
+    (phase === 'prepare' || phase === 'payload') &&
+    /(?:model|pricing|cost|price|api key|connection).*(?:no cost|no price|unavailable|not configured|missing|unknown)|(?:no cost|no price|unknown price)/i.test(
+      error,
+    )
+  )
+    return 'model_config';
+  if (quota?.kind === 'credits_depleted') return 'billing';
+  if (quota) return 'quota';
+  if (
+    /insufficient[_ -](?:credits?|funds|balance)|credit balance.*(?:low|exhausted|insufficient)|billing[_ -](?:hard[_ -]limit[_ -](?:reached|exceeded)|not[_ -]active)|billing (?:is )?(?:disabled|inactive)|payment required|requires more credits|(?:exhausted|insufficient|out of|not enough).*(?:credits?|funds)/i.test(
+      error,
+    )
+  )
+    return 'billing';
+  if (
+    /insufficient_quota/i.test(error) ||
+    (/free[_ -]?tier|daily|per[_ -]?day/i.test(error) && /quota|limit|allowance/i.test(error))
+  )
+    return 'quota';
+  if (/rate[_ -]?limit|too many requests|requests per minute|tokens per minute/i.test(error))
+    return 'rate_limit';
+  if (/quota.*(?:exceeded|exhausted)|(?:exceeded|exhausted).*quota/i.test(error)) return 'quota';
+  if (/\b429\b/.test(error)) return 'rate_limit';
+  if (
+    /\b(?:ECONN[A-Z]+|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|UND_ERR_[A-Z_]+)\b|fetch failed|failed to fetch|network|connection (?:error|failed|refused|reset)|timed? ?out|timeout/i.test(
+      error,
+    )
+  )
+    return 'connection';
+  return 'unknown';
 }
 
 function text(content: string | { type: string; text?: string }[]) {
@@ -93,6 +129,10 @@ export function piModelTrace(
   ownerContext?: string,
 ): ModelTrace {
   const { message } = call;
+  const error =
+    message.stopReason === 'error' || message.stopReason === 'aborted'
+      ? message.errorMessage || message.stopReason
+      : undefined;
   const header = ownerContext?.split('\n', 1)[0];
   const usage = piUsageMetrics(message.usage);
   const cacheReadTokens = usage.cacheReadTokens ?? 0;
@@ -155,12 +195,11 @@ export function piModelTrace(
       cacheWriteTokens,
       costUsd: usage.costUsd ?? null,
     },
-    ...(message.stopReason === 'error' || message.stopReason === 'aborted'
-      ? { error: message.errorMessage || message.stopReason }
-      : {}),
+    ...(error ? { error } : {}),
     metadata: {
       ...metadata,
       stop_reason: message.stopReason,
+      ...(error ? { error_type: errorType(error, call.request?.requestPhase) } : {}),
       ...(call.request
         ? {
             request_phase: call.request.requestPhase,

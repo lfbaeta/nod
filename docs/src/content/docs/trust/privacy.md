@@ -59,26 +59,28 @@ Nod:    Sends to [email]:
         anything is missing. [owner]
 ```
 
-The trace also includes Nod's instructions, the model name, token counts, and cost. Its conversation ID changes after 30 minutes without a request to the model and whenever Nod restarts.
+The trace also includes Nod's instructions, the model name, token counts, cost, and fixed error classes. Its conversation ID changes after 30 minutes without a request to the model and whenever Nod restarts.
+
+Traces carry the same analytics ID as usage analytics, even when usage sharing is off. This ID stays the same across conversations, days, and restarts. It links traces from the same runtime profile. This ID can link traces to earlier usage data, About you choices, and an email submitted for updates. Server usage events and traces also share pseudonymous conversation and work IDs. One work ID is a request, schedule fire, background batch, or continuation, not a user-message count.
 
 "Jordi" is still there. Nod spots details by their shape, such as email addresses, phone numbers, and bank accounts. It also knows your name from your connected accounts. It can't spot every name in a sentence, so traces are pseudonymised, not anonymous.
 
 ### What each switch shares
 
-|            | Usage data                                                                                                                                                                                                              |
-| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Default    | On                                                                                                                                                                                                                      |
-| Includes   | Screens and features you use, kinds of tasks, timings, costs, failures, basic device details such as browser, OS, screen and viewport size, pseudonymous session and window IDs, and your onboarding and survey answers |
-| Excludes   | Your messages to Nod, Nod's replies, what Nod reads, saved passwords and cards, and screen recordings or session replays. Survey answers may contain personal details because Nod sends them as typed                   |
-| Your email | If you submit it in onboarding with consent to updates and usage sharing on, it is linked to your usage data. Unsubscribe via the link in each email. To unlink or delete it, write to privacy@n8n.io.                  |
-| Stored in  | n8n's PostHog project in the EU. A consented signup also sends the email address and any successfully shared fixed About you choices to n8n's Customer.io Labs workspace in the US.                                     |
-| Switch     | **Share usage data**                                                                                                                                                                                                    |
-| Details    | [Analytics](/deploy/analytics/)                                                                                                                                                                                         |
+|            | Usage data                                                                                                                                                                                                                                   |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Default    | On                                                                                                                                                                                                                                           |
+| Includes   | Screens and features you use, kinds of tasks, timings, costs, failures, basic device details such as browser, OS, screen and viewport size, pseudonymous session, window, conversation, and turn IDs, and your onboarding and survey answers |
+| Excludes   | Your messages to Nod, Nod's replies, what Nod reads, saved passwords and cards, and screen recordings or session replays. Survey answers may contain personal details because Nod sends them as typed                                        |
+| Your email | If you submit it in onboarding with consent to updates and usage sharing on, it is linked to your usage data. Unsubscribe via the link in each email. To unlink or delete it, write to privacy@n8n.io.                                       |
+| Stored in  | n8n's PostHog project in the EU. A consented signup also sends the email address and any successfully shared fixed About you choices to n8n's Customer.io Labs workspace in the US.                                                          |
+| Switch     | **Share usage data**                                                                                                                                                                                                                         |
+| Details    | [Analytics](/deploy/analytics/)                                                                                                                                                                                                              |
 
 |           | Conversation traces                                                                                                                                                                                     |
 | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Default   | Off                                                                                                                                                                                                     |
-| Includes  | Your conversations with Nod, including what it reads and does, minus the personal details it recognizes                                                                                                 |
+| Includes  | Your conversations with Nod, including what it reads and does, minus recognized personal details; the analytics ID and pseudonymous conversation and turn IDs                                           |
 | Redaction | Nod masks known secret values of at least eight characters, known secret formats and recognized personal details. Short secrets and other private content, including account or device IDs, can remain. |
 | Stored in | n8n's LangSmith project in the EU for 14 days. Never used to train AI models.                                                                                                                           |
 | Switch    | **Share conversation traces**                                                                                                                                                                           |

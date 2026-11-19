@@ -170,7 +170,11 @@ export interface ThreadDependencies {
     input:
       { kind: 'interrupted'; work?: string } | { kind: 'failed'; error: string; work?: string },
   ) => Promise<string>;
-  observeTurn?: (turnId: string, operation: () => Promise<void>) => Promise<void>;
+  observeTurn?: (
+    turnId: string,
+    operation: () => Promise<void>,
+    sessionId: string,
+  ) => Promise<void>;
   taskChecks?: (threadId: string) => Promise<void>;
   taskClassification?: boolean;
   consumers?: WorkConsumers;
@@ -1737,7 +1741,11 @@ async function drainThread(threadId: string, dependencies: ThreadDependencies) {
   if (claimed.length) refresh();
   for (const turn of claimed) {
     const execute = () => executeTurn(turn, dependencies);
-    const work = (dependencies.observeTurn ? dependencies.observeTurn(turn.id, execute) : execute())
+    const work = (
+      dependencies.observeTurn
+        ? dependencies.observeTurn(turn.id, execute, turn.session_id)
+        : execute()
+    )
       .catch((error) => logFailure('turn_unfinished', error, { threadId, turnId: turn.id }))
       .then(() => drainNext(threadId))
       .finally(refresh);

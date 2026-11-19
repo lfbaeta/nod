@@ -20,6 +20,8 @@ Change the event schema, collectors, privacy checks, and dashboards together.
 
 Use `provider` for the model provider across onboarding, connection, selection, execution, and usage events. Keep the event's meaning: selected provider at setup/start, last observed main-agent provider at completion, and actual provider for each model request.
 
+Server events within a turn also include the trace boundary's pseudonymous `thread_id` and `turn_id`. Never send their private source IDs. Join traces to these events with trace `user_id` equal to PostHog `distinct_id`, plus both pseudonymous IDs. Keep the existing analytics `run_id` for current dashboards. It differs from the agent `run_id` in traces. A turn is a work unit, not a count of owner messages. `thread_id` rotates after 30 minutes without a model request and on restart. Turn hashes change daily and on restart. One active turn keeps its IDs until it ends. Autonomous work outside a turn also shares trace IDs with its curator calls, without an analytics `run_id`.
+
 Don't infer completed tasks or frustration from conversations. Execution success, useful output, and user satisfaction are separate questions.
 
 The bounded task classifier is the only analytics model inference. It assigns a fixed primary purpose while usage sharing is enabled; it doesn't infer personal characteristics, sensitive subject matter, satisfaction, or success. Keep its inputs and output within the [published contract](/deploy/analytics/#task-categories).
