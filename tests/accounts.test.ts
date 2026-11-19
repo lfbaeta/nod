@@ -36,6 +36,7 @@ import { createTrustReview } from '../src/server/trust-review.ts';
 import { trustFacts } from '../src/server/trust-facts.ts';
 import {
   createErrorRedactor,
+  environmentSecrets,
   createRedactor,
   createTextRedactor,
   redactSecretText,
@@ -8142,4 +8143,49 @@ test('startup reports never open log paths and use only current desktop events',
     filesystem.open = original;
     syncBuiltinESMExports();
   }
+});
+
+test('environment secret collection covers every model key and token segment before redaction', async () => {
+  const { modelProviderInfo } = await import('../src/shared/models.ts');
+  const modelEnvironment = Object.fromEntries(
+    Object.values(modelProviderInfo).map(({ env }, index) => [env, `synthetic-model-key-${index}`]),
+  );
+  const legacyEnvironment = Object.fromEntries(
+    [
+      'API_KEY',
+      'SECRET',
+      'PASSWORD',
+      'VAULT_KEY',
+      'BOT_TOKEN',
+      'ACCESS_TOKEN',
+      'AUTH_TOKEN',
+      'FEEDBACK_TOKEN',
+      'TRACES_TOKEN',
+      'UPDATES_TOKEN',
+    ].map((key, index) => [`SYNTHETIC_${key}`, `synthetic-legacy-key-${index}`]),
+  );
+  const environment = {
+    ...modelEnvironment,
+    ...legacyEnvironment,
+    NOD_FEEDBACK_TOKEN: 'synthetic-feedback-key',
+    NOD_TRACES_TOKEN: 'synthetic-traces-key',
+    SYNTHETIC_TOKEN_SUFFIX: 'synthetic-token-with-suffix',
+    SYNTHETIC_SECRET: 'synthetic-secret-value',
+    SYNTHETIC_PASSWORD: 'synthetic-password-value',
+    NOD_VAULT_KEY: 'synthetic-vault-key',
+    DATABASE_URL: 'postgresql://synthetic:synthetic%2Bdatabase%2Fpassword@127.0.0.1/nod_synthetic',
+    PORT: '1234',
+  };
+  const secrets = environmentSecrets(environment);
+  for (const [key, value] of Object.entries(environment))
+    assert.equal(secrets.includes(value), key !== 'PORT', key);
+  assert.ok(secrets.includes('synthetic+database/password'));
+  assert.deepEqual(
+    environmentSecrets({
+      EMPTY_TOKEN: '',
+      MISSING_TOKEN: undefined,
+      DATABASE_URL: 'synthetic-invalid-url',
+    }),
+    ['synthetic-invalid-url'],
+  );
 });

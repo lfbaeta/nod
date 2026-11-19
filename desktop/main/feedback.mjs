@@ -2,13 +2,13 @@ import { register } from 'tsx/esm/api';
 import { basename } from 'node:path';
 import { homedir, hostname, userInfo } from 'node:os';
 import { trustSystemCertificates } from './system-certificates.mjs';
+import { environmentSecrets } from '../../src/shared/environment-secrets.mjs';
 
 trustSystemCertificates();
 register();
 const { createFeedbackDelivery } = await import('../../src/server/feedback-delivery.ts');
 const { createStartupFeedback } = await import('../../src/server/startup-feedback.ts');
 const { createFeedbackRedactor } = await import('../../src/server/feedback-redaction.ts');
-const { environmentSecrets } = await import('../../src/server/redaction.ts');
 const helperSecrets = environmentSecrets(process.env);
 let feedback;
 let configuration;

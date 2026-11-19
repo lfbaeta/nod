@@ -55,6 +55,7 @@ import { trustSystemCertificates } from '../main/system-certificates.mjs';
 import { createStartupFeedbackClient } from '../main/feedback-client.mjs';
 import appPages from '../../src/shared/app-pages.json' with { type: 'json' };
 import posthogHost from '../../src/shared/posthog-host.json' with { type: 'json' };
+import { environmentSecrets } from '../../src/shared/environment-secrets.mjs';
 
 test('setup resources cannot read other origins or local files', () => {
   assert.equal(setupResource('nod-setup://app/index.html?firstSetup=true'), 'index.html');
@@ -591,6 +592,7 @@ async function runningDesktop(
     Buffer,
     trustSystemCertificates: trustCertificates,
     createStartupFeedbackClient,
+    environmentSecrets,
     app: {
       on: (name, listener) => appEvents.on(name, listener),
       once: (name, listener) => appEvents.once(name, listener),
@@ -957,6 +959,7 @@ async function runningDesktop(
   const source = (await readFile(new URL('../main/main.mjs', import.meta.url), 'utf8'))
     .replaceAll('\r\n', '\n')
     .replace(/^import[\s\S]*?;\n/gm, '')
+    .replace(/^const \{ environmentSecrets \} = await import\([\s\S]*?\);\n/m, '')
     .replaceAll(
       'import.meta.url',
       JSON.stringify(new URL('../main/main.mjs', import.meta.url).href),
@@ -10615,7 +10618,8 @@ test('startup report events survive retry and disk failure with bounded memory a
     prepareRuntime: async () => {
       attempts++;
       throw new Error(
-        `Synthetic startup attempt ${attempts} `.padEnd(1980, 'x') + `${customEngineRoot}/startup`,
+        (`Synthetic startup attempt ${attempts} ` + 'detail '.repeat(400)).slice(0, 1980) +
+          `${customEngineRoot}/startup`,
       );
     },
     startupFeedbackAction: async (message) => {
@@ -10636,7 +10640,9 @@ test('startup report events survive retry and disk failure with bounded memory a
     [f.profileRoot, '<profile>'],
   ]) {
     for (const variant of new Set([root, root.replaceAll('\\', '/')])) {
-      const clipped = f.bounded('Synthetic failure '.padEnd(1980, 'x') + variant + '/startup');
+      const clipped = f.bounded(
+        ('Synthetic failure ' + 'detail '.repeat(400)).slice(0, 1980) + variant + '/startup',
+      );
       assert.ok(clipped.endsWith(marker + '/startup'));
       assert.ok(!clipped.includes(variant.slice(0, 20)));
     }
@@ -10789,4 +10795,86 @@ test('startup reports do not wait for a stalled disk log write', async (t) => {
   } finally {
     clearTimeout(deadline);
   }
+});
+
+test('startup status hides environment credentials before preparation errors and text limits', async (t) => {
+  for (const [label, key, value, secret] of [
+    [
+      'feedback',
+      'NOD_FEEDBACK_TOKEN',
+      'synthetic-held-collector-secret',
+      'synthetic-held-collector-secret',
+    ],
+    ['traces', 'NOD_TRACES_TOKEN', 'synthetic-held-traces-secret', 'synthetic-held-traces-secret'],
+    [
+      'provider',
+      'AWS_BEARER_TOKEN_BEDROCK',
+      'synthetic-held-provider-secret',
+      'synthetic-held-provider-secret',
+    ],
+    ['short credential', 'NOD_FEEDBACK_TOKEN', 'k7X', 'k7X'],
+    [
+      'database password',
+      'DATABASE_URL',
+      'postgresql://synthetic:synthetic%2Bdatabase%2Fpassword@127.0.0.1/nod_synthetic',
+      'synthetic+database/password',
+    ],
+  ])
+    await t.test(label, async (t) => {
+      const calls = [];
+      const kept = Math.min(20, secret.length - 1);
+      const prefix = ('Synthetic startup failure ' + 'detail '.repeat(400)).slice(0, 2000 - kept);
+      const f = await runningDesktop(t, async () => assert.fail('The engine must not start.'), {
+        initialState: 'idle',
+        allowStart: true,
+        environment: { [key]: value },
+        prepareRuntime: async () => {
+          throw new Error(prefix + secret + ' end');
+        },
+        startupFeedbackAction: async (message) => {
+          calls.push(message);
+          return message.action === 'context'
+            ? { enabled: true, recipient: 'n8n', pending: null }
+            : null;
+        },
+      });
+      t.after(() => f.quit(() => {}));
+      await f.prepare({ retry: true }).catch(() => {});
+      assert.ok(f.status().error.startsWith('Synthetic startup failure '));
+      assert.ok(!f.status().error.includes(secret.slice(0, kept)));
+      f.showFeedback();
+      for (
+        let attempt = 0;
+        attempt < 100 &&
+        !f.windows.some((window) =>
+          window.sent.some(([name]) => name === 'nod:startup-feedback:open'),
+        );
+        attempt++
+      )
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      const window = f.windows.find((window) =>
+        window.sent.some(([name]) => name === 'nod:startup-feedback:open'),
+      );
+      const event = { sender: window.webContents, senderFrame: window.webContents.mainFrame };
+      await f.handlers.get('nod:startup-feedback:action')(event, 'context');
+      const initial = calls.find((call) => call.action === 'initialize').input;
+      assert.ok(initial.secrets.includes(secret));
+      const { createStartupFeedback } = await import('../../src/server/startup-feedback.ts');
+      const service = createStartupFeedback({
+        ...initial,
+        names: [],
+        delivery: {
+          configured: true,
+          recipient: 'n8n',
+          submit: () => assert.fail('A review must not send the report.'),
+          status: () => assert.fail('An unsent report has no receipt.'),
+        },
+      });
+      const review = await service.review({
+        feedback: 'Synthetic startup failure.',
+        includeReport: true,
+      });
+      assert.ok(!JSON.parse(review.content).startup.error.includes(secret.slice(0, kept)));
+      assert.equal(f.children.length, 0);
+    });
 });

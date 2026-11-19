@@ -260,7 +260,10 @@ let status = {
     needsRuntimeArchive: false,
   },
 };
-const knownSecrets = new Set();
+const { environmentSecrets } = await import(
+  pathToFileURL(join(engineRoot, 'src/shared/environment-secrets.mjs')).href
+);
+const knownSecrets = new Set(environmentSecrets(process.env));
 const startupFeedback = createStartupFeedbackClient({
   fork: (...args) => utilityProcess.fork(...args),
   file: join(engineRoot, 'desktop', 'main', 'feedback.mjs'),
@@ -427,7 +430,7 @@ function updateReadinessNotice() {
 function bounded(value, limit = 2000) {
   let message = String(value || 'The operation could not be completed.');
   for (const secret of knownSecrets)
-    if (secret.length > 7) message = message.replaceAll(secret, '[redacted]');
+    if (secret.length) message = message.replaceAll(secret, '[redacted]');
   return message
     .replaceAll(profileRoot, '<profile>')
     .replaceAll(profileRoot.replaceAll('\\', '/'), '<profile>')
@@ -2704,7 +2707,6 @@ async function startEngine({ runtime, signal, pending = false }) {
   const owner = await profileOwner();
   if (providerEnvironment.NOD_VAULT_KEY) knownSecrets.add(providerEnvironment.NOD_VAULT_KEY);
   if (runtime.env.DATABASE_URL) knownSecrets.add(runtime.env.DATABASE_URL);
-  if (process.env.NOD_FEEDBACK_TOKEN) knownSecrets.add(process.env.NOD_FEEDBACK_TOKEN);
   const { nodBuild } = JSON.parse(await readFile(join(desktopRoot, 'package.json'), 'utf8'));
   const tracesToken =
     typeof nodBuild?.tracesToken === 'string' ? nodBuild.tracesToken : process.env.NOD_TRACES_TOKEN;
