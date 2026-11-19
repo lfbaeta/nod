@@ -136,11 +136,16 @@ export function createPiMemoryCurator(options: {
     get configured() {
       return options.configured?.() ?? Boolean(options.apiKey);
     },
-    async curate({ task, instructions, input, images, automatic = true }, signal, report) {
+    async curate(
+      { task, instructions, input, responseSchema, images, automatic = true },
+      signal,
+      report,
+    ) {
       signal?.throwIfAborted();
       const traceTurnId = crypto.randomUUID();
       const bounded = task === 'classify' || task === 'attention' || task === 'check';
-      const review = signal !== undefined && (task === 'review' || task === 'access');
+      const turnBound =
+        signal !== undefined && ['review', 'access', 'skill', 'remember'].includes(task);
       if (options.resolve) loaded = undefined;
       loaded ??= load(automatic).catch((error) => {
         loaded = undefined;
@@ -197,7 +202,33 @@ export function createPiMemoryCurator(options: {
                     : {}),
                 }
               : {}),
-            signal: review
+            ...(responseSchema
+              ? {
+                  onPayload: (payload: unknown, target: Model<Api>) => {
+                    if (target.api === 'anthropic-messages') return uncachedInput(payload);
+                    if (
+                      target.provider !== 'openai' ||
+                      target.api !== 'openai-responses' ||
+                      !/^gpt-(?:5|6)(?:[.-]|$)/.test(target.id)
+                    )
+                      return undefined;
+                    const body = payload as { text?: Record<string, unknown> };
+                    return {
+                      ...body,
+                      text: {
+                        ...body.text,
+                        format: {
+                          type: 'json_schema',
+                          name: 'response',
+                          strict: true,
+                          schema: responseSchema,
+                        },
+                      },
+                    };
+                  },
+                }
+              : {}),
+            signal: turnBound
               ? signal
               : AbortSignal.any([
                   AbortSignal.timeout(bounded ? 10_000 : 45_000),
@@ -206,7 +237,7 @@ export function createPiMemoryCurator(options: {
             maxTokens: bounded ? 512 : 8192,
             ...(sessionId ? { sessionId } : {}),
             ...(bounded ? { maxRetries: 0, timeoutMs: 10_000 } : {}),
-            ...(review && model.provider === 'compatible'
+            ...(turnBound && model.provider === 'compatible'
               ? { timeoutMs: localModelSilenceMs }
               : {}),
             reasoning: effort === 'off' ? undefined : effort,
