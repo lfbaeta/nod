@@ -838,6 +838,9 @@ export function createLedger({
     return Object.fromEntries(rows.map(({ sessionId, costUsd }) => [sessionId, costUsd]));
   }
 
+  const unpricedOtherZero = `(m.details->>'category' IS DISTINCT FROM 'agent'
+    AND ${unpricedUsage('m.')} AND m.details->>'pricing' IS DISTINCT FROM 'reported')`;
+
   function usageForecastColumns(firstParameter: number, includePlanEstimates = true) {
     const thresholds = [...new Set(pricingThresholds?.() ?? [])];
     const tokens = {
@@ -866,12 +869,10 @@ export function createLedger({
     const otherCoverage = includePlanEstimates
       ? ''
       : `, count(*) FILTER (
-        WHERE ${other} AND (
-          (${costWithPlan} IS NULL
-           AND (COALESCE(m.details->>'status','succeeded') NOT IN ('failed','cancelled')
-                OR GREATEST(${tokenColumns.join(',')})>0))
-          OR (${unpricedUsage('m.')} AND m.details->>'pricing' IS DISTINCT FROM 'reported')
-        )
+        WHERE (${other} AND ${costWithPlan} IS NULL
+          AND (COALESCE(m.details->>'status','succeeded') NOT IN ('failed','cancelled')
+               OR GREATEST(${tokenColumns.join(',')})>0))
+          OR ${unpricedOtherZero}
       )>0 AS "unpricedOther"`;
     return {
       thresholds,
@@ -997,11 +998,13 @@ export function createLedger({
 
   async function recentTurnUsage(turnId?: string) {
     const { columns, thresholds } = usageForecastColumns(3);
+    const priced = `count(m.cost_usd)=count(*) AND sum(m.cost_usd)>0
+      AND count(*) FILTER (WHERE ${unpricedOtherZero})=0`;
     const { rows } = await pool.query<WorkUsage & { recordedUsd: number }>(
       `WITH recent AS (
         SELECT m.turn_id FROM model_usage m JOIN turns u ON u.id=m.turn_id AND u.owner_id=m.owner_id
         WHERE m.owner_id=$1 AND u.status='succeeded' GROUP BY m.turn_id
-        HAVING count(m.cost_usd)=count(*) AND sum(m.cost_usd)>0
+        HAVING ${priced}
         ORDER BY max(m.created_at) DESC,m.turn_id DESC LIMIT 20
       ), candidates AS (
         SELECT turn_id FROM recent UNION ALL SELECT $2::uuid WHERE NOT EXISTS (SELECT 1 FROM recent)
@@ -1009,7 +1012,7 @@ export function createLedger({
       SELECT sum(m.cost_usd)::float8 AS "recordedUsd",${columns}
       FROM model_usage m JOIN candidates c ON c.turn_id=m.turn_id
       WHERE m.owner_id=$1 GROUP BY m.turn_id
-      HAVING count(m.cost_usd)=count(*) AND sum(m.cost_usd)>0`,
+      HAVING ${priced}`,
       [ownerId, turnId ?? null, ...thresholds],
     );
     return rows;

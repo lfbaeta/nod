@@ -328,6 +328,22 @@ test(
           pricing = { ...original, longCacheWrites: false };
           const standardWrites = (await modelled.getSchedule(schedule.id)).monthlyUsd!;
           assert.ok(Math.abs(standardWrites / old - 1.8 / 1.88) < 1e-9);
+          const reviewUsage = randomUUID();
+          await db.pool.query(
+            'INSERT INTO model_usage(id,owner_id,turn_id,cost_usd,details) VALUES($1,$2,$3,0,$4)',
+            [
+              reviewUsage,
+              ownerId,
+              turnId,
+              { category: 'review', status: 'succeeded', pricing: 'sdk_estimate' },
+            ],
+          );
+          assert.equal((await modelled.getSchedule(schedule.id)).monthlyUsd, null);
+          await db.pool.query(
+            "UPDATE model_usage SET details=details || jsonb_build_object('pricing','reported') WHERE id=$1",
+            [reviewUsage],
+          );
+          assert.equal((await modelled.getSchedule(schedule.id)).monthlyUsd, standardWrites);
         } finally {
           await request('DELETE', `/api/schedules/${schedule.id}`);
           await db.pool.query('DELETE FROM model_usage WHERE turn_id=$1', [turnId]);
