@@ -7,6 +7,15 @@ sidebar:
 
 Nod keeps your data on your computer, or on your server if you self-host. This page shows what Nod sends to n8n and other services, and how to delete your data.
 
+## At a glance
+
+- **Usage sharing starts on.** It sends feature use, task types, failures, fixed **About you** choices and survey answers to n8n. Survey answers are sent as entered. Chat messages and saved memory stay out of usage data. Your email needs separate consent to updates. You can turn sharing off in **Settings → Privacy & data**.
+- **Conversation traces start off.** If you turn them on, the Nod team can review your conversations and app results. Nod removes personal details it recognizes before sending them, but some can remain. Traces are kept for 14 days and never used to train AI models. See [what each switch shares](#what-each-switch-shares).
+- **Connected services process content.** Your model services receive the conversation and what Nod reads for your work. By default, managed app calls pass through n8n's connection service and Composio. This includes email content when Nod reads or sends mail through a managed Gmail connection. Connecting an account grants access; the [trust check](/trust/approvals/) controls each app action.
+- **Zero Data Retention has a defined scope.** For covered Composio calls, it keeps request arguments, response data and error text out of execution logs. Composio still processes the call and keeps metadata. Tool search queries, files and app events have separate rules. Tool search queries can be kept to improve results. See [Composio Zero Data Retention](#composio-zero-data-retention).
+- **Storage location depends on the service.** Usage data and traces are stored in the EU. With usage sharing on, a consented onboarding email and any fixed **About you** choices you shared also go to n8n's Customer.io workspace in the US. Other services use their own storage and retention rules. Turning a switch off stops new sends for that setting; [request deletion](#what-each-switch-shares) for data already sent.
+- **Saved passwords and cards are in Vault.** They are encrypted on the computer or server that runs Nod. A login selected from 1Password is copied to Vault. Nod can fill secret values on a website for a sign-in or payment you allow, without giving those values to the model. See [how Vault stores secrets](/trust/vault/#how-vault-stores-secrets).
+
 ## What Nod shares with n8n
 
 Nod can share two kinds of data with the Nod team at n8n. Both help the team find where Nod gets stuck.

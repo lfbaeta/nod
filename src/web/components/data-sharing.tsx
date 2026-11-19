@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import {
   ArrowUpRight,
   ChartColumn,
+  Globe2,
   LockKeyhole,
   MessageSquareText,
   type IconComponent,
@@ -16,7 +17,7 @@ import {
   DialogTrigger,
 } from './ui';
 
-const detailsUrl = 'https://nod.n8n.io/docs/trust/privacy/#what-nod-shares-with-n8n';
+const detailsUrl = 'https://nod.n8n.io/docs/trust/privacy/';
 
 function Item({
   icon: Icon,
@@ -64,29 +65,42 @@ export function DataSharing({
       <DialogContent className="data-sharing">
         <DialogTitle>How Nod uses your data</DialogTitle>
         <DialogDescription>
-          A little data shows the Nod team at n8n where Nod gets stuck, so they can make it better.
+          These switches control sharing with the Nod team at n8n. Connected services also receive
+          the data they need to do your work.
         </DialogDescription>
         <ul>
           {usage !== undefined && (
             <Item icon={ChartColumn} title="Usage data" state={state(usage)}>
-              Which screens and features you use, the kinds of tasks you ask for, what fails, your
-              onboarding and survey answers, and your email (if you provide it). Never your
-              messages.
+              On by default. Feature use, task types, failures, fixed About you choices and survey
+              answers. Survey answers are sent as entered. Chat messages and memory stay out. Your
+              email needs separate consent.
             </Item>
           )}
           {traces !== undefined && (
             <Item icon={MessageSquareText} title="Conversation traces" state={state(traces)}>
-              Your chats with Nod, after it removes the personal details it can recognize. It can
-              miss some. Deleted after 14 days and never used to train AI.
+              Off by default. Conversations and app results for the team to review. Nod removes
+              personal details it recognizes, but some can remain. Kept for 14 days. Never used to
+              train AI models.
             </Item>
           )}
-          <Item icon={LockKeyhole} title="Never shared">
-            Saved passwords and cards, your memory, or screen recordings.
+          <Item icon={Globe2} title="Your models and connected apps">
+            Your model services receive your conversation and what Nod reads. By default, managed
+            app calls pass through n8n&apos;s connection service and Composio, including email
+            content.
+          </Item>
+          <Item icon={LockKeyhole} title="Saved passwords and cards">
+            Encrypted in Vault on your Nod computer or server. Nod fills secret values on websites
+            for sign-ins and payments you allow, without showing them to the model.
           </Item>
         </ul>
         <p>
-          Stored in the EU. Turning a switch off stops new data of that kind; ask us to delete
-          earlier data.
+          Zero Data Retention limits covered execution logs. Services still process the data.
+          Composio can keep tool search queries. Files and app events have separate rules.
+        </p>
+        <p>
+          Usage data and traces are stored in the EU. With usage sharing on, a consented onboarding
+          email and any fixed About you choices you shared also go to Customer.io in the US. Turning
+          a switch off stops new sends for that setting; ask us to delete earlier data.
         </p>
         <div className="data-sharing-actions">
           <a href={detailsUrl} target="_blank" rel="noreferrer">
