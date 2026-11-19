@@ -614,6 +614,88 @@ test('wide output models reserve room for request input', async (t) => {
   assert.equal(bodies[0].max_tokens, 50_000);
 });
 
+test('wide OpenRouter requests bound completion reservations without dropping input', async () => {
+  const id = 'fixture/wide-output';
+  const [discovered] = await createPiModelBackend({
+    fetch: async (url) =>
+      String(url).endsWith('/key')
+        ? Response.json({ data: {} })
+        : Response.json({
+            data: [
+              {
+                id,
+                name: 'Synthetic wide output model',
+                context_length: 1_048_576,
+                top_provider: { max_completion_tokens: 524_288 },
+                supported_parameters: ['tools', 'reasoning'],
+                reasoning: { supported_efforts: ['none', 'high'] },
+                architecture: { input_modalities: ['text'], output_modalities: ['text'] },
+                pricing: { prompt: '0.000001', completion: '0.000001' },
+              },
+            ],
+          }),
+  }).catalog('openrouter', 'api_key', { type: 'api_key', key: 'fixture-wide-key' });
+  assert.ok(discovered);
+  for (const maximum of [524_288, 8192]) {
+    const access = smallContextAccess('openrouter', id, 1_048_576);
+    access.definition = JSON.parse(JSON.stringify(discovered));
+    access.definition.spec.maxTokens = maximum;
+    const { runtime, model } = await createPiModelRuntime(access);
+    const earlier = 'Synthetic earlier conversation. '.repeat(5000);
+    const messages: Context['messages'] = [
+      { role: 'user', content: earlier, timestamp: 1 },
+      { role: 'user', content: 'Return a short synthetic report.', timestamp: 2 },
+    ];
+    const bodies: Record<string, any>[] = [];
+    for (const maxTokens of [undefined, 512, 1]) {
+      const result = await runtime.completeSimple(
+        model,
+        { systemPrompt: 'Keep the synthetic owner instruction.', messages },
+        {
+          maxTokens,
+          reasoning: 'high',
+          maxRetries: 0,
+          fetch: async (_input, init) => {
+            const body = JSON.parse(String(init?.body));
+            bodies.push(body);
+            if ((body.max_tokens ?? body.max_completion_tokens) > 60_000)
+              return Response.json(
+                {
+                  error: {
+                    message: 'Synthetic credit limit: completion reservation is too large.',
+                  },
+                },
+                { status: 402 },
+              );
+            return new Response(
+              `data: ${JSON.stringify({
+                id: 'fixture-wide-answer',
+                choices: [
+                  { index: 0, delta: { content: 'Synthetic report.' }, finish_reason: 'stop' },
+                ],
+              })}\n\ndata: [DONE]\n\n`,
+              { headers: { 'content-type': 'text/event-stream' } },
+            );
+          },
+        },
+      );
+      assert.equal(result.stopReason, 'stop', result.errorMessage);
+    }
+    assert.equal(bodies.length, 3);
+    assert.deepEqual(
+      bodies.map((body) => body.max_tokens ?? body.max_completion_tokens),
+      [Math.min(maximum, 32_768), 512, 1],
+    );
+    assert.equal(model.contextWindow, 1_048_576);
+    assert.equal(model.maxTokens, bodies[0].max_tokens ?? bodies[0].max_completion_tokens);
+    for (const body of bodies) {
+      assert.equal(body.reasoning.effort, 'high');
+      assert.ok(body.messages.some((message: any) => message.content === earlier));
+      assert.ok(JSON.stringify(body).includes('Keep the synthetic owner instruction.'));
+    }
+  }
+});
+
 test('streamed content part arrays reach the answer as text', async (t) => {
   const chunks = [
     [{ type: 'thinking', thinking: [{ type: 'text', text: 'Synthetic plan.' }] }],
