@@ -2491,6 +2491,7 @@ test('waiting scheduled runs open their pending question without starting anothe
   let stopFailure = false;
   let releaseSchedules = () => {};
   let scheduleWait: Promise<void> | undefined;
+  let oneTime: Schedule | undefined;
   t.mock.method(globalThis, 'fetch', async (input: RequestInfo | URL, options?: RequestInit) => {
     const path = String(input);
     const method = options?.method ?? 'GET';
@@ -2512,7 +2513,7 @@ test('waiting scheduled runs open their pending question without starting anothe
       return Response.json({ turnId: queued.turnId, activeRun: schedule.activeRun });
     }
     if (path === '/api/schedules') {
-      const response = [schedule];
+      const response = oneTime ? [schedule, oneTime] : [schedule];
       await scheduleWait;
       return Response.json(response);
     }
@@ -2711,4 +2712,30 @@ test('waiting scheduled runs open their pending question without starting anothe
     ),
     false,
   );
+
+  oneTime = {
+    ...schedule,
+    id: randomUUID(),
+    title: 'Synthetic one-time review',
+    kind: 'once',
+    cron: null,
+    runAt: schedule.nextRun,
+    lastRun: null,
+  };
+  await act(async () => pageDataCache.refresh('/api/schedules', true));
+  assert.equal(dom.window.document.querySelector('details.schedule-inactive'), null);
+  oneTime = {
+    ...oneTime,
+    enabled: false,
+    nextRun: null,
+    activeRun: { turnId: randomUUID(), status: 'running', questionMessageId: null },
+  };
+  await act(async () => pageDataCache.refresh('/api/schedules', true));
+  const inactive = dom.window.document.querySelector<HTMLDetailsElement>(
+    'details.schedule-inactive',
+  );
+  assert.ok(inactive?.open, 'A one-time run stays visible when it moves into Inactive.');
+  oneTime = { ...oneTime, activeRun: null };
+  await act(async () => pageDataCache.refresh('/api/schedules', true));
+  assert.equal(inactive.open, true);
 });
