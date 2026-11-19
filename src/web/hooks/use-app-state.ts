@@ -111,6 +111,7 @@ export function useAppState(accountId?: string) {
   useEffect(() => {
     active.current = true;
     let subscribed = true;
+    let activityWithoutScheduleRuns = '[]';
     void refresh();
     const closeEvents = subscribeAppEvents(accountId, {
       open() {
@@ -139,7 +140,13 @@ export function useAppState(accountId?: string) {
             const activity = data.items;
             setState((current) => (current ? { ...current, activity } : current));
             activitySeen.current++;
-            pageDataCache.revalidateActive('/api/tasks');
+            const taskRelatedActivity = JSON.stringify(
+              activity.filter((item) => item.taskId || !item.runId),
+            );
+            if (taskRelatedActivity !== activityWithoutScheduleRuns) {
+              activityWithoutScheduleRuns = taskRelatedActivity;
+              pageDataCache.revalidateActive('/api/tasks');
+            }
           }
           if (data.type === 'refresh') {
             pageDataCache.revalidateActive();

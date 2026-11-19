@@ -360,7 +360,8 @@ export function createSchedules(dependencies: ScheduleDependencies) {
           FROM schedule_runs r
          JOIN turns u ON u.owner_id=r.owner_id AND u.session_id=r.turn_id
          WHERE r.owner_id=$1 AND r.schedule_id=$2 AND (u.status IN ('queued','running')
-           OR (${waitingTurnSql('u')})) ORDER BY u.created_at DESC,u.id DESC LIMIT 1`,
+           OR (${waitingTurnSql('u')}))
+         ORDER BY (u.status='running') DESC,(u.status='queued') DESC,u.created_at DESC,u.id DESC LIMIT 1`,
       [ownerId, scheduleId],
     );
     return rows[0] ?? null;

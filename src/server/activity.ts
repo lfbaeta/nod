@@ -27,11 +27,14 @@ const query = (
     CASE WHEN u.status='running' THEN ARRAY(SELECT q.message_id FROM turns q WHERE q.owner_id=u.owner_id
       AND q.session_id=u.session_id AND q.status='queued' AND q.source IN ('user','task') AND q.message_id IS NOT NULL
       ORDER BY q.created_at,q.id) END AS received_message_ids,
-    ${runs ? '(SELECT r.id FROM schedule_runs r WHERE r.owner_id=u.owner_id AND r.turn_id=u.session_id LIMIT 1)' : 'NULL'} AS run_id
+    r.id AS run_id,r.schedule_id
   FROM turns u
   JOIN threads th ON th.id=u.thread_id AND th.owner_id=u.owner_id AND th.archived_at IS NULL
   LEFT JOIN LATERAL (SELECT id,title,now_text,message_id FROM tasks WHERE owner_id=u.owner_id AND session_id=u.session_id
     ORDER BY created_at DESC LIMIT 1) t ON true
+  LEFT JOIN LATERAL (
+    ${runs ? 'SELECT id,schedule_id FROM schedule_runs WHERE owner_id=u.owner_id AND turn_id=u.session_id LIMIT 1' : 'SELECT NULL AS id, NULL AS schedule_id'}
+  ) r ON true
   LEFT JOIN LATERAL (SELECT type,summary,created_at FROM turn_events WHERE turn_id=u.id AND type IN ('step','thought','retry')
     ORDER BY created_at DESC,id DESC LIMIT 1) s ON true
   LEFT JOIN LATERAL (SELECT true AS calling,e.site,e.summary AS tool FROM turn_events e WHERE e.turn_id=u.id AND e.type='tool_start'
@@ -59,7 +62,8 @@ const query = (
     (SELECT max(created_at) FROM turn_events WHERE turn_id=u.id
        AND type IN ('started','steered','step','thought','tool_start','tool_complete','tool_failed','agent_start')) AS worked,
     (SELECT max(created_at) FROM turn_events WHERE turn_id=u.id AND type='final') AS finished) w
-  WHERE u.owner_id=$1 AND u.status IN ('queued','running') AND (${ownerStarted()} OR t.id IS NOT NULL)
+  WHERE u.owner_id=$1 AND u.status IN ('queued','running')
+    AND (${ownerStarted()} OR t.id IS NOT NULL OR r.id IS NOT NULL)
     AND (w.finished IS NULL OR w.worked>w.finished)
   ORDER BY u.session_id,u.status='running' DESC,u.created_at,u.id`;
 
@@ -178,7 +182,9 @@ export function createActivity({
           ? { received: true as const, receivedMessageIds: row.received_message_ids }
           : {}),
         ...(row.owner_started ? {} : { background: true as const }),
-        ...(row.run_id ? { runId: row.run_id as string } : {}),
+        ...(row.run_id
+          ? { runId: row.run_id as string, scheduleId: row.schedule_id as string }
+          : {}),
       }))
       .sort((a, b) => a.since.localeCompare(b.since));
   }

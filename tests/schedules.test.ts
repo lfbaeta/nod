@@ -40,6 +40,7 @@ test(
     process.env.PGBOSS_SCHEMA = bossSchema;
     const db = await import('../src/server/db.ts');
     const { createPersonalService } = await import('../src/server/personal.ts');
+    const { createActivity } = await import('../src/server/activity.ts');
     const { createTasks } = await import('../src/server/tasks.ts');
     const thread = await import('../src/server/thread.ts');
     const { createChannels } = await import('../src/server/channels.ts');
@@ -332,9 +333,18 @@ test(
               assert.equal((await saved(schedule.id)).lastRun?.status, state);
             }
             await db.pool.query("UPDATE turns SET status='running' WHERE id=$1", [resumed]);
+            const pendingResume = await thread.enqueueTurn('Synthetic queued continuation', {
+              source: 'resume',
+              sessionId: resumedRoot,
+              parentTurnId: resumed,
+              background: true,
+            });
+            targets.push(pendingResume);
+            assert.equal((await saved(schedule.id)).activeRun?.turnId, resumed);
             const stopped = await stop(schedule.id, resumed);
             assert.equal(stopped.statusCode, 200, stopped.body);
             assert.equal(await status(resumed), 'cancelled');
+            assert.equal(await status(pendingResume), 'cancelled');
             assert.equal(clearedBrowsers.at(-1), resumedRoot);
             assert.equal(
               (await runs(schedule.id)).find((run) => run.turnId === resumedRoot)?.status,
@@ -403,7 +413,30 @@ test(
           assert.equal(turn.source, 'schedule');
           assert.equal(turn.background, true);
           assert.match(turn.prompt, /Return a synthetic result only/);
+          const activity = createActivity({ pool: db.pool, ownerId });
+          const runActivity = async () =>
+            (await activity.current()).find((item) => item.turnId === run!.turnId);
+          const queued = await runActivity();
+          assert.equal(
+            queued?.runId,
+            run!.id,
+            'A queued schedule should publish its run activity.',
+          );
+          assert.equal(queued?.doing, 'queued');
+          assert.equal(queued?.scheduleId, schedule.id);
+          assert.equal(queued?.background, true);
+          await db.pool.query("UPDATE turns SET status='running',started_at=now() WHERE id=$1", [
+            run!.turnId,
+          ]);
+          await db.pool.query(
+            "INSERT INTO turn_events(id,turn_id,type,summary,call_id) VALUES($1,$2,'tool_start','read',$3)",
+            [randomUUID(), run!.turnId, randomUUID()],
+          );
+          const running = await runActivity();
+          assert.equal(running?.doing, 'tool');
+          assert.ok(running?.tool);
           await db.pool.query("UPDATE turns SET status='succeeded' WHERE id=$1", [run!.turnId]);
+          assert.equal(await runActivity(), undefined);
           const repeated = await runNow(schedule, requestId);
           assert.deepEqual(repeated.json(), { turnId: run!.turnId, activeRun: null });
           assert.equal((await runs(schedule.id)).length, 1);
