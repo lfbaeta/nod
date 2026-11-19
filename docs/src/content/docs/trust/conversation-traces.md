@@ -5,7 +5,7 @@ sidebar:
   order: 12
 ---
 
-Conversation traces let the Nod team at n8n see how Nod handles real requests, so they can find and fix problems. They're off until you turn them on. Nod removes personal details on the machine running your assistant before sending a trace.
+Conversation traces let the Nod team at n8n see how Nod handles real requests, so they can find and fix problems. They're off until you turn them on. Nod masks known secrets and personal details it recognizes before sending a trace. Other private content can remain.
 
 This page describes n8n's trace service, used by official desktop builds. A server operator can configure another receiver; that receiver controls access and retention.
 
@@ -28,9 +28,9 @@ While the switch is on, each request Nod makes to your model becomes one trace, 
 
 | Sent, after scrubbing                                                                                                           | Never sent                                                                              |
 | ------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| The messages and tool results the model saw for that request, including text Nod read from [local files](/connect/local-files/) | Your account, installation or device identifier                                         |
+| The messages and tool results the model saw for that request, including text Nod read from [local files](/connect/local-files/) | The original Nod session ID in trace metadata                                           |
 | Nod's instructions, without your saved memory, learned skills and formats                                                       | Images, which become `[image]`                                                          |
-| The names of the tools the model could use                                                                                      | Saved passwords, codes and cards, which Nod's model never sees                          |
+| The names of the tools the model could use                                                                                      |                                                                                         |
 | The model's reply                                                                                                               | Checks of emails that may give access to an account                                     |
 | The model name, token counts and cost                                                                                           | Requests to decision services                                                           |
 |                                                                                                                                 | Separate requests to the models that write your memory, writing style or learned skills |
@@ -77,20 +77,20 @@ He can call me on 612 345 678 or at the office, 203.0.113.42. Thanks, Marta
 He can call me on [phone] or at the office, [ip]. Thanks, [owner]
 ```
 
-The invoice number stays, because it isn't personal. Checks that need a valid number, such as the card checksum, keep ordinary numbers like order IDs and dates.
+The invoice number stays because it does not match these redaction rules. Checks that need a valid number, such as the card checksum, keep numbers that do not match, such as order IDs and dates.
 
 :::caution[Removal is automatic]
-Nod removes what it can recognize. A trace can still contain personal details written in other forms, such as another person's name in a sentence, a delivery address on a shopping page or other people's messages in an app such as Slack. Turn traces on only if you're comfortable with that.
+Nod removes what it can recognize. A trace can still contain private content in other forms, such as an unrecognized secret, account or device ID, another person's name, a delivery address or other people's messages in an app such as Slack. Turn traces on only if you're comfortable with that.
 :::
 
 ## How traces are pseudonymised
 
-- **No account or device ID.** A trace carries no account, installation or device identifier, and no analytics ID.
-- **IDs that expire.** The traces of one conversation are grouped under a random ID so the team can read them in order. A conversation is one chat, task or background check, and it gets a new ID after 30 minutes without a request to the model or when Nod restarts. Nod's own IDs on a trace and inside messages and tool results get a keyed hash that changes every day and whenever Nod restarts. Its key stays with the assistant, so these IDs alone don't link traces to you, to other conversations or to other Nod data such as feedback reports. Other content can still connect traces, such as a website address, a document link or an account handle.
+- **Session metadata.** Nod removes its original session ID from trace metadata and replaces its turn and run IDs with keyed hashes. Account or device IDs in conversation text or app results can remain.
+- **IDs that change.** The traces of one conversation are grouped under a random ID so the team can read them in order. A conversation is one chat, task or background check, and it gets a new ID after 30 minutes without a request to the model or when Nod restarts. Nod's own IDs on a trace and inside messages and tool results get a keyed hash that changes every day and whenever Nod restarts. The key stays with the assistant and hides the original IDs. Repeated IDs can still link traces within the same runtime and UTC day. Other content can also connect traces, such as a website address, a document link or an account handle.
 - **No owner context.** Nod replaces your saved memory, learned skills and format preferences with `[owner context omitted]`, including memory notes and learned skills it reads with a tool. Those reads keep only their action, such as `memory_read`, not the note path, search words or skill name. The attention and review tasks that read your saved memory are not traced at all, and a codemode step keeps neither its script nor its result, because a script can read memory or a connected account.
 - **No images.** Images are replaced with `[image]`.
 
-These steps remove the direct links to you. Traces are still pseudonymised, not anonymous: what a conversation says can identify you, for example a detail the scrubber doesn't recognize.
+These steps reduce direct links to you. Traces are still pseudonymised, not anonymous: what a conversation says can identify you, for example a detail the scrubber doesn't recognize.
 
 ## Where traces go
 

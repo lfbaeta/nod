@@ -13,7 +13,7 @@ Nod keeps your data on your computer, or on your server if you self-host. This p
 - **Conversation traces start off for new owners.** Existing owners keep their saved choice. If you turn them on with n8n's default trace service, the Nod team can review your conversations and app results. A custom trace service sends them to its operator. Nod removes personal details it recognizes before sending them. Traces can still identify you. n8n's default trace service keeps them for 14 days and never uses them to train AI models. Custom trace services use their operator's storage and retention rules. See [what each switch shares](#what-each-switch-shares).
 - **Connected services process content.** Your model services receive the conversation and what Nod reads for your work. By default, managed app calls pass through n8n's connection service and Composio. This includes email content when Nod reads or sends mail through a managed Gmail connection. Connecting an account grants access; the [trust check](/trust/approvals/) controls each app action.
 - **Zero Data Retention has a defined scope.** When Composio ZDR is on for the project, covered calls keep request arguments, response data and error text out of execution logs. Calls through Composio Managed OAuth apps also need Enterprise for this coverage. Composio still processes the call and keeps metadata. Tool search queries, files and trigger events have separate rules. Composio can cache tool search queries to improve results, as its [ZDR scope](https://docs.composio.dev/docs/security/zero-data-retention#what-zdr-does-not-cover) explains. See [Composio Zero Data Retention](#composio-zero-data-retention) for Nod's default service.
-- **Storage location depends on the service.** n8n's default services store usage data and traces in the EU. With usage sharing on and your consent to updates, n8n's default signup service sends your email address and signup data to Customer.io in the US. The signup also includes fixed **About you** choices only if you shared them successfully. Other services use their own storage and retention rules. Turning a switch off stops new sends for that setting. A send already in progress can finish. [Request deletion](#what-each-switch-shares) for data sent to n8n. For data sent to a custom trace service, contact its operator.
+- **Storage location depends on the service.** n8n's default services store usage data and traces in the EU. With usage sharing on and your consent to updates, n8n's default services link your email address and consent record to usage data in EU PostHog. The default signup service also sends the address and signup data to Customer.io in the US. The signup also includes fixed **About you** choices only if you shared them successfully. A failed signup can leave data in either service. Other services use their own storage and retention rules. Turning a switch off stops new sends for that setting. A send already in progress can finish. [Request deletion](#what-each-switch-shares) for data sent to n8n. For data sent to a custom trace service, contact its operator.
 - **Saved passwords and cards are in Vault.** They are encrypted on the computer or server that runs Nod. A login selected from 1Password is copied to Vault. Nod can fill secret values on a website for a sign-in or payment you allow. Tools that fill saved values do not return them to the model. Private content visible in screenshots can still reach your model services. See [how Vault stores secrets](/trust/vault/#how-vault-stores-secrets).
 
 ## What Nod shares with n8n
@@ -70,19 +70,19 @@ The trace also includes Nod's instructions, the model name, token counts, and co
 | Default    | On                                                                                                                                                                                                                      |
 | Includes   | Screens and features you use, kinds of tasks, timings, costs, failures, basic device details such as browser, OS, screen and viewport size, pseudonymous session and window IDs, and your onboarding and survey answers |
 | Excludes   | Your messages to Nod, Nod's replies, what Nod reads, saved passwords and cards, and screen recordings or session replays. Survey answers may contain personal details because Nod sends them as typed                   |
-| Your email | If you give it in onboarding, it is linked to your usage data so that n8n can email you about Nod and other n8n products. Unsubscribe via the link in every email. Unlink your email from usage data at privacy@n8n.io. |
-| Stored in  | n8n's PostHog project in the EU. A consented email and any successfully shared fixed About you choices also go to n8n's Customer.io Labs workspace in the US.                                                           |
+| Your email | If you submit it in onboarding with consent to updates and usage sharing on, it is linked to your usage data. Unsubscribe via the link in each email. To unlink or delete it, write to privacy@n8n.io.                  |
+| Stored in  | n8n's PostHog project in the EU. A consented signup also sends the email address and any successfully shared fixed About you choices to n8n's Customer.io Labs workspace in the US.                                     |
 | Switch     | **Share usage data**                                                                                                                                                                                                    |
 | Details    | [Analytics](/deploy/analytics/)                                                                                                                                                                                         |
 
-|                | Conversation traces                                                                                     |
-| -------------- | ------------------------------------------------------------------------------------------------------- |
-| Default        | Off                                                                                                     |
-| Includes       | Your conversations with Nod, including what it reads and does, minus the personal details it recognizes |
-| Never includes | Passwords, cards, your saved memory, images, or account and device IDs                                  |
-| Stored in      | n8n's LangSmith project in the EU for 14 days. Never used to train AI models.                           |
-| Switch         | **Share conversation traces**                                                                           |
-| Details        | [Conversation traces](/trust/conversation-traces/)                                                      |
+|           | Conversation traces                                                                                                           |
+| --------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| Default   | Off                                                                                                                           |
+| Includes  | Your conversations with Nod, including what it reads and does, minus the personal details it recognizes                       |
+| Redaction | Known secrets and recognized personal details are masked. Other private content, including account or device IDs, can remain. |
+| Stored in | n8n's LangSmith project in the EU for 14 days. Never used to train AI models.                                                 |
+| Switch    | **Share conversation traces**                                                                                                 |
+| Details   | [Conversation traces](/trust/conversation-traces/)                                                                            |
 
 Both switches are in **Settings → Privacy & data**. Turning one off stops subsequent sends, though a send already in flight may finish. It does not delete data already sent, including About you answers and a consented email. To request deletion, write to privacy@n8n.io. A server operator can turn either switch off for everyone.
 
@@ -117,7 +117,7 @@ For what Nod stores and for how long, see the [Security review guide](/trust/sec
 | n8n                                 | Desktop update checks, which show your IP address, app version, and platform. Usage data, traces, and feedback, if you allow them. A consented onboarding email and fixed About you choices pass through an internal n8n workflow while usage sharing is on. |
 | Customer.io                         | An unverified onboarding email signup, the checkbox claim and receipt time, and fixed About you choices. n8n uses its Labs workspace in the US. Typed **Something else** answers do not go there.                                                            |
 
-Your model keys stay encrypted on your installation. They never enter a prompt, Nod's workspace, or its browser.
+Model keys Nod saves are encrypted at rest. Keys you set in a shell or `.env` file use that configuration's storage protections. Nod does not add model keys to prompts, its workspace or its browser.
 
 ### Composio Zero Data Retention
 
