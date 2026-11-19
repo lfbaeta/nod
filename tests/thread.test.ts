@@ -13689,7 +13689,12 @@ test(
       await pool.query('DELETE FROM turn_events WHERE turn_id=$1', [chat]);
       const completedSteps: string[] = [];
       let eventTime = Date.now() - 60_000;
-      const record = async (type: string, callId: string | null, site: string | null) => {
+      const record = async (
+        type: string,
+        callId: string | null,
+        site: string | null,
+        runId = mainRun,
+      ) => {
         const result = await pool.query<{ id: string }>(
           `INSERT INTO turn_events(turn_id,type,summary,run_id,call_id,site,created_at)
             VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
@@ -13697,7 +13702,7 @@ test(
             chat,
             type,
             type === 'step' ? 'Checking synthetic notes' : 'read',
-            mainRun,
+            runId,
             callId,
             site,
             new Date(eventTime++),
@@ -13731,22 +13736,41 @@ test(
           .count,
         eventCount,
       );
-      await record('steered', null, null);
-      await pool.query('UPDATE turn_events SET summary=$2 WHERE id=$1', [
-        await record('step', null, null),
-        '   ',
-      ]);
-      const ungrouped: string[] = [];
-      for (let call = 0; call < 2; call++) {
-        const callId = randomUUID();
-        await record('tool_start', callId, null);
-        ungrouped.unshift(await record('tool_complete', callId, null));
-      }
+      await record('step', null, null, helperRun);
+      const runCompletions = new Map<string, string>();
+      for (let call = 0; call < 2; call++)
+        for (const runId of [mainRun, helperRun]) {
+          const callId = randomUUID();
+          await record('tool_start', callId, null, runId);
+          runCompletions.set(runId, await record('tool_complete', callId, null, runId));
+        }
       assert.deepEqual(
         (await live()).recent?.slice(0, 2).map((entry) => entry.id),
-        ungrouped,
-        'Operations without a current step keep their individual activity entries',
+        [runCompletions.get(helperRun), runCompletions.get(mainRun)],
+        'A helper progress update cannot group the parent run with its helper',
       );
+      const ungrouped = async () => {
+        const completions: string[] = [];
+        for (let call = 0; call < 2; call++) {
+          const callId = randomUUID();
+          await record('tool_start', callId, null);
+          completions.unshift(await record('tool_complete', callId, null));
+        }
+        assert.deepEqual(
+          (await live()).recent?.slice(0, 2).map((entry) => entry.id),
+          completions,
+          'Operations without a current step keep their individual activity entries',
+        );
+      };
+      await record('steered', null, null);
+      await ungrouped();
+      for (const summary of ['   ', '\t\n', '\u00a0', '\u2007', '\u202f', '\ufeff']) {
+        await pool.query('UPDATE turn_events SET summary=$2 WHERE id=$1', [
+          await record('step', null, null),
+          summary,
+        ]);
+        await ungrouped();
+      }
     } finally {
       await pool.end();
       await admin.query(`DROP SCHEMA ${schema} CASCADE`);

@@ -12,6 +12,9 @@ export type LiveWork = Activity & {
   receivedMessageIds?: string[];
 };
 
+const trimCharacters =
+  '\t\n\v\f\r \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff';
+
 const query = (
   runs: boolean,
 ) => `SELECT DISTINCT ON (u.session_id) u.id,u.channel,u.status,COALESCE(u.started_at,u.created_at) AS since,
@@ -40,7 +43,7 @@ const query = (
       SELECT DISTINCT ON (COALESCE(p.id,e.id)) e.id,e.summary,e.site,e.created_at,p.summary AS step
       FROM turn_events e
       LEFT JOIN LATERAL (
-        SELECT CASE WHEN p.type='step' AND btrim(p.summary)<>'' THEN p.id END AS id,
+        SELECT CASE WHEN p.type='step' AND btrim(p.summary,$2)<>'' THEN p.id END AS id,
           CASE WHEN p.type='step' THEN p.summary END AS summary
         FROM turn_events p WHERE p.turn_id=u.id AND p.type IN ('step','steered')
             AND (p.type='steered' OR p.run_id IS NOT DISTINCT FROM e.run_id)
@@ -133,7 +136,7 @@ export function createActivity({
     const runs = Boolean(
       (await pool.query("SELECT to_regclass('schedule_runs') AS name")).rows[0]?.name,
     );
-    const { rows } = await pool.query(query(runs), [ownerId]);
+    const { rows } = await pool.query(query(runs), [ownerId, trimCharacters]);
     const name = model?.();
     return rows
       .map((row) => ({
