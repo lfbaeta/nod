@@ -9645,7 +9645,7 @@ test('task and batch classification have a small request budget and never retrie
       });
 });
 
-test('action reviews can finish after a slow response and still stop before completion', async (t) => {
+test('turn-bound reviews and memory writes can finish slowly and still stop before completion', async (t) => {
   const clock = t.mock.timers;
   t.mock.method(AbortSignal, 'timeout', (milliseconds: number) => {
     const deadline = new AbortController();
@@ -9659,7 +9659,7 @@ test('action reviews can finish after a slow response and still stop before comp
   });
   t.mock.timers.enable({ apis: ['setTimeout'] });
   for (const provider of ['compatible', 'openai'] as const)
-    for (const task of ['review', 'access'] as const)
+    for (const task of ['review', 'access', 'skill', 'remember'] as const)
       for (const stopped of [false, true, undefined])
         await t.test(
           `${provider} ${task} ${stopped === undefined ? 'without a signal' : stopped ? 'stopped' : 'completed'}`,
@@ -9858,6 +9858,85 @@ test('action review failures identify the task, model, provider, and bounded pro
   assert.equal(calls, 1);
   assert.ok(sessions[0]);
   assert.equal(new Set(sessions).size, 1);
+});
+
+test('OpenAI review output schemas constrain both key and subscription requests without leaking to later calls', async (t) => {
+  const responseSchema = {
+    type: 'object',
+    properties: { text: { type: 'string' }, action: { type: 'string' } },
+    required: ['text', 'action'],
+    additionalProperties: false,
+  };
+  for (const [provider, method, id, api, constrained, targetId = id] of [
+    ['openai', 'api_key', 'gpt-6-luna', 'openai-responses', true],
+    ['openai', 'subscription', 'gpt-6-luna', 'openai-responses', true],
+    ['openai', 'api_key', 'gpt-5.4', 'openai-responses', true],
+    ['openai', 'api_key', 'gpt-4o-2024-05-13', 'openai-responses', false],
+    ['openai', 'api_key', 'ft:gpt-6-luna:synthetic', 'openai-responses', false],
+    ['compatible', 'api_key', 'gpt-6-luna', 'openai-responses', false],
+    ['openai', 'api_key', 'gpt-6-luna', 'openai-completions', false],
+    ['openai', 'api_key', 'gpt-6-luna', 'openai-responses', false, 'gpt-4o-2024-05-13'],
+  ] as const)
+    await t.test(`${provider}/${id}/${targetId}/${api}/${method}`, async (t) => {
+      const access = smallContextAccess('compatible', id, 128000);
+      access.provider = provider;
+      access.method = method;
+      access.definition.spec = {
+        ...access.definition.spec,
+        provider,
+        api,
+        baseUrl: 'https://api.openai.com/v1',
+      };
+      access.read = async () =>
+        method === 'subscription'
+          ? chatgptFixtureCredential()
+          : { type: 'api_key', key: 'fixture-output-key' };
+      const payloads: unknown[] = [];
+      const model = access.definition.spec;
+      t.mock.method(ModelRuntime, 'create', async () => ({
+        registerProvider() {},
+        refresh: async () => {},
+        streamSimple() {},
+        getModel: () => model,
+        completeSimple: async (
+          _model: unknown,
+          _context: unknown,
+          options: { onPayload?: (body: unknown, target: unknown) => unknown },
+        ) => {
+          const body = { text: { verbosity: 'low' } };
+          payloads.push((await options.onPayload?.(body, { ...model, id: targetId })) ?? body);
+          return fauxAssistantMessage('{"text":"Save the synthetic rule?","action":"Save rule"}');
+        },
+      }));
+      const curator = createPiMemoryCurator({
+        provider,
+        configured: () => true,
+        resolve: async () => access,
+      });
+      await curator.curate({
+        task: 'review',
+        instructions: 'Write a synthetic confirmation.',
+        input: {},
+        responseSchema,
+      });
+      assert.deepEqual(payloads[0], {
+        text: {
+          verbosity: 'low',
+          ...(constrained
+            ? {
+                format: {
+                  type: 'json_schema',
+                  name: 'response',
+                  strict: true,
+                  schema: responseSchema,
+                },
+              }
+            : {}),
+        },
+      });
+      await curator.curate({ task: 'review', instructions: 'Review the action.', input: {} });
+      assert.deepEqual(payloads[1], { text: { verbosity: 'low' } });
+    });
 });
 
 test('an unavailable classification resolver never loads a fallback model', async () => {

@@ -302,6 +302,8 @@ Nod derives live activity from the current work. For longer work and activity ch
 
 A turn that stops on an error tells you what stopped it, in your language. A failed schedule run, or a failed task Nod started on its own, names that work in its failure message. A task's planned check resumes the task's own session when it's due.
 
+Five repeated input or permission failures from the same tool stop the turn. A successful call to that tool clears its failure count. Nod reports the last failure without creating an unexpected-error report. A refused workspace command does not run.
+
 Nod reports progress when you can use a result now, a change affects your next step, or it needs your help. A claim that work was created, updated or completed needs a successful tool result. The message includes the result, an attachment or a checked link you can open. Internal record changes and private preparation stay quiet unless you ask about them. These instructions guide the model. For a proactive nudge, the server also adds the saved result's verified link.
 
 A partial result does not mean the whole task is finished. Background schedules and events keep routine checks quiet and deliver only what their standing instruction asks for.

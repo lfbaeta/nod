@@ -28,6 +28,7 @@ import {
 import {
   ContextLimitError,
   ModelRequestError,
+  ToolFailureError,
   type RuntimeContext,
   type RuntimeResult,
 } from '../src/ports/agent.ts';
@@ -609,6 +610,8 @@ test(
         if (context.prompt === 'limit race fixture') throw new Error(spendingLimitReached);
         if (context.prompt === 'unexpected failure fixture')
           throw new Error('Synthetic runtime failure.');
+        if (context.prompt === 'tool refusal fixture')
+          throw new ToolFailureError('The bash tool failed five times. Trust refused the command.');
         if (context.prompt.startsWith('session-fixture')) {
           await sessionGates.get(context.prompt);
           return { status: 'succeeded' };
@@ -3392,6 +3395,29 @@ test(
         assert.equal(draft.owner_id, ownerId);
         assert.equal(draft.summary, card.summary);
         assert.doesNotMatch(draft.summary, /Synthetic runtime failure/);
+      });
+
+      await t.test('an exhausted tool refusal reports the cause without a bug report', async () => {
+        const drafts = (await db.pool.query('SELECT count(*) FROM feedback_drafts')).rows[0].count;
+        const failed = await thread.submitUserMessage('tool refusal fixture');
+        await waitFor(settled(failed.turnId));
+        const shown = (
+          await db.pool.query(
+            "SELECT text,presentation FROM messages WHERE turn_id=$1 AND role='assistant' AND stream_id=$2",
+            [failed.turnId, `failure:${failed.turnId}`],
+          )
+        ).rows;
+        assert.equal(shown.length, 1);
+        assert.match(
+          (await db.pool.query('SELECT error FROM turns WHERE id=$1', [failed.turnId])).rows[0]
+            .error,
+          /Trust refused the command/,
+        );
+        assert.equal(shown[0].presentation, null);
+        assert.equal(
+          (await db.pool.query('SELECT count(*) FROM feedback_drafts')).rows[0].count,
+          drafts,
+        );
       });
 
       await t.test('a reached spending limit pauses all but owner messages', async (t) => {
@@ -6512,6 +6538,227 @@ test(
           }
         },
       );
+
+      await t.test(
+        'clear keeps admitted task and schedule instructions while stopping chat',
+        async () => {
+          const { captureOwnerInstructions, validateOwnerInstructions } =
+            await import('../src/server/owner-instructions.ts');
+          const { turnOrigin } = await import('../src/server/approvals.ts');
+          const restriction = 'Do not publish synthetic project data.';
+          const earlier = await thread.submitUserMessage(restriction);
+          await waitFor(settled(earlier.turnId));
+          const prompt =
+            'Monitor the synthetic project for seven days and send its daily synthetic report.';
+          let task: Task | undefined;
+          let schedule: { id: string } | undefined;
+          let child: RuntimeContext | undefined;
+          let releaseMain!: () => void;
+          let releaseChild!: () => void;
+          const mainHeld = new Promise<void>((resolve) => {
+            releaseMain = resolve;
+          });
+          const childHeld = new Promise<void>((resolve) => {
+            releaseChild = resolve;
+          });
+          inspectObserver = async (context) => {
+            if (context.taskContext?.title === 'Synthetic seven-day monitor') {
+              child = context;
+              await childHeld;
+              return { status: 'succeeded' };
+            }
+            if (context.prompt === prompt) {
+              task = (await context.task!({
+                action: 'start',
+                title: 'Synthetic seven-day monitor',
+                message: 'The synthetic monitor is saved.',
+                doneWhen: 'Seven synthetic daily reports are saved.',
+                now: 'Check the synthetic project.',
+              })) as Task;
+              await mainHeld;
+              throw new ModelRequestError('Synthetic late creator failure.');
+            }
+          };
+          const creator = await thread.submitUserMessage(prompt);
+          try {
+            await waitFor(() => Boolean(task) && Boolean(child));
+            const origin = await turnOrigin(child!.turnId);
+            assert.ok(origin);
+            const capture = () =>
+              captureOwnerInstructions(
+                db.pool,
+                ownerId,
+                creator.threadId,
+                origin.messageIds,
+                task!.id,
+                new Date(0),
+                child!.turnId,
+              );
+            const before = await capture();
+            assert.ok(before?.authorizingIds.includes(creator.messageId));
+            const priorLimit = before?.words.userMessages?.find(
+              (message) => message.text === restriction,
+            );
+            assert.ok(priorLimit);
+            assert.equal(priorLimit.canAuthorize, false);
+            const args = {
+              title: 'Synthetic saved monitor',
+              prompt: 'Read the synthetic project report daily.',
+              kind: 'recurring',
+              cron: '0 9 * * *',
+              timeZone: 'UTC',
+            };
+            const chatEvidence = await captureOwnerInstructions(
+              db.pool,
+              ownerId,
+              creator.threadId,
+              [creator.messageId],
+              null,
+              new Date(0),
+              creator.turnId,
+            );
+            const prepared = await personal.prepareScheduleChange('schedule_create', args);
+            schedule = (await personal.manage('schedule_create', args, {
+              turnId: creator.turnId,
+              sourceMessageId: creator.messageId,
+              instructionChange: { ...prepared, evidence: chatEvidence!.evidence },
+            })) as { id: string };
+            const savedEvidence = (
+              await db.pool.query('SELECT authority FROM schedules WHERE id=$1', [schedule.id])
+            ).rows[0].authority;
+            await validateOwnerInstructions(db.pool, ownerId, savedEvidence);
+            const response = await request('POST', '/api/messages', {
+              threadId: creator.threadId,
+              text: '/clear',
+              clientMessageId: randomUUID(),
+            });
+            assert.equal(response.statusCode, 200, response.body);
+            await waitFor(async () => (await turnStatus(creator.turnId)) === 'cancelled');
+            assert.equal(child!.signal.aborted, false);
+            const record = (
+              await db.pool.query('SELECT state,source_message_id FROM tasks WHERE id=$1', [
+                task!.id,
+              ])
+            ).rows[0];
+            assert.equal(record.state, 'open');
+            const after = await capture();
+            await validateOwnerInstructions(db.pool, ownerId, savedEvidence);
+            assert.deepEqual(
+              after?.words.userMessages?.find((message) => message.text === restriction),
+              priorLimit,
+            );
+            releaseMain();
+            const freshPrompt = 'Give the synthetic monitor status only.';
+            block(freshPrompt);
+            const fresh = await thread.submitUserMessage(freshPrompt);
+            await waitFor(() => Boolean(ran(fresh.turnId)));
+            try {
+              const newChat = await captureOwnerInstructions(
+                db.pool,
+                ownerId,
+                creator.threadId,
+                [fresh.messageId],
+                null,
+                new Date(Date.now() - 86_400_000),
+                fresh.turnId,
+              );
+              assert.equal(newChat?.authorizingIds.includes(creator.messageId) ?? false, false);
+              assert.ok(newChat?.authorizingIds.includes(fresh.messageId));
+              const { createTrust } = await import('../src/server/trust.ts');
+              const oldGrant = await createTrust({
+                pool: db.pool,
+                ownerId,
+                review: async () => ({ run: true, because: prompt }),
+              }).check(
+                { threadId: creator.threadId, turnId: fresh.turnId },
+                'SYNTHETIC_SEND_REPORT',
+                { target: 'synthetic-report' },
+              );
+              assert.equal(oldGrant.confirm, true);
+              assert.deepEqual(
+                (
+                  await db.pool.query('SELECT status,withdrawn,error FROM turns WHERE id=$1', [
+                    creator.turnId,
+                  ])
+                ).rows[0],
+                { status: 'cancelled', withdrawn: false, error: null },
+              );
+              assert.ok((await capture())?.authorizingIds.includes(creator.messageId));
+              await validateOwnerInstructions(db.pool, ownerId, savedEvidence);
+            } finally {
+              release(freshPrompt);
+              await waitFor(settled(fresh.turnId));
+            }
+            assert.ok(
+              after?.authorizingIds.includes(creator.messageId),
+              'The active independent task lost its owner authority after /clear.',
+            );
+          } finally {
+            releaseMain();
+            releaseChild();
+            inspectObserver = undefined;
+            if (task) await request('POST', `/api/tasks/${task.id}/stop`);
+            await waitFor(settled(creator.turnId));
+            if (child) await waitFor(settled(child.turnId));
+            if (schedule) {
+              const removed = await app.inject({
+                method: 'DELETE',
+                url: `/api/schedules/${schedule.id}`,
+                headers,
+              });
+              assert.equal(removed.statusCode, 200, removed.body);
+            }
+            if (task) {
+              await db.pool.query('UPDATE turns SET task_id=NULL WHERE task_id=$1', [task.id]);
+              await db.pool.query('DELETE FROM tasks WHERE id=$1', [task.id]);
+            }
+          }
+        },
+      );
+
+      await t.test('clear keeps earlier Stop and model failure withdrawals', async (t) => {
+        const { validateOwnerInstructions } = await import('../src/server/owner-instructions.ts');
+        for (const kind of ['Stop', 'model failure'] as const) {
+          await t.test(kind, async () => {
+            await waitFor(settledThread);
+            const prompt = `Synthetic owner request before ${kind} and clear`;
+            block(prompt);
+            const submitted = await thread.submitUserMessage(prompt);
+            try {
+              await waitFor(() => Boolean(ran(submitted.turnId)));
+              const evidence = {
+                messages: [{ id: submitted.messageId, text: prompt, at: new Date().toISOString() }],
+              };
+              await validateOwnerInstructions(db.pool, ownerId, evidence);
+              if (kind === 'Stop') await request('POST', '/api/thread/stop');
+              else {
+                modelErrors.set(prompt, 'Synthetic model failure before clear.');
+                release(prompt);
+              }
+              await waitFor(settled(submitted.turnId));
+              const clear = await request('POST', '/api/messages', {
+                threadId: submitted.threadId,
+                text: '/clear',
+                clientMessageId: randomUUID(),
+              });
+              assert.equal(clear.statusCode, 200, clear.body);
+              assert.equal(
+                (await db.pool.query('SELECT withdrawn FROM turns WHERE id=$1', [submitted.turnId]))
+                  .rows[0].withdrawn,
+                true,
+              );
+              await assert.rejects(
+                validateOwnerInstructions(db.pool, ownerId, evidence),
+                /withdrawn or unavailable/,
+              );
+            } finally {
+              release(prompt);
+              modelErrors.delete(prompt);
+              await waitFor(settled(submitted.turnId));
+            }
+          });
+        }
+      });
 
       await t.test(
         'clear starts fresh chat without a model and keeps independent work',
