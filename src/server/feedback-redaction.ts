@@ -1,7 +1,6 @@
 import { parse } from 'tldts';
 import { createRedactor, redactSecretText } from './redaction.ts';
 import { createPersonalDataRedactor, personalKey, type PersonalProfile } from './personal-data.ts';
-import { createLiteralMasker } from '../shared/literal-masks.mjs';
 
 const maxString = 32_000;
 const maxScanned = 96_000;
@@ -73,7 +72,7 @@ export function createFeedbackRedactor(options: { secrets: string[]; profile: Pe
   const personal = createPersonalDataRedactor(profileReady ? options.profile : { names: [] });
   const redact = createRedactor([], { string: 64_000, payload: 160_000, minimumSecretLength: 1 });
   let previousSecrets: string[] = [];
-  let maskSecrets = (value: string) => value;
+  let secretPattern: RegExp | null = null;
   let ready = profileReady;
 
   function updateSecrets() {
@@ -107,14 +106,16 @@ export function createFeedbackRedactor(options: { secrets: string[]; profile: Pe
           }),
       ),
     ].sort((a, b) => b.length - a.length);
-    maskSecrets = createLiteralMasker([
-      ...variants.map((secret): [string, string] => [secret, hidden]),
-      [hidden, hidden],
-    ]);
+    secretPattern = variants.length
+      ? new RegExp(
+          variants.map((secret) => secret.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'),
+          'g',
+        )
+      : null;
   }
 
   function text(value: string, stack = false) {
-    const decoded = maskSecrets(value).replace(/[^\s<>"']*%[0-9a-f]{2}[^\s<>"']*/gi, (encoded) => {
+    const decoded = value.replace(/[^\s<>"']*%[0-9a-f]{2}[^\s<>"']*/gi, (encoded) => {
       try {
         return hosts(decodeURIComponent(encoded), true);
       } catch {
@@ -122,7 +123,7 @@ export function createFeedbackRedactor(options: { secrets: string[]; profile: Pe
       }
     });
     let safe = personal(decoded);
-    safe = redactSecretText(maskSecrets(safe));
+    safe = redactSecretText(secretPattern ? safe.replace(secretPattern, hidden) : safe);
     const frames: string[] = [];
     if (stack) {
       const frame = (path: string) => {
@@ -190,7 +191,8 @@ export function createFeedbackRedactor(options: { secrets: string[]; profile: Pe
     function string(input: string, depth: number, stackTrace: boolean): unknown {
       if (input.length > maxString || (scanned += input.length) > maxScanned)
         return '[oversized text omitted]';
-      input = maskSecrets(personal(maskSecrets(input)));
+      input = personal(input);
+      if (secretPattern) input = input.replace(secretPattern, hidden);
       const trimmed = input.trim();
       if (/^[{[\"]/.test(trimmed)) {
         try {
