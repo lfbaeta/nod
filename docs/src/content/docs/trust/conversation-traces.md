@@ -5,7 +5,7 @@ sidebar:
   order: 12
 ---
 
-Conversation traces let the Nod team at n8n see how Nod handles real requests, so they can find and fix problems. They're off until you turn them on. Nod masks known secrets and personal details it recognizes before sending a trace. Other private content can remain.
+Conversation traces let the Nod team at n8n see how Nod handles real requests, so they can find and fix problems. They're off until you turn them on. Nod masks secret values of at least eight characters that it knows, known secret formats and personal details it recognizes before sending a trace. Short secret values and other private content can remain.
 
 This page describes n8n's trace service, used by official desktop builds. A server operator can configure another receiver; that receiver controls access and retention.
 
@@ -49,21 +49,21 @@ n8n's service sees the sending machine's IP address when it receives a trace. Fo
 
 Every trace passes through these layers on the machine running your assistant before it's sent.
 
-| Layer                       | What it removes                                                                                     | How it decides                                               |
-| --------------------------- | --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
-| Known secrets               | Keys you saved, model and app keys, Nod's own tokens, and text shaped like a key, token or password | The exact values Nod knows, plus known key formats           |
-| Secret fields               | The value of fields such as `password`, `token` or `api_key` in tool arguments and app data         | The field name                                               |
-| Your name                   | The name on each app account you connected, such as Gmail or Slack, in full or in part              | An exact match                                               |
-| Your home folder            | The path of your user folder, which often contains your name, becomes `~`                           | An exact match                                               |
-| Nod's IDs                   | Task, message, connection and file IDs in messages and tool results                                 | The ID format; each gets a keyed hash that changes daily     |
-| Email addresses             | Every address, and the name written beside one, as in `Jane Doe <jane@example.com>`                 | The address format                                           |
-| Phone numbers               | Numbers that are valid in a country's numbering plan, using your region for local formats           | Google's libphonenumber rules                                |
-| Payment cards               | Card numbers from Visa, Mastercard, American Express and other issuers                              | The issuer prefix and the Luhn checksum                      |
-| Bank accounts               | IBANs                                                                                               | The country's length and the IBAN checksum                   |
-| Crypto wallets              | Bitcoin and Ethereum addresses                                                                      | The Bitcoin address checksum, or the Ethereum address format |
-| ID numbers                  | US Social Security, Spanish DNI and NIE, UK National Insurance, Brazilian CPF and Indian Aadhaar    | Each format's check digit or rules                           |
-| Network addresses           | IPv4, IPv6 and MAC addresses                                                                        | Address validation                                           |
-| Personal fields in app data | The value of fields such as `first_name`, `displayName`, `birthday`, `address` or `phone`           | The field name, whatever the value's type                    |
+| Layer                       | What it removes                                                                                     | How it decides                                                    |
+| --------------------------- | --------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| Known secrets               | Keys you saved, model and app keys, Nod's own tokens, and text shaped like a key, token or password | Known values of at least eight characters, plus known key formats |
+| Secret fields               | The value of fields such as `password`, `token` or `api_key` in tool arguments and app data         | The field name                                                    |
+| Your name                   | The name on each app account you connected, such as Gmail or Slack, in full or in part              | An exact match                                                    |
+| Your home folder            | The path of your user folder, which often contains your name, becomes `~`                           | An exact match                                                    |
+| Nod's IDs                   | Task, message, connection and file IDs in messages and tool results                                 | The ID format; each gets a keyed hash that changes daily          |
+| Email addresses             | Every address, and the name written beside one, as in `Jane Doe <jane@example.com>`                 | The address format                                                |
+| Phone numbers               | Numbers that are valid in a country's numbering plan, using your region for local formats           | Google's libphonenumber rules                                     |
+| Payment cards               | Card numbers from Visa, Mastercard, American Express and other issuers                              | The issuer prefix and the Luhn checksum                           |
+| Bank accounts               | IBANs                                                                                               | The country's length and the IBAN checksum                        |
+| Crypto wallets              | Bitcoin and Ethereum addresses                                                                      | The Bitcoin address checksum, or the Ethereum address format      |
+| ID numbers                  | US Social Security, Spanish DNI and NIE, UK National Insurance, Brazilian CPF and Indian Aadhaar    | Each format's check digit or rules                                |
+| Network addresses           | IPv4, IPv6 and MAC addresses                                                                        | Address validation                                                |
+| Personal fields in app data | The value of fields such as `first_name`, `displayName`, `birthday`, `address` or `phone`           | The field name, whatever the value's type                         |
 
 Here's a synthetic request before and after scrubbing, for an owner called Marta in Spain:
 
@@ -80,7 +80,7 @@ He can call me on [phone] or at the office, [ip]. Thanks, [owner]
 The invoice number stays because it does not match these redaction rules. Checks that need a valid number, such as the card checksum, keep numbers that do not match, such as order IDs and dates.
 
 :::caution[Removal is automatic]
-Nod removes what it can recognize. A trace can still contain private content in other forms, such as an unrecognized secret, account or device ID, another person's name, a delivery address or other people's messages in an app such as Slack. Turn traces on only if you're comfortable with that.
+Nod removes what it can recognize. A trace can still contain private content in other forms, such as a short or unrecognized secret, account or device ID, another person's name, a delivery address or other people's messages in an app such as Slack. Turn traces on only if you're comfortable with that.
 :::
 
 ## How traces are pseudonymised

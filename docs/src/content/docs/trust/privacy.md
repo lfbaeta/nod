@@ -75,14 +75,14 @@ The trace also includes Nod's instructions, the model name, token counts, and co
 | Switch     | **Share usage data**                                                                                                                                                                                                    |
 | Details    | [Analytics](/deploy/analytics/)                                                                                                                                                                                         |
 
-|           | Conversation traces                                                                                                           |
-| --------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| Default   | Off                                                                                                                           |
-| Includes  | Your conversations with Nod, including what it reads and does, minus the personal details it recognizes                       |
-| Redaction | Known secrets and recognized personal details are masked. Other private content, including account or device IDs, can remain. |
-| Stored in | n8n's LangSmith project in the EU for 14 days. Never used to train AI models.                                                 |
-| Switch    | **Share conversation traces**                                                                                                 |
-| Details   | [Conversation traces](/trust/conversation-traces/)                                                                            |
+|           | Conversation traces                                                                                                                                                                                     |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Default   | Off                                                                                                                                                                                                     |
+| Includes  | Your conversations with Nod, including what it reads and does, minus the personal details it recognizes                                                                                                 |
+| Redaction | Nod masks known secret values of at least eight characters, known secret formats and recognized personal details. Short secrets and other private content, including account or device IDs, can remain. |
+| Stored in | n8n's LangSmith project in the EU for 14 days. Never used to train AI models.                                                                                                                           |
+| Switch    | **Share conversation traces**                                                                                                                                                                           |
+| Details   | [Conversation traces](/trust/conversation-traces/)                                                                                                                                                      |
 
 Both switches are in **Settings → Privacy & data**. Turning one off stops subsequent sends, though a send already in flight may finish. It does not delete data already sent, including About you answers and a consented email. To request deletion, write to privacy@n8n.io. A server operator can turn either switch off for everyone.
 
