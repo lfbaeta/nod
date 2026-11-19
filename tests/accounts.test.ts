@@ -347,6 +347,38 @@ test('mail checks retain the native curator HTTP status without provider content
   ]);
 });
 
+test('invalid decision settings fail before reserving a budget or sending a request', async () => {
+  let reservations = 0;
+  let requests = 0;
+  const usage: ProviderUsageEvent[] = [];
+  const model = createDecisionModel({
+    resolve: async () => ({ provider: 'openai', key: 'fixture-key', region: 'invalid' as never }),
+    reserve: async () => {
+      reservations++;
+      return async () => {};
+    },
+    fetch: async () => {
+      requests++;
+      assert.fail('An invalid connection must not send a request.');
+    },
+  });
+  await assert.rejects(
+    model.check(
+      {
+        instructions: 'Check synthetic mail.',
+        input: {},
+        question: { name: 'access', choices: [{ value: false, description: 'Ordinary mail.' }] },
+      },
+      undefined,
+      (event) => usage.push(event),
+    ),
+    /Choose an OpenAI API region/,
+  );
+  assert.equal(reservations, 0);
+  assert.equal(requests, 0);
+  assert.equal(usage.length, 0);
+});
+
 test('decision reservations release only requests that did not reach dispatch', async () => {
   for (const phase of ['before dispatch', 'provider error', 'transport error']) {
     const controller = new AbortController();

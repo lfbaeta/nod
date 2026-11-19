@@ -13008,7 +13008,7 @@ test(
             check,
           ),
       );
-      assert.ok(!JSON.stringify(result).includes(privateText));
+      assert.ok(privateValues.every((value) => !JSON.stringify(result).includes(value)));
     }
     for (let index = 0; index < 3; index++)
       failureJournal.record(

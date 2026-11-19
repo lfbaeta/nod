@@ -176,6 +176,10 @@ export function createDecisionModel(options: {
       if (!connection || options.configured?.() === false) return undefined;
       const service = services[connection.provider];
       const model = connection.model ?? service.model;
+      const url =
+        connection.provider === 'openai'
+          ? `${openAIBaseUrl(connection.region)}/decisions`
+          : service.url;
       const {
         instructions,
         input,
@@ -255,10 +259,6 @@ export function createDecisionModel(options: {
       let failure = 'decision_transport';
       let httpStatus: number | undefined;
       try {
-        const url =
-          connection.provider === 'openai'
-            ? `${openAIBaseUrl(connection.region)}/decisions`
-            : service.url;
         const requestSignal = AbortSignal.any([
           AbortSignal.timeout(45_000),
           ...(signal ? [signal] : []),
