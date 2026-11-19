@@ -223,10 +223,10 @@ function presentStep(row: Record<string, any>): TrustStep {
   };
 }
 
-function modelUsed(
+function modelEvents(
   usage: ProviderUsageEvent,
   execution?: (ExecutionScope & Pick<AgentSessionOptions, 'restricted'>) | null,
-): Parameters<CaptureAnalytics>[0] {
+): Parameters<CaptureAnalytics>[0][] {
   const tokens = (value: number | undefined) =>
     typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : 0;
   const charged = cost(usage.costUsd);
@@ -237,49 +237,80 @@ function modelUsed(
     (charged > 0 || usage.pricing === 'reported');
   const planPriced = estimated !== null && estimated > 0;
   const spent = apiPriced ? charged : planPriced ? estimated : null;
+  const costUsd = spent !== null ? Math.round(spent * 1e6) / 1e6 : undefined;
   const memoryOperation =
     usage.category === 'memory'
       ? analyticsMemoryOperation.safeParse(usage.operation).data
       : undefined;
-  return {
-    event: 'model_used',
-    properties: {
-      ...analyticsModel(usage.provider, usage.model),
-      purpose: usage.category,
-      ...(memoryOperation ? { memory_operation: memoryOperation } : {}),
-      request_kind:
-        usage.category !== 'agent'
-          ? usage.category
-          : usage.operation === 'compaction' || usage.operation === 'cache_warm'
-            ? usage.operation
-            : usage.operation !== 'request'
-              ? 'auxiliary'
-              : execution?.parentRunId
-                ? 'helper'
-                : execution?.restricted
-                  ? 'observer'
-                  : execution
-                    ? execution.sessionId === execution.threadId
-                      ? 'chat'
-                      : 'task'
-                    : 'unclassified',
-      ...(Number.isSafeInteger(usage.attempt) && usage.attempt! > 0 && usage.attempt! <= 4
-        ? { attempt: usage.attempt }
-        : {}),
-      outcome: usage.status,
-      input_tokens:
-        tokens(usage.inputTokens) + tokens(usage.cacheReadTokens) + tokens(usage.cacheWriteTokens),
-      output_tokens: tokens(usage.outputTokens),
-      ...(usage.cacheReadTokens !== undefined
-        ? { cached_input_tokens: tokens(usage.cacheReadTokens) }
-        : {}),
-      ...(spent !== null ? { cost_usd: Math.round(spent * 1e6) / 1e6 } : {}),
-      pricing: apiPriced ? 'api' : planPriced ? 'plan_estimate' : 'unavailable',
-      ...(usage.durationMs > 0 && Number.isFinite(usage.durationMs)
-        ? { duration_ms: Math.round(usage.durationMs) }
-        : {}),
+  const { provider, model } = analyticsModel(usage.provider, usage.model);
+  const request = {
+    purpose: usage.category,
+    ...(memoryOperation ? { memory_operation: memoryOperation } : {}),
+    request_kind:
+      usage.category !== 'agent'
+        ? usage.category
+        : usage.operation === 'compaction' || usage.operation === 'cache_warm'
+          ? usage.operation
+          : usage.operation !== 'request'
+            ? 'auxiliary'
+            : execution?.parentRunId
+              ? 'helper'
+              : execution?.restricted
+                ? 'observer'
+                : execution
+                  ? execution.sessionId === execution.threadId
+                    ? 'chat'
+                    : 'task'
+                  : 'unclassified',
+    ...(Number.isSafeInteger(usage.attempt) && usage.attempt! > 0 && usage.attempt! <= 4
+      ? { attempt: usage.attempt }
+      : {}),
+    outcome: usage.status,
+    pricing: apiPriced ? 'api' : planPriced ? 'plan_estimate' : 'unavailable',
+  } as const;
+  const input = tokens(usage.inputTokens);
+  const cacheRead = tokens(usage.cacheReadTokens);
+  const cacheWrite = tokens(usage.cacheWriteTokens);
+  const output = tokens(usage.outputTokens);
+  const durationMs =
+    usage.durationMs > 0 && Number.isFinite(usage.durationMs)
+      ? Math.round(usage.durationMs)
+      : undefined;
+  return [
+    {
+      event: 'model_used',
+      properties: {
+        provider,
+        ...(model ? { model } : {}),
+        ...request,
+        input_tokens: input + cacheRead + cacheWrite,
+        output_tokens: output,
+        ...(usage.cacheReadTokens !== undefined ? { cached_input_tokens: cacheRead } : {}),
+        ...(costUsd !== undefined ? { cost_usd: costUsd } : {}),
+        ...(durationMs !== undefined ? { duration_ms: durationMs } : {}),
+      },
     },
-  };
+    {
+      event: '$ai_generation',
+      properties: {
+        $ai_provider: provider,
+        ...(model ? { $ai_model: model } : {}),
+        $ai_span_name: request.request_kind,
+        ...request,
+        $ai_input_tokens: input,
+        $ai_output_tokens: output,
+        ...(usage.cacheReadTokens !== undefined ? { $ai_cache_read_input_tokens: cacheRead } : {}),
+        ...(usage.cacheWriteTokens !== undefined
+          ? { $ai_cache_creation_input_tokens: cacheWrite }
+          : {}),
+        $ai_cache_reporting_exclusive: true,
+        ...(durationMs !== undefined ? { $ai_latency: durationMs / 1000 } : {}),
+        $ai_is_error: usage.status === 'failed',
+        $ai_total_cost_usd: costUsd ?? 0,
+        $ai_cost_passthrough: true,
+      },
+    },
+  ];
 }
 
 export function createLedger({
@@ -412,7 +443,7 @@ export function createLedger({
       .query(usageSql, values)
       .then(saved, (error) => logFailure('ledger_usage_failed', error, { turnId: attributedTurn }));
     pendingUsage.set(id, { values, pending, scope, saved });
-    analytics?.(modelUsed(usage, execution));
+    for (const event of modelEvents(usage, execution)) analytics?.(event);
     telemetry?.record({ ...usage, turnId: attributedTurn ?? undefined });
   }
 

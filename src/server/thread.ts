@@ -62,6 +62,8 @@ import type { WorkConsumers } from './work-admission.ts';
 import {
   analyticsModel,
   snapshotAnalytics,
+  turnAnalyticsSession,
+  turnEvents,
   type AnalyticsEvent,
   type CaptureAnalytics,
 } from './analytics.ts';
@@ -170,7 +172,11 @@ export interface ThreadDependencies {
     input:
       { kind: 'interrupted'; work?: string } | { kind: 'failed'; error: string; work?: string },
   ) => Promise<string>;
-  observeTurn?: (turnId: string, operation: () => Promise<void>) => Promise<void>;
+  observeTurn?: (
+    turnId: string,
+    operation: () => Promise<void>,
+    sessionId?: string,
+  ) => Promise<void>;
   taskChecks?: (threadId: string) => Promise<void>;
   taskClassification?: boolean;
   consumers?: WorkConsumers;
@@ -1736,7 +1742,11 @@ async function drainThread(threadId: string, dependencies: ThreadDependencies) {
   if (claimed.length) refresh();
   for (const turn of claimed) {
     const execute = () => executeTurn(turn, dependencies);
-    const work = (dependencies.observeTurn ? dependencies.observeTurn(turn.id, execute) : execute())
+    const work = (
+      dependencies.observeTurn
+        ? dependencies.observeTurn(turn.id, execute, turnAnalyticsSession(turn))
+        : execute()
+    )
       .catch((error) => logFailure('turn_unfinished', error, { threadId, turnId: turn.id }))
       .then(() => drainNext(threadId))
       .finally(refresh);
@@ -2711,34 +2721,32 @@ async function executeTurn(turn: any, dependencies: ThreadDependencies) {
         })
         .catch((error: unknown) => logFailure('turn_cancellation_failed', error));
     if (work)
-      dependencies.analytics?.({
-        event: 'turn_completed',
-        properties: {
-          ...analyticsProperties,
-          ...work,
-          outcome,
-          result:
-            outcome === 'succeeded'
-              ? replyCommitted
-                ? 'reply'
-                : 'no_reply'
-              : outcome === 'waiting_user' || outcome === 'waiting_credentials'
-                ? 'needs_owner'
-                : outcome,
-          duration_ms: Math.max(0, Date.now() - startedAt),
-          queue_duration_ms: Math.max(0, startedAt - new Date(turn.created_at).getTime()),
-          ...(waitingReason ? { waiting_reason: waitingReason } : {}),
-          ...(outcome === 'failed'
-            ? {
-                failure_reason: limited
-                  ? ('spending_limit' as const)
-                  : failure === 'offline'
-                    ? 'model'
-                    : failure,
-              }
-            : {}),
-        },
-      });
+      for (const event of turnEvents({
+        ...analyticsProperties,
+        ...work,
+        outcome,
+        result:
+          outcome === 'succeeded'
+            ? replyCommitted
+              ? 'reply'
+              : 'no_reply'
+            : outcome === 'waiting_user' || outcome === 'waiting_credentials'
+              ? 'needs_owner'
+              : outcome,
+        duration_ms: Math.max(0, Date.now() - startedAt),
+        queue_duration_ms: Math.max(0, startedAt - new Date(turn.created_at).getTime()),
+        ...(waitingReason ? { waiting_reason: waitingReason } : {}),
+        ...(outcome === 'failed'
+          ? {
+              failure_reason: limited
+                ? ('spending_limit' as const)
+                : failure === 'offline'
+                  ? 'model'
+                  : failure,
+            }
+          : {}),
+      }))
+        dependencies.analytics?.(event);
     running.delete(turnId);
   }
 }

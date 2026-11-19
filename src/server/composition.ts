@@ -32,7 +32,7 @@ import {
   analyticsEnvironment,
   createAnalytics,
   snapshotAnalytics,
-  toolUsed,
+  toolEvents,
   type CaptureAnalytics,
 } from './analytics.ts';
 import { clearConversationAnalytics } from './conversation-analytics.ts';
@@ -952,7 +952,7 @@ async function initializeApplication(
           callId: id,
         },
       );
-      if (event.type === 'tool_end') captureAnalytics(toolUsed(event));
+      if (event.type === 'tool_end') for (const used of toolEvents(event)) captureAnalytics(used);
       adapters.observe?.(turnId, event);
     },
   });
@@ -2189,18 +2189,22 @@ async function initializeApplication(
       },
       desktopRuntime: desktopMode,
       taskClassification: true,
-      observeTurn: (turnId, operation) =>
+      observeTurn: (turnId, operation, sessionId) =>
         analytics
-          .withRun(ownerId, async () => {
-            try {
-              await operation();
-            } finally {
-              const consent = analytics.currentRun(ownerId)?.consent;
-              void admission
-                .run(() => ledger.withTurn(turnId, () => taskClassification.run(turnId, consent)))
-                ?.catch(() => {});
-            }
-          })
+          .withRun(
+            ownerId,
+            async () => {
+              try {
+                await operation();
+              } finally {
+                const consent = analytics.currentRun(ownerId)?.consent;
+                void admission
+                  .run(() => ledger.withTurn(turnId, () => taskClassification.run(turnId, consent)))
+                  ?.catch(() => {});
+              }
+            },
+            sessionId,
+          )
           .finally(() => {
             void admission
               .run(() => proactivity.due())

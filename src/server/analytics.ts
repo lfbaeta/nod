@@ -99,25 +99,62 @@ export function analyticsModel(provider: string, model?: string) {
   };
 }
 
+const sessionGap = 30 * 60_000;
+
+export const turnAnalyticsSession = (turn: { session_id: string; proactive?: boolean | null }) =>
+  turn.proactive ? undefined : turn.session_id;
 const workspaceTools = new Set(['read', 'bash', 'edit', 'write', 'find', 'ls', 'grep']);
 const webTools = new Set(['web_search', 'fetch_content', 'get_search_content', 'code_search']);
 
-export function toolUsed(event: Extract<RuntimeObservation, { type: 'tool_end' }>): AnalyticsEvent {
-  return {
-    event: 'tool_used',
-    properties: {
-      tool: workspaceTools.has(event.name)
-        ? 'workspace'
-        : webTools.has(event.name)
-          ? 'web'
-          : (analyticsTool.safeParse(event.name).data ?? 'other'),
-      outcome: event.status,
-      duration_ms: Number.isFinite(event.durationMs)
-        ? Math.max(0, Math.round(event.durationMs))
-        : 0,
-      subagent: Boolean(event.execution?.parentRunId),
+export function toolEvents(
+  event: Extract<RuntimeObservation, { type: 'tool_end' }>,
+): AnalyticsEvent[] {
+  const tool = workspaceTools.has(event.name)
+    ? 'workspace'
+    : webTools.has(event.name)
+      ? 'web'
+      : (analyticsTool.safeParse(event.name).data ?? 'other');
+  const duration = Number.isFinite(event.durationMs)
+    ? Math.max(0, Math.round(event.durationMs))
+    : 0;
+  const subagent = Boolean(event.execution?.parentRunId);
+  return [
+    {
+      event: 'tool_used',
+      properties: { tool, outcome: event.status, duration_ms: duration, subagent },
     },
-  };
+    {
+      event: '$ai_span',
+      properties: {
+        $ai_span_name: tool,
+        $ai_latency: duration / 1000,
+        $ai_is_error: event.status === 'failed',
+        outcome: event.status,
+        subagent,
+      },
+    },
+  ];
+}
+
+export function turnEvents(
+  properties: Extract<AnalyticsEvent, { event: 'turn_completed' }>['properties'],
+): AnalyticsEvent[] {
+  const { source, outcome, result, duration_ms, waiting_reason, failure_reason } = properties;
+  return [
+    { event: 'turn_completed', properties },
+    {
+      event: '$ai_trace',
+      properties: {
+        $ai_span_name: source,
+        $ai_latency: duration_ms / 1000,
+        $ai_is_error: outcome === 'failed',
+        outcome,
+        ...(result ? { result } : {}),
+        ...(waiting_reason ? { waiting_reason } : {}),
+        ...(failure_reason ? { failure_reason } : {}),
+      },
+    },
+  ];
 }
 
 export async function createAnalytics(options: {
@@ -142,6 +179,7 @@ export async function createAnalytics(options: {
     owner: string;
     id: string;
     consent: ReturnType<typeof consent>;
+    session?: { id: string; last: number };
     model?: ReturnType<typeof analyticsModel>;
     work?: { work_type: 'immediate' | 'scheduled' | 'background'; owner_requested: boolean };
   }>();
@@ -149,8 +187,23 @@ export async function createAnalytics(options: {
     owner: string;
     activity: z.infer<typeof systemActivity>;
     consent: ReturnType<typeof consent>;
+    trace: string;
   }>();
+  const sessions = new Map<string, { id: string; last: number; version: number }>();
   let closed = false;
+  function analyticsSession(owner: string, session: string) {
+    const now = Date.now();
+    for (const [key, value] of sessions) if (now - value.last > sessionGap) sessions.delete(key);
+    const key = JSON.stringify([owner, session]);
+    const { version } = state(owner);
+    let current = sessions.get(key);
+    if (!current || current.version !== version) {
+      current = { id: randomUUID(), last: now, version };
+      sessions.set(key, current);
+    }
+    current.last = now;
+    return current;
+  }
   function state(owner: string) {
     let value = states.get(owner);
     if (!value) {
@@ -225,6 +278,16 @@ export async function createAnalytics(options: {
       }
     }
     const version = analyticsVersion.safeParse(delivery.appVersion ?? appVersion).data;
+    const kind = parsed.data.event;
+    const generation = kind === '$ai_generation';
+    const child = generation || kind === '$ai_span';
+    if ((kind === '$ai_span' || kind === '$ai_trace') && !runId) return;
+    const traced = child || kind === '$ai_trace';
+    const trace = traced ? (runId ?? system?.trace ?? randomUUID()) : undefined;
+    if (traced && run?.session) run.session.last = Date.now();
+    const session = run ? run.session?.id : runId ? undefined : null;
+    const mirror =
+      kind === 'model_used' ? '$ai_generation' : kind === 'tool_used' && runId ? '$ai_span' : null;
     try {
       options.provider?.capture(
         {
@@ -246,10 +309,14 @@ export async function createAnalytics(options: {
                     owner_requested: false,
                     system_activity: system.activity,
                   }
-                : parsed.data.event === 'model_used'
+                : parsed.data.event === 'model_used' || generation
                   ? { work_type: 'unclassified', owner_requested: false }
                   : {})),
             ...('properties' in parsed.data ? parsed.data.properties : {}),
+            ...(mirror ? { mirrored_as: mirror } : {}),
+            ...(traced ? { $ai_trace_id: trace } : {}),
+            ...(traced && session !== undefined ? { $ai_session_id: session } : {}),
+            ...(child ? { $ai_span_id: randomUUID(), $ai_parent_id: trace } : {}),
           },
         },
         current.signal,
@@ -335,8 +402,16 @@ export async function createAnalytics(options: {
     setOnboardingProfileAnswers,
     setOnboardingProfileProperties,
     setUpdatesEmail,
-    withRun<T>(owner: string, operation: () => T): T {
-      return runs.run({ owner, id: randomUUID(), consent: consent(owner) }, operation);
+    withRun<T>(owner: string, operation: () => T, session?: string): T {
+      return runs.run(
+        {
+          owner,
+          id: randomUUID(),
+          consent: consent(owner),
+          ...(session ? { session: analyticsSession(owner, session) } : {}),
+        },
+        operation,
+      );
     },
     withSystemWork<T>(
       owner: string,
@@ -345,7 +420,10 @@ export async function createAnalytics(options: {
     ): T {
       const parsed = systemActivity.safeParse(activity);
       if (runs.getStore() || systems.getStore() || !parsed.success) return operation();
-      return systems.run({ owner, activity: parsed.data, consent: consent(owner) }, operation);
+      return systems.run(
+        { owner, activity: parsed.data, consent: consent(owner), trace: randomUUID() },
+        operation,
+      );
     },
     currentRun(owner: string) {
       const run = runs.getStore();

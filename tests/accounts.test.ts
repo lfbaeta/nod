@@ -2274,6 +2274,7 @@ describe('analytics privacy', () => {
       (['memory_learning', 'onboarding', 'writing_style'] as const).map((activity) =>
         analytics.withSystemWork(owner, activity, async () => {
           await model();
+          await model();
           analytics.capture(owner, {
             event: 'service_used',
             properties: {
@@ -2288,7 +2289,17 @@ describe('analytics privacy', () => {
     );
     for (const activity of ['memory_learning', 'onboarding', 'writing_style']) {
       const events = captured.filter((event) => event.properties.system_activity === activity);
-      assert.deepEqual(events.map((event) => event.event).sort(), ['model_used', 'service_used']);
+      assert.deepEqual(events.map((event) => event.event).sort(), [
+        '$ai_generation',
+        '$ai_generation',
+        'model_used',
+        'model_used',
+        'service_used',
+      ]);
+      const grouped = events
+        .filter((event) => event.event === '$ai_generation')
+        .map((event) => event.properties.$ai_trace_id);
+      assert.equal(grouped[0], grouped[1]);
       assert.ok(
         events.every(
           (event) =>
@@ -2300,6 +2311,12 @@ describe('analytics privacy', () => {
     }
     await model();
     assert.equal(captured.at(-1)!.properties.work_type, 'unclassified');
+    const traces = captured
+      .filter((event) => event.event === '$ai_generation')
+      .map((event) => event.properties.$ai_trace_id);
+    assert.equal(traces.length, 7);
+    assert.equal(new Set(traces).size, 4);
+    assert.ok(traces.every((trace) => /^[0-9a-f-]{36}$/.test(String(trace))));
     await analytics.withRun(owner, async () => {
       analytics.capture(owner, {
         event: 'turn_started',
@@ -2426,6 +2443,14 @@ describe('analytics privacy', () => {
     assert.equal(used.properties.cached_input_tokens, 2000);
     assert.ok(Number(used.properties.duration_ms) >= 1_500);
     assert.equal(used.properties.pricing, 'api');
+    const generation = captured.find((event) => event.event === '$ai_generation')!;
+    assert.equal(generation.properties.$ai_trace_id, started.properties.run_id);
+    assert.equal(generation.properties.$ai_input_tokens, 20);
+    assert.equal(generation.properties.$ai_cache_read_input_tokens, 2000);
+    assert.equal(generation.properties.$ai_cache_creation_input_tokens, 0);
+    assert.equal(generation.properties.$ai_output_tokens, used.properties.output_tokens);
+    assert.equal(generation.properties.$ai_latency, Number(used.properties.duration_ms) / 1000);
+    assert.equal(generation.properties.$ai_total_cost_usd, used.properties.cost_usd);
     subscription = true;
     await opened.prompt('Synthetic subscription usage', []);
     const plan = captured.filter(({ event }) => event === 'model_used').at(-1)!;
@@ -2437,6 +2462,7 @@ describe('analytics privacy', () => {
     assert.equal(spans.length, 3);
     assert.equal(spans[0].traceId, spans[1].traceId);
     assert.equal(captured.filter((event) => event.event === 'model_used').length, 2);
+    assert.equal(captured.filter((event) => event.event === '$ai_generation').length, 2);
   });
 
   test('model usage analytics distinguish evidenced prices from unknown zero costs', async (t) => {
@@ -2573,9 +2599,14 @@ describe('analytics privacy', () => {
         };
         const before = captured.length;
         await opened.prompt('Synthetic usage fixture', []);
-        assert.equal(captured.length, before + 1);
-        const event = captured.at(-1)!;
+        assert.equal(captured.length, before + 2);
+        const event = captured.at(-2)!;
+        const generation = captured.at(-1)!;
         assert.equal(event.event, 'model_used');
+        assert.equal(generation.event, '$ai_generation');
+        assert.equal(generation.properties.pricing, scenario.pricing);
+        assert.equal(generation.properties.$ai_total_cost_usd, scenario.cost ?? 0);
+        assert.equal(generation.properties.$ai_cost_passthrough, true);
         assert.equal(event.properties.provider, 'openai');
         assert.equal(event.properties.pricing, scenario.pricing);
         assert.equal(event.properties.cost_usd, scenario.cost);

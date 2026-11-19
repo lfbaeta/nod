@@ -204,6 +204,12 @@ test(
           assert.equal(completed.properties.task_taxonomy_version, 1);
           assert.equal(completed.properties.run_id, started.properties.run_id);
           assert.equal(completed.properties.model, 'claude-opus-5-5');
+          const trace = events.slice(before).find((event) => event.event === '$ai_trace')!;
+          assert.equal(trace.properties.$ai_trace_id, started.properties.run_id);
+          assert.equal(
+            trace.properties.$ai_latency,
+            Number(completed.properties.duration_ms) / 1000,
+          );
           assert.ok(!events.slice(before).some((event) => event.event === 'task_classified'));
           currentClassification.released.resolve();
           await waitFor(
@@ -227,6 +233,15 @@ test(
             assert.equal(event.properties.owner_requested, true);
           }
           assert.equal(costs[0]!.properties.model, 'claude-haiku-5-5');
+          const generation = events
+            .slice(before)
+            .find(
+              (event) =>
+                event.event === '$ai_generation' &&
+                event.properties.purpose === 'task_classification',
+            )!;
+          assert.equal(generation.properties.$ai_trace_id, started.properties.run_id);
+          assert.equal(generation.properties.$ai_total_cost_usd, costs[0]!.properties.cost_usd);
           assert.equal(costs[0]!.properties.cost_usd, 0.0001);
           const rows = (await usage(currentClassification.usageId)).rows;
           assert.equal(rows.length, 1);
@@ -257,8 +272,7 @@ test(
               .some(
                 (event) =>
                   event.event === 'task_classified' ||
-                  (event.event === 'model_used' &&
-                    event.properties.purpose === 'task_classification'),
+                  event.properties.purpose === 'task_classification',
               ),
           );
           assert.equal((await usage(currentClassification.usageId)).rows[0].turn_id, id);

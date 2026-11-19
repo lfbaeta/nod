@@ -15,6 +15,9 @@ import {
   analyticsModel,
   createAnalytics,
   registerAnalyticsRoutes,
+  toolEvents,
+  turnAnalyticsSession,
+  turnEvents,
   type AnalyticsDelivery,
 } from '../src/server/analytics.ts';
 import { analyticsEvent } from '../src/server/analytics-events.ts';
@@ -775,13 +778,18 @@ test('memory request analytics keep fixed operations and honor usage sharing', a
       instructions: 'Synthetic private instructions.',
       input: { text: 'private-input-canary' },
     });
-  assert.equal(captured.length, 8);
-  assert.deepEqual(
-    captured.map(({ properties }) => properties.memory_operation),
-    [...operations, undefined, undefined],
-  );
-  assert.equal(captured[2].properties.outcome, 'cancelled');
-  assert.equal(captured[2].properties.duration_ms, 950);
+  assert.equal(captured.length, 16);
+  for (const name of ['model_used', '$ai_generation']) {
+    const events = captured.filter(({ event }) => event === name);
+    assert.deepEqual(
+      events.map(({ properties }) => properties.memory_operation),
+      [...operations, undefined, undefined],
+    );
+    assert.equal(events[2].properties.outcome, 'cancelled');
+  }
+  assert.equal(captured[4].properties.duration_ms, 950);
+  assert.equal(captured[5].properties.$ai_latency, 0.95);
+  assert.equal(captured[5].properties.$ai_is_error, false);
   assert.equal(JSON.stringify(captured).includes('private-operation-canary'), false);
   assert.equal(JSON.stringify(captured).includes('private-input-canary'), false);
   for (const purpose of ['agent', 'review', 'tasks', 'task_classification'] as const)
@@ -797,7 +805,7 @@ test('memory request analytics keep fixed operations and honor usage sharing', a
         pricing: 'unavailable',
       },
     });
-  assert.equal(captured.length, 8);
+  assert.equal(captured.length, 16);
   assert.equal(
     analyticsEvent.safeParse({
       event: 'model_used',
@@ -815,7 +823,7 @@ test('memory request analytics keep fixed operations and honor usage sharing', a
   );
   analytics.setUsageData(owner, false);
   await curator.curate({ task: 'recall', instructions: '', input: {} });
-  assert.equal(captured.length, 8);
+  assert.equal(captured.length, 16);
 });
 
 test('turn analytics keep the actual agent provider and remove stale model details', async (t) => {
@@ -1002,6 +1010,10 @@ test('model analytics separate retries, helpers and maintenance from the main re
   });
   const calls = captured.filter((event) => event.event === 'model_used');
   assert.equal(calls.length, 36);
+  assert.equal(
+    calls.every(({ properties }) => properties.mirrored_as === '$ai_generation'),
+    true,
+  );
   for (const [index, kind] of ['chat', 'task', 'observer', 'helper'].entries()) {
     assert.deepEqual(
       calls
@@ -1027,6 +1039,60 @@ test('model analytics separate retries, helpers and maintenance from the main re
   assert.ok(captured.every((event) => event.properties.run_id === completed.properties.run_id));
   for (const privateValue of ['private-canary', scope.turnId, scope.sessionId, scope.runId])
     assert.equal(JSON.stringify(captured).includes(privateValue), false);
+  const generations = captured.filter((event) => event.event === '$ai_generation');
+  const run = completed.properties.run_id;
+  assert.deepEqual(
+    generations.map(({ properties: p }) => [
+      p.$ai_span_name,
+      p.attempt,
+      p.$ai_is_error,
+      p.$ai_trace_id,
+      p.$ai_parent_id,
+      p.$ai_provider,
+      p.$ai_model,
+    ]),
+    calls.map(({ properties: p }) => [
+      p.request_kind,
+      p.attempt,
+      p.outcome === 'failed',
+      run,
+      run,
+      p.provider,
+      p.model,
+    ]),
+  );
+  assert.equal(new Set(generations.map(({ properties }) => properties.$ai_span_id)).size, 36);
+  const generation = {
+    event: '$ai_generation',
+    properties: {
+      $ai_provider: 'openai',
+      $ai_span_name: 'chat',
+      purpose: 'agent',
+      request_kind: 'chat',
+      outcome: 'succeeded',
+      pricing: 'unavailable',
+      $ai_input_tokens: 3,
+      $ai_output_tokens: 1,
+      $ai_cache_reporting_exclusive: true,
+      $ai_is_error: false,
+      $ai_total_cost_usd: 0,
+      $ai_cost_passthrough: true,
+    },
+  };
+  assert.equal(analyticsEvent.safeParse(generation).success, true);
+  for (const extra of [
+    { $ai_input: [{ role: 'user', content: 'private-canary' }] },
+    { $ai_output_choices: [{ role: 'assistant', content: 'private-canary' }] },
+    { $ai_tools: [{ name: 'private-canary' }] },
+    { $ai_error: 'private-canary' },
+    { $ai_trace_id: scope.turnId },
+    { $ai_session_id: scope.sessionId },
+  ]) {
+    const event = { ...generation, properties: { ...generation.properties, ...extra } };
+    assert.equal(analyticsEvent.safeParse(event).success, false);
+    analytics.forOwner(owner)(event as never);
+  }
+  assert.equal(captured.length, 74);
   analytics.setUsageData(owner, false);
   await analytics.withRun(owner, async () => {
     const session = await agent.open({
@@ -1040,7 +1106,239 @@ test('model analytics separate retries, helpers and maintenance from the main re
     });
     await session.prompt('private-canary', []);
   });
-  assert.equal(captured.length, 38);
+  assert.equal(captured.length, 74);
+});
+
+test('tool spans and the turn trace follow the analytics run without private tool data', async (t) => {
+  const captured: Parameters<ProductAnalytics['capture']>[0][] = [];
+  const analytics = await createAnalytics({
+    provider: { capture: (event) => captured.push(event), shutdown: async () => {} },
+    environment: 'development',
+    dataRoot: '.',
+    installationId: randomUUID(),
+  });
+  t.after(() => analytics.shutdown());
+  const owner = 'synthetic-owner';
+  analytics.setUsageData(owner, true);
+  const scope = fakeExecution(randomUUID());
+  const tool = (name: string, status: 'succeeded' | 'failed', parentRunId?: string) =>
+    toolEvents({
+      type: 'tool_end',
+      id: 'private-call-canary',
+      name,
+      status,
+      output: 'private-output-canary',
+      error: 'private-error-canary',
+      finishedAt: new Date().toISOString(),
+      durationMs: 1840,
+      execution: { ...scope, parentRunId },
+    });
+  const turn = {
+    source: 'user' as const,
+    channel: 'web' as const,
+    background: false,
+    work_type: 'immediate' as const,
+    owner_requested: true,
+  };
+  const segment = () => [
+    ...tool('private-tool-canary', 'failed'),
+    ...tool('bash', 'succeeded', scope.runId),
+    ...turnEvents({ ...turn, outcome: 'cancelled', result: 'cancelled', duration_ms: 9800 }),
+  ];
+  await analytics.withRun(owner, async () => {
+    analytics.capture(owner, { event: 'turn_started', properties: turn });
+    for (const event of segment()) analytics.capture(owner, event);
+  });
+  const run = captured[0].properties.run_id;
+  assert.deepEqual(
+    captured.map(({ event }) => event),
+    [
+      'turn_started',
+      'tool_used',
+      '$ai_span',
+      'tool_used',
+      '$ai_span',
+      'turn_completed',
+      '$ai_trace',
+    ],
+  );
+  assert.deepEqual(
+    captured.map(({ properties }) => properties.mirrored_as),
+    [undefined, '$ai_span', undefined, '$ai_span', undefined, undefined, undefined],
+  );
+  const spans = captured.filter(({ event }) => event === '$ai_span');
+  assert.deepEqual(
+    spans.map(({ properties: p }) => [
+      p.$ai_span_name,
+      p.$ai_is_error,
+      p.$ai_latency,
+      p.subagent,
+      p.$ai_trace_id,
+      p.$ai_parent_id,
+    ]),
+    [
+      ['other', true, 1.84, false, run, run],
+      ['workspace', false, 1.84, true, run, run],
+    ],
+  );
+  assert.notEqual(spans[0].properties.$ai_span_id, spans[1].properties.$ai_span_id);
+  const sent = captured.at(-1)!.properties;
+  assert.deepEqual(
+    [sent.$ai_span_name, sent.$ai_latency, sent.$ai_is_error, sent.$ai_trace_id, sent.result],
+    ['user', 9.8, false, run, 'cancelled'],
+  );
+  assert.equal(Object.hasOwn(sent, '$ai_span_id'), false);
+  const reasons = (properties: Parameters<typeof turnEvents>[0]) =>
+    turnEvents(properties).map((event) =>
+      'properties' in event
+        ? [
+            (event.properties as Record<string, unknown>).failure_reason,
+            (event.properties as Record<string, unknown>).waiting_reason,
+          ]
+        : [],
+    );
+  assert.deepEqual(
+    reasons({ ...turn, outcome: 'failed', failure_reason: 'model', duration_ms: 1 }),
+    [
+      ['model', undefined],
+      ['model', undefined],
+    ],
+  );
+  assert.deepEqual(
+    reasons({ ...turn, outcome: 'waiting_user', waiting_reason: 'approval', duration_ms: 1 }),
+    [
+      [undefined, 'approval'],
+      [undefined, 'approval'],
+    ],
+  );
+  for (const event of turnEvents({
+    ...turn,
+    outcome: 'failed',
+    failure_reason: 'model',
+    duration_ms: 1,
+  }))
+    assert.equal(analyticsEvent.safeParse(event).success, true);
+  for (const privateValue of ['private-', scope.turnId, scope.sessionId, scope.runId])
+    assert.equal(JSON.stringify(captured).includes(privateValue), false);
+  const [, span, , , , trace] = segment() as { event: string; properties: object }[];
+  for (const [valid, extra] of [
+    [span!, { $ai_input_state: 'private-canary' }],
+    [span!, { $ai_output_state: 'private-canary' }],
+    [span!, { $ai_span_name: 'private-tool-canary' }],
+    [span!, { $ai_parent_id: scope.runId }],
+    [trace!, { $ai_input_state: 'private-canary' }],
+    [trace!, { $ai_trace_id: scope.turnId }],
+    [trace!, { $ai_session_id: scope.sessionId }],
+  ] as const) {
+    assert.equal(analyticsEvent.safeParse(valid).success, true);
+    assert.equal(
+      analyticsEvent.safeParse({ ...valid, properties: { ...valid.properties, ...extra } }).success,
+      false,
+    );
+  }
+  for (const event of segment()) analytics.capture(owner, event);
+  assert.deepEqual(
+    captured.slice(7).map(({ event }) => event),
+    ['tool_used', 'tool_used', 'turn_completed'],
+  );
+  assert.equal(
+    captured.slice(7).some(({ properties }) => 'mirrored_as' in properties),
+    false,
+  );
+  analytics.setUsageData(owner, false);
+  await analytics.withRun(owner, async () => {
+    for (const event of segment()) analytics.capture(owner, event);
+  });
+  assert.equal(captured.length, 10);
+});
+
+test('AI session IDs group the runs of a session with a random ID that rotates on idle and consent', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-11-18T09:00:00Z') });
+  const captured: Parameters<ProductAnalytics['capture']>[0][] = [];
+  const analytics = await createAnalytics({
+    provider: { capture: (event) => captured.push(event), shutdown: async () => {} },
+    environment: 'development',
+    dataRoot: '.',
+    installationId: randomUUID(),
+  });
+  t.after(() => analytics.shutdown());
+  const owner = 'synthetic-owner';
+  analytics.setUsageData(owner, true);
+  const chat = `private-session-${randomUUID()}`;
+  const task = `private-session-${randomUUID()}`;
+  const turn = {
+    source: 'user' as const,
+    channel: 'web' as const,
+    background: false,
+    work_type: 'immediate' as const,
+    owner_requested: true,
+  };
+  const generation = {
+    event: '$ai_generation' as const,
+    properties: {
+      $ai_provider: 'openai' as const,
+      $ai_span_name: 'chat' as const,
+      purpose: 'agent' as const,
+      request_kind: 'chat' as const,
+      outcome: 'succeeded' as const,
+      pricing: 'unavailable' as const,
+      $ai_input_tokens: 3,
+      $ai_output_tokens: 1,
+      $ai_cache_reporting_exclusive: true as const,
+      $ai_is_error: false,
+      $ai_total_cost_usd: 0,
+      $ai_cost_passthrough: true as const,
+    },
+  };
+  const run = (session?: string) =>
+    analytics.withRun(
+      owner,
+      () => {
+        const start = captured.length;
+        analytics.capture(owner, generation);
+        for (const event of turnEvents({ ...turn, outcome: 'succeeded', duration_ms: 1 }))
+          analytics.capture(owner, event);
+        return captured
+          .slice(start)
+          .filter(({ event }) => event.startsWith('$ai_'))
+          .map(({ properties }) => properties);
+      },
+      session,
+    );
+  const first = run(chat);
+  assert.deepEqual(
+    first.map((properties) => Object.hasOwn(properties, '$ai_session_id')),
+    [true, true],
+  );
+  const id = first[0].$ai_session_id;
+  assert.match(String(id), /^[0-9a-f-]{36}$/);
+  assert.equal(first[1].$ai_session_id, id);
+  t.mock.timers.tick(29 * 60_000);
+  const second = run(chat);
+  assert.equal(second[0].$ai_session_id, id);
+  assert.notEqual(second[0].$ai_trace_id, first[0].$ai_trace_id);
+  const taskId = run(task)[0].$ai_session_id;
+  assert.match(String(taskId), /^[0-9a-f-]{36}$/);
+  assert.notEqual(taskId, id);
+  t.mock.timers.tick(31 * 60_000);
+  const idle = run(chat)[0].$ai_session_id;
+  assert.notEqual(idle, id);
+  analytics.setUsageData(owner, false);
+  analytics.setUsageData(owner, true);
+  assert.notEqual(run(chat)[0].$ai_session_id, idle);
+  assert.equal(Object.hasOwn(run()[0], '$ai_session_id'), false);
+  assert.equal(turnAnalyticsSession({ session_id: chat, proactive: false }), chat);
+  const proactive = run(turnAnalyticsSession({ session_id: chat, proactive: true }));
+  assert.equal(Object.hasOwn(proactive[0], '$ai_session_id'), false);
+  analytics.capture(owner, generation);
+  assert.equal(captured.at(-1)!.properties.$ai_session_id, null);
+  await analytics.withSystemWork(owner, 'memory_learning', async () =>
+    analytics.capture(owner, generation),
+  );
+  assert.equal(captured.at(-1)!.properties.$ai_session_id, null);
+  for (const event of captured.filter(({ event }) => !event.startsWith('$ai_')))
+    assert.equal(Object.hasOwn(event.properties, '$ai_session_id'), false);
+  assert.equal(JSON.stringify(captured).includes('private-session-'), false);
 });
 
 test('accepted owner messages do not inherit an unrelated run context', async () => {

@@ -3,7 +3,7 @@ export interface ProductAnalytics {
     input: {
       distinctId: string;
       event: string;
-      properties: Record<string, string | number | boolean | string[]>;
+      properties: Record<string, string | number | boolean | string[] | null>;
       uuid?: string;
       timestamp?: Date;
       consentRevision?: string;
