@@ -1741,10 +1741,12 @@ test(
       ],
     });
     const accepted: Array<{ messageId: string; approvalId: string; approved: boolean }> = [];
+    const acceptedChannels: string[] = [];
     let work: LiveWork[] = [];
     let beforeCommit = async () => {};
     const channels = await create({
       activity: async () => work,
+      messageAccepted: () => (provider) => acceptedChannels.push(provider),
       acceptApproval: async (client, input) => {
         const { messageId, approvalId, approved } = input;
         accepted.push({ messageId, approvalId, approved });
@@ -1878,6 +1880,7 @@ test(
         'pending',
       );
       assert.equal(acknowledgements.at(-1), 'unavailable');
+      assert.deepEqual(acceptedChannels, ['telegram']);
     } finally {
       await app.close();
     }

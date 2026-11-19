@@ -570,6 +570,7 @@ export async function createChannels(pool: Pool, options: ChannelOptions) {
     };
     const stop = options.stopSignal?.();
     const signal = stop ? AbortSignal.any([receiving.signal, stop]) : receiving.signal;
+    const messageAccepted = options.messageAccepted?.();
     const active = () =>
       !signal.aborted &&
       !options.admission?.paused &&
@@ -628,7 +629,12 @@ export async function createChannels(pool: Pool, options: ChannelOptions) {
         throw cause;
       });
     }
-    if (result === 'recorded') options.refresh?.();
+    if (result === 'recorded') {
+      try {
+        messageAccepted?.(channelId);
+      } catch {}
+      options.refresh?.();
+    }
     await input.acknowledge(result).catch((cause: unknown) => {
       logFailure('channel_approval_acknowledgement_failed', cause);
     });

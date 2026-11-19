@@ -1736,6 +1736,8 @@ test(
     let webhookChecks = 0;
     let callbackEnabled = true;
     let pollingAcknowledged = false;
+    let rejectMarkdown = false;
+    let markdownRefusals = 0;
     let now = Date.now();
     t.mock.method(Date, 'now', () => now);
     t.mock.method(
@@ -1786,11 +1788,13 @@ test(
           return Response.json({ ok: true, result: true });
         }
         assert.equal(method, 'sendMessage');
-        if (body.parse_mode === 'MarkdownV2')
+        if (rejectMarkdown && body.parse_mode === 'MarkdownV2') {
+          markdownRefusals++;
           return Response.json(
             { ok: false, error_code: 400, description: "Bad Request: can't parse entities" },
             { status: 400 },
           );
+        }
         deliveries.push(body);
         return Response.json({
           ok: true,
@@ -1824,8 +1828,9 @@ test(
         approvalButtons: true,
       });
       const sent = deliveries[0]!;
-      assert.equal(sent.text, markdownToPlainText(approval.text));
+      assert.equal(sent.parse_mode, 'MarkdownV2');
       assert.ok(String(sent.text).includes(prompt));
+      assert.ok(String(sent.text).includes('Create this schedule?'));
       assert.equal(Object(sent.reply_parameters).message_id, 7);
       assert.deepEqual(
         Object(sent.reply_markup).inline_keyboard[0].map(
@@ -1833,7 +1838,13 @@ test(
         ),
         ['nod:approval:yes', 'nod:approval:no'],
       );
-      await transport.post(approval);
+      rejectMarkdown = true;
+      const plain = await transport.post(approval);
+      assert.equal(markdownRefusals, 1);
+      assert.equal(plain.approvalButtons, true);
+      assert.equal(deliveries.at(-1)?.parse_mode, undefined);
+      assert.equal(deliveries.at(-1)?.text, markdownToPlainText(approval.text));
+      assert.deepEqual(deliveries.at(-1)?.reply_markup, sent.reply_markup);
       assert.equal(webhookChecks, 1);
       callbackEnabled = false;
       now += 60_001;
