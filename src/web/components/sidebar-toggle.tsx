@@ -31,7 +31,11 @@ export function toggleSidebarState(state: SidebarState): SidebarState {
   return { ...state, hidden: !state.hidden };
 }
 
-let sliding: Animation[] = [];
+let stopSlide = () => {};
+
+export function stopSidebarSlide() {
+  stopSlide();
+}
 
 function slideSidebar(toggle: HTMLElement, apply: () => void) {
   const shell = toggle.closest<HTMLElement>('.app-shell');
@@ -52,9 +56,9 @@ function slideSidebar(toggle: HTMLElement, apply: () => void) {
   const edge = sidebar.getBoundingClientRect();
   const bodyFrom = centre(body);
   const toggleFrom = toggle.getBoundingClientRect().left;
-  for (const animation of sliding) animation.cancel();
-  shell.toggleAttribute('data-sliding', true);
+  stopSlide();
   flushSync(apply);
+  shell.toggleAttribute('data-sliding', true);
   const hidden = shell.classList.contains('sidebar-hidden');
   sidebar.style.width = hidden ? `${edge.width}px` : '';
   const width = hidden ? edge.width : sidebar.getBoundingClientRect().width;
@@ -73,7 +77,7 @@ function slideSidebar(toggle: HTMLElement, apply: () => void) {
     },
     timing,
   );
-  sliding = [
+  const sliding = [
     panel,
     body.animate({ transform: [`translateX(${bodyShift}px)`, 'none'] }, timing),
     ...(toggleShift
@@ -96,10 +100,16 @@ function slideSidebar(toggle: HTMLElement, apply: () => void) {
       ? [toolbar.animate({ clipPath: [`inset(0 0 0 ${covered}px)`, 'inset(0)'] }, timing)]
       : []),
   ];
+  const stop = () => {
+    stopSlide = () => {};
+    for (const animation of sliding) animation.cancel();
+    shell.removeAttribute('data-sliding');
+    sidebar.style.width = '';
+  };
+  stopSlide = stop;
   panel.finished.then(
     () => {
-      shell.removeAttribute('data-sliding');
-      sidebar.style.width = '';
+      if (stopSlide === stop) stop();
     },
     () => {},
   );

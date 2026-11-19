@@ -31,6 +31,7 @@ import {
   SidebarResizer,
   SidebarToggle,
   readSidebarState,
+  stopSidebarSlide,
   toggleSidebarState,
   writeSidebarState,
 } from './components/sidebar-toggle';
@@ -202,6 +203,7 @@ function Workspace({
     writeSidebarState(sidebar);
   }, [sidebar]);
   useLayoutEffect(() => {
+    stopSidebarSlide();
     if (sidebar.hidden && document.activeElement?.closest('.sidebar'))
       document.querySelector<HTMLElement>('.sidebar-toggle')?.focus();
   }, [sidebar.hidden]);
