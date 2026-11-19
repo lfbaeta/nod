@@ -3171,6 +3171,35 @@ describe('model connections', { skip: !process.env.TEST_DATABASE_URL }, () => {
     assert.ok(Math.abs(small.input - 0.00001) < 1e-12);
     assert.ok(Math.abs(small.output - 0.00002) < 1e-12);
     assert.ok(models.every((model) => !('spec' in model)));
+    const tier = { inputTokensAbove: 100_000, input: 3, output: 6, cacheRead: 1, cacheWrite: 3 };
+    await f.database.query(
+      `UPDATE model_connections SET models=jsonb_set(
+        jsonb_set(models,'{0,spec,cost,tiers}',$3),'{1,spec,cost,tiers}',$4
+      ) WHERE id=$1 AND owner_id=$2`,
+      [
+        id,
+        ownerId,
+        JSON.stringify([tier]),
+        JSON.stringify([
+          tier,
+          {
+            ...tier,
+            inputTokensAbove: 120_000,
+            cacheWrite: -1,
+          },
+        ]),
+      ],
+    );
+    const tiered = await f.create(ownerId, backend);
+    const [paidTier, variableTier] = tiered.view().connections[0].models;
+    assert.deepEqual(paidTier.pricing, {
+      input: 1.25,
+      output: 5,
+      cacheRead: 0,
+      cacheWrite: 0,
+      tiers: [tier],
+    });
+    assert.equal(variableTier.pricing, 'variable');
     await f.database.query(
       `UPDATE model_connections SET models=jsonb_set(models,'{0,spec,cost,input}','"invalid"') WHERE id=$1 AND owner_id=$2`,
       [id, ownerId],

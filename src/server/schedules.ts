@@ -117,7 +117,9 @@ export interface ScheduleDependencies {
   modelPaused?(model: ModelSelection | null): boolean;
   recentTurnUsage?(turnId?: string): Promise<Array<WorkUsage & { recordedUsd: number }>>;
   validateModel?(choice: ModelSelection): ModelSelection;
-  sessionUsage?(sessionIds: string[]): Promise<Record<string, WorkUsage>>;
+  sessionUsage?(
+    sessionIds: string[],
+  ): Promise<Record<string, WorkUsage & { unpricedOther: boolean }>>;
   workPricing?(own: ModelSelection | null): WorkPrice | undefined;
 }
 
@@ -798,7 +800,7 @@ export function createSchedules(dependencies: ScheduleDependencies) {
       runs.flatMap((run) => {
         const spent = usage?.[run.turn_id];
         const recorded = spent ? spent.agentUsd + spent.otherUsd : costs[run.turn_id];
-        if (!keep(run)) return [];
+        if (!keep(run) || spent?.unpricedOther) return [];
         const cost = forecast(spent, recorded, target);
         return hasPrice(cost) ? [cost] : [];
       });

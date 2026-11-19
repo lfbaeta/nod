@@ -1277,6 +1277,18 @@ test(
           await expectRunCost(3.26);
           assert.equal((await ledger.sessionCosts([run.turnId]))[run.turnId], null);
           await db.pool.query('DELETE FROM model_usage WHERE id=$1', [cancelledUsageId]);
+          const unpricedReview = randomUUID();
+          await db.pool.query(
+            'INSERT INTO model_usage(id,owner_id,turn_id,cost_usd,details) VALUES($1,$2,$3,NULL,$4)',
+            [
+              unpricedReview,
+              ownerId,
+              run.turnId,
+              { category: 'review', status: 'succeeded', inputTokens: 100 },
+            ],
+          );
+          assert.equal(await monthly(), null);
+          await db.pool.query('DELETE FROM model_usage WHERE id=$1', [unpricedReview]);
           await db.pool.query('UPDATE model_usage SET cost_usd=0 WHERE turn_id=$1', [run.turnId]);
           await setModel(schedule.id, light);
           await expectRunCost(0.15);

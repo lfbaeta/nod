@@ -94,7 +94,8 @@ function modelPricing(model: ModelDefinition): ModelChoice['pricing'] {
   const cost = modelRates.safeParse(model.spec.cost).data;
   if (!cost) return undefined;
   const { tiers, ...rates } = cost;
-  if (Object.values(rates).some((value) => value < 0)) return 'variable';
+  if ([rates, ...(tiers ?? [])].some((rate) => Object.values(rate).some((value) => value < 0)))
+    return 'variable';
   return {
     ...rates,
     ...(tiers?.length ? { tiers } : {}),

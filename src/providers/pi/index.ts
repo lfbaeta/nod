@@ -1160,8 +1160,8 @@ export function createPiAgent(options: {
       let compaction:
         { id: string; started: number; error?: string; requests: AssistantMessage[] } | undefined;
       const auxiliarySeen = new Set(manager.getEntries().map((entry) => entry.id));
-      const usagePricing = (message: AssistantMessage | undefined) => {
-        const target = message && runtime.getModel(message.provider, message.model);
+      const usagePricing = (usage: { provider: string; model: string } | undefined) => {
+        const target = usage && runtime.getModel(usage.provider, usage.model);
         return modelPricingSignature(target?.cost, target?.api);
       };
       const observeUsage = createPiUsageTracker({
@@ -1227,6 +1227,7 @@ export function createPiAgent(options: {
               status: 'succeeded',
               durationMs: 0,
               ...piUsageMetrics(event.entry.usage),
+              pricingSignature: usagePricing(event.entry),
             },
           });
         }

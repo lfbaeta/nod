@@ -847,6 +847,8 @@ export function createLedger({
       cacheWrite1h: "(m.details->>'cacheWrite1hTokens')::float8",
     };
     const agent = "m.details->>'category'='agent'";
+    const other = "m.details->>'category' IS DISTINCT FROM 'agent'";
+    const tokenColumns = Object.values(tokens);
     const billed = includePlanEstimates
       ? "COALESCE(m.cost_usd,(m.details->>'estimateUsd')::float8)"
       : 'm.cost_usd';
@@ -859,27 +861,34 @@ export function createLedger({
     const bands = thresholds.map((_, index) => {
       const threshold = `$${firstParameter + index}::float8`;
       const above = `${agent} AND ${input}>${threshold}`;
-      return `ARRAY[${threshold},${Object.values(tokens)
-        .map((column) => sum(column, above))
-        .join(',')}]`;
+      return `ARRAY[${threshold},${tokenColumns.map((column) => sum(column, above)).join(',')}]`;
     });
+    const otherCoverage = includePlanEstimates
+      ? ''
+      : `, count(*) FILTER (
+        WHERE ${other} AND m.cost_usd IS NULL AND m.details->>'estimateUsd' IS NULL
+          AND (COALESCE(m.details->>'status','succeeded') NOT IN ('failed','cancelled')
+               OR GREATEST(${tokenColumns.join(',')})>0)
+      )>0 AS "unpricedOther"`;
     return {
       thresholds,
       columns: `${base.join(',')},
         ${sum(billed, agent)} AS "agentUsd",
-        ${sum(billed, "m.details->>'category' IS DISTINCT FROM 'agent'")} AS "otherUsd",
+        ${sum(billed, other)} AS "otherUsd",
         COALESCE(array_agg(DISTINCT m.details->>'model') FILTER (WHERE ${agent} AND m.details->>'model' IS NOT NULL),'{}') AS models,
         COALESCE(array_agg(DISTINCT CASE WHEN ${billed} IS NOT NULL THEN m.details->>'pricingSignature' END) FILTER (
-          WHERE ${agent} AND GREATEST(${billed},${Object.values(tokens).join(',')})>0
+          WHERE ${agent} AND GREATEST(${billed},${tokenColumns.join(',')})>0
         ),'{}') AS "pricingSignatures",
-        ARRAY[${bands.join(',')}]::float8[] AS "tokensAbove"`,
+        ARRAY[${bands.join(',')}]::float8[] AS "tokensAbove"${otherCoverage}`,
     };
   }
 
-  async function sessionUsage(sessionIds: string[]): Promise<Record<string, WorkUsage>> {
+  async function sessionUsage(
+    sessionIds: string[],
+  ): Promise<Record<string, WorkUsage & { unpricedOther: boolean }>> {
     if (!sessionIds.length) return {};
     const { columns, thresholds } = usageForecastColumns(3, false);
-    const { rows } = await pool.query<WorkUsage & { sessionId: string }>(
+    const { rows } = await pool.query<WorkUsage & { sessionId: string; unpricedOther: boolean }>(
       `SELECT u.session_id AS "sessionId",${columns}
        FROM model_usage m JOIN turns u ON u.id=m.turn_id AND u.owner_id=m.owner_id
        WHERE m.owner_id=$1 AND u.session_id=ANY($2::uuid[]) GROUP BY u.session_id`,
