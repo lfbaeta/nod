@@ -41,6 +41,7 @@ import { captureConnectionInventory } from './analytics-connections.ts';
 import {
   BrowserActionError,
   type BrowserAction,
+  type BrowserPage,
   type Computer,
   type Workspace,
 } from '../ports/computer.ts';
@@ -1398,6 +1399,7 @@ async function initializeApplication(
       readOnly: _readOnly,
       expectUrl: _expectUrl,
       expectTarget: _expectTarget,
+      expectSelections: _expectSelections,
       ...command
     } = step as BrowserAction;
     return {
@@ -1418,9 +1420,25 @@ async function initializeApplication(
     const form = value as { method?: unknown; to?: unknown } | string | undefined;
     return typeof form === 'object' ? `${String(form.method)} ${String(form.to)}` : String(form);
   };
+  const sameBrowserTarget = (current: BrowserPage | undefined, args: Record<string, unknown>) =>
+    current?.origin === args.website &&
+    current?.url === args.page &&
+    current?.dialog === args.dialog &&
+    current?.target === args.target &&
+    isDeepStrictEqual(current?.controls?.length ? current.controls : undefined, args.control) &&
+    isDeepStrictEqual(
+      current?.dropTarget?.length ? current.dropTarget : undefined,
+      args.dropTarget,
+    ) &&
+    formSent(current?.submits) === formSent(args.submits);
   const replayBrowserStep = async (
     args: Record<string, unknown>,
-    provenance: { threadId: string; turnId: string },
+    provenance: {
+      threadId: string;
+      turnId: string;
+      signal?: AbortSignal;
+      details?: Record<string, unknown>;
+    },
   ) => {
     const command = args.command as Omit<BrowserAction, 'action'> & {
       action: BrowserAction['action'] | 'upload';
@@ -1442,46 +1460,62 @@ async function initializeApplication(
         command.action === 'upload'
           ? { action: 'click', selector: String(command.selector) }
           : (command as BrowserAction),
+        provenance.signal,
       )
       .catch(() => undefined);
+    provenance.signal?.throwIfAborted();
+    if (!sameBrowserTarget(current, args)) throw notRun();
+    const expectSelections = provenance.details?.verifiedBrowserSelections;
     if (
-      current?.origin !== expectOrigin ||
-      current.url !== args.page ||
-      current.dialog !== args.dialog ||
-      current.target !== args.target ||
-      !isDeepStrictEqual(current.controls?.length ? current.controls : undefined, args.control) ||
-      !isDeepStrictEqual(
-        current.dropTarget?.length ? current.dropTarget : undefined,
-        args.dropTarget,
-      ) ||
-      formSent(current.submits) !== formSent(args.submits)
+      (expectSelections !== undefined || current?.currentSelections !== undefined) &&
+      (typeof expectSelections !== 'string' ||
+        current?.currentSelections?.incomplete ||
+        current?.currentSelections?.binding !== expectSelections)
     )
-      throw notRun();
+      throw Object.assign(
+        new BrowserActionError(
+          'browser_target_changed',
+          current?.currentSelections?.incomplete ??
+            'The saved current selections could not be verified.',
+        ),
+        { notRun: true },
+      );
+    const selectionBinding = typeof expectSelections === 'string' ? { expectSelections } : {};
     try {
       const page =
         command.action === 'upload'
-          ? await computer.upload(browserId, {
-              selector: String(command.selector),
-              name: basename(String(command.path)),
-              bytes: await workspace.readArtifact(
-                provenance.threadId,
-                String(command.path),
-                fileBytes,
-              ),
-              expectOrigin,
-              expectUrl: String(args.page),
-              ...(args.target ? { expectTarget: String(args.target) } : {}),
-            })
-          : await computer.act(browserId, {
-              ...(command as BrowserAction),
-              expectOrigin,
-              expectUrl: String(args.page),
-              ...(args.target ? { expectTarget: String(args.target) } : {}),
-            });
+          ? await computer.upload(
+              browserId,
+              {
+                selector: String(command.selector),
+                name: basename(String(command.path)),
+                bytes: await workspace.readArtifact(
+                  provenance.threadId,
+                  String(command.path),
+                  fileBytes,
+                ),
+                expectOrigin,
+                expectUrl: String(args.page),
+                ...(args.target ? { expectTarget: String(args.target) } : {}),
+                ...selectionBinding,
+              },
+              provenance.signal,
+            )
+          : await computer.act(
+              browserId,
+              {
+                ...(command as BrowserAction),
+                expectOrigin,
+                expectUrl: String(args.page),
+                ...(args.target ? { expectTarget: String(args.target) } : {}),
+                ...selectionBinding,
+              },
+              provenance.signal,
+            );
       return { url: page.url, page: page.text };
     } catch (error) {
       if (error instanceof BrowserActionError && error.code === 'browser_target_changed')
-        throw notRun();
+        throw Object.assign(error, { notRun: true });
       throw error;
     }
   };
@@ -2418,9 +2452,37 @@ async function initializeApplication(
                 },
                 () => undefined,
               ));
-          return typeof visible === 'string' && visible.trim()
-            ? { pageText: publicText(visible.slice(0, 20_000)) }
-            : {};
+          signal?.throwIfAborted();
+          const current = turn.browserId
+            ? await computer.currentPage(
+                turn.browserId,
+                request.step.action === 'upload'
+                  ? { action: 'click', selector: request.step.selector }
+                  : request.step,
+                signal,
+              )
+            : request.page;
+          if (!sameBrowserTarget(current, args))
+            throw new BrowserActionError('browser_target_changed');
+          const selections = current.currentSelections;
+          if (
+            (request.page.currentSelections !== undefined || selections !== undefined) &&
+            (!selections?.binding || selections.incomplete)
+          )
+            throw new Error(
+              selections?.incomplete ?? 'The current selections could not be verified.',
+            );
+          return {
+            ...(typeof visible === 'string' && visible.trim()
+              ? { pageText: publicText(visible.slice(0, 20_000)) }
+              : {}),
+            ...(selections
+              ? {
+                  currentSelections: selections.values,
+                  verifiedBrowserSelections: selections.binding,
+                }
+              : {}),
+          };
         };
         if (!verdict.confirm) {
           if (verdict.basis.kind === 'read') return 'run';

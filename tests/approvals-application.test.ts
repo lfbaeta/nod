@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { syncBuiltinESMExports } from 'node:module';
 import { setTimeout as delay } from 'node:timers/promises';
+import { isDeepStrictEqual } from 'node:util';
 import test from 'node:test';
 import pg from 'pg';
 import { z } from 'zod';
@@ -438,7 +439,9 @@ test(
                       await tool(name).execute(
                         call.tool === 'synthetic_mcp'
                           ? call.args
-                          : call.tool === 'files' || call.tool === 'sign_in'
+                          : call.tool === 'files' ||
+                              call.tool === 'sign_in' ||
+                              call.tool === 'browser'
                             ? { action: call.action, ...call.args }
                             : call,
                       ),
@@ -1835,6 +1838,210 @@ test(
             assert.equal((await approvalsFor(held))[0].status, 'completed');
           } finally {
             browserWording = undefined;
+          }
+        },
+      );
+
+      for (const uncertain of [false, true])
+        await t.test(
+          `browser confirmations keep selections separate from ${uncertain ? 'uncertain' : 'completed'} action identity`,
+          async () => {
+            const values = [
+              { role: 'combobox', name: 'Company', value: 'Synthetic Company B' },
+              { role: 'combobox', name: 'Month', value: 'November' },
+              { role: 'combobox', name: 'Year', value: '2026' },
+            ];
+            const page: BrowserPage = {
+              origin: 'https://reports.example.test',
+              url: 'https://reports.example.test/organization',
+              target: 'a'.repeat(64),
+              controls: [{ role: 'button', name: uncertain ? '' : 'Generate report' }],
+              submits: { method: 'POST', to: 'https://reports.example.test/report' },
+              currentSelections: { binding: '1'.repeat(64), values },
+            };
+            const wording: Array<Record<string, any>> = [];
+            const committed: BrowserAction[] = [];
+            calendarBrowser = {
+              currentPage: async () => structuredClone(page),
+              act: async (_id, input) => {
+                if (input.action === 'evaluate')
+                  return {
+                    text: `Result:\n${JSON.stringify('Company A Company B October November 2025 2026')}`,
+                    url: page.url,
+                  };
+                committed.push(input);
+                page.currentSelections = {
+                  binding: '2'.repeat(64),
+                  values: [
+                    ...values,
+                    { role: 'checkbox', name: 'Include vacancies', checked: 'false' },
+                  ],
+                };
+                if (uncertain)
+                  throw new Error('Synthetic report response was lost after dispatch.');
+                return { text: 'Synthetic report generated once.', url: page.url };
+              },
+            };
+            browserWording = (input) => {
+              wording.push(structuredClone(input));
+              if (input.purpose === 'confirmation_review')
+                return isDeepStrictEqual(input.data.details?.currentSelections, values)
+                  ? { valid: true }
+                  : { valid: false, reason: 'The current company and period are missing.' };
+              return {
+                text: 'May I generate the November 2026 report for Synthetic Company B?',
+                action: 'Generate report',
+              };
+            };
+            try {
+              const held = await propose('click', { selector: '@e7' }, 'browser');
+              const [card] = await approvalsFor(held);
+              assert.ok(card, 'The selected company and period must reach the independent review.');
+              assert.equal(card.status, 'pending');
+              assert.equal(committed.length, 0);
+              assert.deepEqual(card.details.currentSelections, values);
+              assert.equal(card.details.verifiedBrowserSelections, '1'.repeat(64));
+              assert.deepEqual(
+                wording.map((input) => input.purpose),
+                ['confirmation', 'confirmation_review'],
+              );
+              for (const input of wording) {
+                assert.deepEqual(input.data.details.currentSelections, values);
+                assert.equal(input.data.details.verifiedBrowserSelections, undefined);
+              }
+              const checked = (fallbackChecks as Array<Record<string, any>>).findLast(
+                (input) => input.action?.name === 'NOD_browser',
+              );
+              assert.ok(checked);
+              assert.doesNotMatch(
+                JSON.stringify(checked),
+                /Synthetic Company B|November|currentSelections/,
+              );
+              assert.doesNotMatch(JSON.stringify(card.args), /currentSelections|expectSelections/);
+              repeatAfterConfirm = { tool: 'browser', action: 'click', args: { selector: '@e7' } };
+              const approved = await request('POST', '/api/messages', {
+                text: 'Yes',
+                replyToMessageId: card.confirmation_message_id,
+                clientMessageId: randomUUID(),
+              });
+              assert.equal(approved.statusCode, 200, approved.body);
+              await waitFor(approved.json().turnId, uncertain ? 'failed|succeeded' : 'succeeded');
+              assert.equal(repeatAfterConfirm, undefined);
+              assert.equal(committed.length, 1);
+              assert.equal(committed[0].expectSelections, '1'.repeat(64));
+              assert.equal(
+                (await approvalsFor(held))[0].status,
+                uncertain ? 'uncertain' : 'completed',
+              );
+              assert.equal(wording.length, 2);
+              const repeated = await approvalsFor(approved.json().turnId);
+              assert.equal(repeated.length, 0);
+            } finally {
+              repeatAfterConfirm = undefined;
+              calendarBrowser = undefined;
+              browserWording = undefined;
+            }
+          },
+        );
+
+      await t.test(
+        'changed, incomplete and legacy browser selections do not dispatch an approved action',
+        async () => {
+          const page: BrowserPage = {
+            origin: 'https://reports.example.test',
+            url: 'https://reports.example.test/organization',
+            target: 'a'.repeat(64),
+            controls: [{ role: 'button', name: 'Generate report' }],
+            submits: { method: 'POST', to: 'https://reports.example.test/report' },
+          };
+          let clicks = 0;
+          let failAtDispatch = false;
+          calendarBrowser = {
+            currentPage: async () => structuredClone(page),
+            act: async (_id, input, signal) => {
+              signal?.throwIfAborted();
+              if (input.action === 'evaluate')
+                return { text: 'Result:\n"Synthetic report"', url: page.url };
+              if (failAtDispatch)
+                throw new BrowserActionError(
+                  'browser_target_changed',
+                  'Synthetic final selection changed.',
+                );
+              clicks++;
+              return { text: 'Synthetic report', url: page.url };
+            },
+          };
+          try {
+            for (const mode of ['changed', 'incomplete', 'legacy', 'final']) {
+              page.currentSelections = {
+                binding: '1'.repeat(64),
+                values: [{ role: 'combobox', name: 'Month', value: 'November' }],
+              };
+              const held = await propose('click', { selector: '@e7' }, 'browser');
+              const [card] = await approvalsFor(held);
+              assert.ok(card);
+              if (mode === 'changed') page.currentSelections.binding = '2'.repeat(64);
+              if (mode === 'incomplete')
+                page.currentSelections.incomplete = 'Synthetic selection capture failed.';
+              if (mode === 'legacy')
+                await pool.query(
+                  "UPDATE approvals SET details=details-'verifiedBrowserSelections' WHERE id=$1",
+                  [card.id],
+                );
+              failAtDispatch = mode === 'final';
+              const approved = await request('POST', '/api/messages', {
+                text: 'Yes',
+                replyToMessageId: card.confirmation_message_id,
+                clientMessageId: randomUUID(),
+              });
+              assert.equal(approved.statusCode, 200, approved.body);
+              await waitFor(approved.json().turnId, 'succeeded');
+              assert.equal((await approvalsFor(held))[0].status, 'expired', mode);
+              assert.equal(clicks, 0, mode);
+              assert.match(
+                prompts.get(approved.json().turnId) ?? '',
+                /did not run, so nothing was done/,
+              );
+              if (mode === 'incomplete')
+                assert.match(
+                  prompts.get(approved.json().turnId) ?? '',
+                  /Synthetic selection capture failed/,
+                );
+              if (mode === 'final')
+                assert.match(
+                  prompts.get(approved.json().turnId) ?? '',
+                  /Synthetic final selection changed/,
+                );
+              failAtDispatch = false;
+            }
+            page.currentSelections = {
+              values: [],
+              incomplete: 'Synthetic native state unavailable.',
+            };
+            const text = `Synthetic incomplete report ${randomUUID()}`;
+            plans.set(text, { tool: 'browser', action: 'click', args: { selector: '@e7' } });
+            const held = await request('POST', '/api/messages', { text });
+            assert.equal(held.statusCode, 200, held.body);
+            await waitFor(held.json().turnId, 'failed');
+            const turn = (
+              await pool.query('SELECT error FROM turns WHERE id=$1', [held.json().turnId])
+            ).rows[0];
+            assert.match(turn.error, /Synthetic native state unavailable/);
+            assert.deepEqual(await approvalsFor(held.json().turnId), []);
+            assert.equal(clicks, 0);
+            asked.add(text);
+            try {
+              const allowed = await request('POST', '/api/messages', { text });
+              assert.equal(allowed.statusCode, 200, allowed.body);
+              await waitFor(allowed.json().turnId, 'succeeded');
+              assert.equal(clicks, 1);
+              assert.deepEqual(await approvalsFor(allowed.json().turnId), []);
+            } finally {
+              asked.delete(text);
+              plans.delete(text);
+            }
+          } finally {
+            calendarBrowser = undefined;
           }
         },
       );

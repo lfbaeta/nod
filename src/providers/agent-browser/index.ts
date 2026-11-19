@@ -1830,6 +1830,82 @@ export function createAgentBrowserComputer(options: {
     return { target, details };
   }
 
+  async function currentSelections(
+    state: BrowserState,
+    signal?: AbortSignal,
+  ): Promise<NonNullable<BrowserPage['currentSelections']>> {
+    const captureSignal = signal
+      ? AbortSignal.any([signal, AbortSignal.timeout(5000)])
+      : AbortSignal.timeout(5000);
+    captureSignal.throwIfAborted();
+    let abort = () => {};
+    const stopped = new Promise<never>((_resolve, reject) => {
+      abort = () => reject(captureSignal.reason);
+      captureSignal.addEventListener('abort', abort, { once: true });
+    });
+    let active: Awaited<ReturnType<typeof inspector>> | undefined;
+    try {
+      const capture = async () => {
+        const devtools = await inspector(state, captureSignal);
+        active = devtools;
+        try {
+          captureSignal.throwIfAborted();
+          const observed = await devtools.selections();
+          captureSignal.throwIfAborted();
+          const binding = createHmac('sha256', targetKey)
+            .update('selections:')
+            .update(JSON.stringify(observed))
+            .digest('hex');
+          let incomplete: string | undefined;
+          const selected = observed.flatMap((frame) => frame.values);
+          if (selected.length > 20) incomplete = 'The page has more than 20 current selections.';
+          const values = selected
+            .slice(0, 20)
+            .map(
+              ({
+                node: _node,
+                parent: _parent,
+                nativeValue: _nativeValue,
+                valueText: _valueText,
+                ...value
+              }) => {
+                for (const key of ['role', 'name', 'value', 'group'] as const) {
+                  const original = value[key];
+                  if (original === undefined) continue;
+                  const safe = redactBrowserText(original, state.secrets);
+                  if (safe !== original) incomplete = 'A current selected value is hidden.';
+                  const limit = key === 'role' ? 100 : 300;
+                  if (safe.length > limit)
+                    incomplete = 'A current selected value exceeds the description limit.';
+                  value[key] = safe.slice(0, limit);
+                }
+                return value;
+              },
+            );
+          return { binding, values, ...(incomplete ? { incomplete } : {}) };
+        } finally {
+          devtools.close();
+          if (active === devtools) active = undefined;
+        }
+      };
+      return await Promise.race([capture(), stopped]);
+    } catch (error) {
+      signal?.throwIfAborted();
+      return {
+        values: [],
+        incomplete:
+          'The current selections could not be read: ' +
+          redactBrowserText(
+            error instanceof Error ? error.message : String(error),
+            state.secrets,
+          ).slice(0, 950),
+      };
+    } finally {
+      captureSignal.removeEventListener('abort', abort);
+      active?.close();
+    }
+  }
+
   async function onTarget(
     state: BrowserState,
     input: Omit<BrowserAction, 'action'> & { action?: BrowserAction['action'] },
@@ -1838,9 +1914,18 @@ export function createAgentBrowserComputer(options: {
     if (
       input.expectOrigin === undefined &&
       input.expectUrl === undefined &&
-      input.expectTarget === undefined
+      input.expectTarget === undefined &&
+      input.expectSelections === undefined
     )
       return;
+    if (input.expectSelections !== undefined) {
+      const current = await currentSelections(state, signal);
+      if (current.incomplete || current.binding !== input.expectSelections)
+        throw new BrowserActionError(
+          'browser_target_changed',
+          current.incomplete ?? 'The current selections changed.',
+        );
+    }
     const dialog = input.action === 'accept_dialog' ? await openDialog(state, signal) : undefined;
     const at = dialog
       ? await dialogPageUrl(state, signal).catch(() => '')
@@ -1884,13 +1969,19 @@ export function createAgentBrowserComputer(options: {
     }
   }
 
-  async function currentPage(id: string, step?: BrowserAction): Promise<BrowserPage> {
+  async function currentPage(
+    id: string,
+    step?: BrowserAction,
+    signal?: AbortSignal,
+  ): Promise<BrowserPage> {
+    signal?.throwIfAborted();
     const state = await recoverBrowser(id);
     if (state?.saved.navigationFailed || (!state && (await screens.load(id))?.navigationFailed))
       throw new BrowserActionError('browser_navigation_failed');
     if (!state?.started) throw new Error('Open the login page in this task browser first.');
     if (state.injecting) throw new BrowserLockedError();
     return serialize(state, async () => {
+      signal?.throwIfAborted();
       if (state.injecting) throw new BrowserLockedError();
       if (await privateDocumentOpen(state)) throw new BrowserLockedError();
       const dialog = step?.action === 'accept_dialog' ? await openDialog(state) : undefined;
@@ -1907,6 +1998,7 @@ export function createAgentBrowserComputer(options: {
       return {
         ...page,
         target,
+        currentSelections: await currentSelections(state, signal),
         ...(details?.controls ? { controls: details.controls } : {}),
         ...(submits
           ? {

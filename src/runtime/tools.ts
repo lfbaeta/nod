@@ -866,6 +866,7 @@ export function nodTools(
     const page = await computer.currentPage(
       browserId,
       step.action === 'upload' ? { action: 'click', selector: step.selector } : step,
+      signal,
     );
     signal.throwIfAborted();
     if (
