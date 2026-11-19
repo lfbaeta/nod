@@ -66,24 +66,27 @@ function errorType(error: string, phase?: ModelRequestFacts['requestPhase']) {
     (/free[_ -]?tier|daily|per[_ -]?day/i.test(error) && /quota|limit|allowance/i.test(error))
   )
     return 'quota';
-  if (
-    /usage[_ -]limit|you(?:'ve| have) hit your.*limit|subscription.*limit.*(?:reached|exceeded)/i.test(
-      error,
-    )
-  )
-    return 'quota';
+  if (/rate[_ -]?limit|too many requests|requests per minute|tokens per minute/i.test(error))
+    return 'rate_limit';
+  if (/usage[_ -]limit|subscription.*limit.*(?:reached|exceeded)/i.test(error)) return 'quota';
   if (
     /high demand|overloaded_error|\b(?:model|service).*(?:overloaded|temporarily unavailable)|\bservice unavailable\b/i.test(
       error,
     )
   )
     return 'provider_unavailable';
-  if (/rate[_ -]?limit|too many requests|requests per minute|tokens per minute/i.test(error))
-    return 'rate_limit';
   if (/quota.*(?:exceeded|exhausted)|(?:exceeded|exhausted).*quota/i.test(error)) return 'quota';
   if (/\b429\b/.test(error)) return 'rate_limit';
+  const terminated =
+    /^(?:(?:Type)?Error:\s*)?terminated(?:\s+\(HTTP [1-5]\d{2}\))?(?:\s+\(transport cause: [A-Z_]+\))?(?:\s+\[request phase: [a-z_]+\])?\s*$/i.test(
+      error,
+    ) ||
+    /\b(?:stream|socket|connection)(?: (?:was|has been|is|unexpectedly))? terminated\b|\bterminated (?:response )?(?:stream|socket|connection)\b/i.test(
+      error,
+    );
   if (
-    /\b(?:ECONN[A-Z]+|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|UND_ERR_[A-Z_]+)\b|\bterminated\b|fetch failed|failed to fetch|network|connection (?:error|failed|refused|reset)|timed? ?out|timeout/i.test(
+    terminated ||
+    /\b(?:ECONN[A-Z]+|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|UND_ERR_[A-Z_]+)\b|fetch failed|failed to fetch|network|connection (?:error|failed|refused|reset)|timed? ?out|timeout/i.test(
       error,
     )
   )

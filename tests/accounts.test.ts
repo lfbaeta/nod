@@ -2030,7 +2030,8 @@ describe('account routes', () => {
     await settle(7);
     assert.notEqual(delivered[6].metadata.thread_id, ids.thread_id);
     const key = await readFile(join(root, 'trace-key'), 'utf8');
-    assert.equal((await lstat(join(root, 'trace-key'))).mode & 0o077, 0);
+    if (process.platform !== 'win32')
+      assert.equal((await lstat(join(root, 'trace-key'))).mode & 0o077, 0);
     for (const privateValue of [sessionId, turnId, key, 'private-forged-id', 'lena@example.test'])
       assert.ok(
         !JSON.stringify(delivered).includes(privateValue),

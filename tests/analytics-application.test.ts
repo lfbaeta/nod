@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -331,5 +331,24 @@ test(
       await application.app.close();
       await pool.end();
     }
+    const failureLog = await readFile(
+      join(
+        dataDirectory,
+        'feedback-logs',
+        `${createHash('sha256').update(ownerId).digest('hex')}-failures`,
+        'journal-0.jsonl',
+      ),
+      'utf8',
+    );
+    const failures = failureLog
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line));
+    assert.equal(
+      failures.filter((entry) => entry.data.event === 'trace_conversation_key_unavailable').length,
+      1,
+    );
+    assert.equal(failureLog.includes(dataDirectory), false);
+    assert.equal(failureLog.includes('invalid-synthetic-trace-key'), false);
   },
 );

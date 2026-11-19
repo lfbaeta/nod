@@ -767,13 +767,14 @@ async function initializeApplication(
     failure: FailureLogSink;
   },
 ) {
+  let traceKeyFailure: unknown;
   if (adapters.traces) {
     try {
       adapters.traces.configure({
         conversationKey: Buffer.from(await traceKey(dataRoot), 'base64url'),
       });
     } catch (error) {
-      logFailure('trace_conversation_key_unavailable', error);
+      traceKeyFailure = error;
     }
   }
   const analytics = await createAnalytics({
@@ -2159,6 +2160,8 @@ async function initializeApplication(
     name: 'failures',
     sanitize: sanitizeDiagnostics,
   });
+  if (traceKeyFailure !== undefined)
+    logFailure('trace_conversation_key_unavailable', traceKeyFailure);
   adapters.traces?.configure({
     enabled: (await localAccounts.read(ownerId)).traces,
     userId: analytics.distinctId,

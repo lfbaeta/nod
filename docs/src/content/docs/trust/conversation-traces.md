@@ -49,16 +49,18 @@ Each trace includes the Nod version as `app_version` metadata when a valid relea
 
 ### IDs, errors, and cost
 
+Version coverage for `user_id`, stable `thread_id`, and the expanded error classes: **Unreleased (after v0.9.0)**. The [release marker](/deploy/analytics/#event-properties) must name the first shipping version when that release is prepared.
+
 A trace can lack `user_id` when Nod cannot load the analytics ID. Nod still sends the trace. Count analytics IDs only where this field exists. Older releases can also omit it.
 
-| Metadata                  | Meaning                                                                                                                                       |
-| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `user_id`                 | The analytics ID (`local:<UUID>`). It equals the PostHog `distinct_id`. It identifies a runtime profile, not a verified person.               |
-| `thread_id`               | A stable keyed hash of the saved session ID, present on agent, helper, automatic, and curator requests.                                       |
-| `turn_id`                 | A pseudonymous ID for one unit of Nod's work: a user request, schedule fire, observer batch, or continuation. It is not a user-message count. |
-| `run_id`, `parent_run_id` | Pseudonymous agent execution IDs, when available. They connect helper calls to their parent.                                                  |
-| `error_type`              | A fixed error class, when the request fails. See the values below.                                                                            |
-| `cost_usd`                | Nod's known cost estimate for this model call, as a number in US dollars. A known zero stays zero. An unknown cost is absent.                 |
+| Metadata                  | Meaning                                                                                                                                           |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `user_id`                 | The analytics ID (`local:<UUID>`). It equals the PostHog `distinct_id`. It identifies a runtime profile, not a verified person.                   |
+| `thread_id`               | For saved sessions, a keyed hash that stays stable when the private key loads. Work without a saved session gets a new auxiliary ID for each job. |
+| `turn_id`                 | A pseudonymous ID for one unit of Nod's work: a user request, schedule fire, observer batch, or continuation. It is not a user-message count.     |
+| `run_id`, `parent_run_id` | Pseudonymous agent execution IDs, when available. They connect helper calls to their parent.                                                      |
+| `error_type`              | A fixed error class, when the request fails. See the values below.                                                                                |
+| `cost_usd`                | Nod's known cost estimate for this model call, as a number in US dollars. A known zero stays zero. An unknown cost is absent.                     |
 
 Curator requests within a turn share its conversation and turn IDs. Curator requests outside a turn use `turn_id` for their auxiliary work. Retries keep that ID. Requests excluded for privacy stay excluded.
 
@@ -130,7 +132,7 @@ Nod removes what it can recognize. A trace can still contain private content in 
 
 - **Stable analytics ID.** Each trace carries the same analytics ID as usage analytics, even when usage sharing is off. It does not rotate across conversations, days, or restarts. It links traces from the same runtime profile. This ID can link traces to earlier usage data, About you choices, and an email submitted for updates. The trace switch controls sending traces. The usage switch controls sending usage events. Neither switch deletes stored data.
 - **Session metadata.** Nod removes its original session ID from trace metadata and replaces its turn and run IDs with keyed hashes. Account or device IDs in conversation text or app results can remain.
-- **Stable conversation IDs.** A conversation is one saved chat, task, or background session. Its `thread_id` is a keyed hash of the private session ID. It stays the same across idle gaps, days, and restarts. A new session, such as a reset chat or a separate schedule fire, gets a different ID. The key stays in the runtime profile's private `trace-key` file. Deleting or replacing that key changes conversation IDs. Earlier releases used IDs that changed after 30 idle minutes or a restart; these earlier IDs cannot be joined to the new IDs.
+- **Stable conversation IDs.** A conversation is one saved chat, task, or background session. Its `thread_id` is a keyed hash of the private session ID. When the private key loads, it stays the same across idle gaps, days, and restarts. It links traces from that saved session over time. A new session, such as a reset chat or a separate schedule fire, gets a different ID. Work without a saved session gets a new auxiliary ID for each job. The key stays in the runtime profile's private `trace-key` file. Deleting or replacing that key changes conversation IDs. Earlier releases used IDs that changed after 30 idle minutes or a restart; these earlier IDs cannot be joined to the new IDs.
 - **Other execution IDs.** Turn and agent run IDs, and IDs inside messages and tool results, keep their existing keyed hashes. These hashes change daily and on restart. One active turn keeps its trace IDs until it ends. Repeated hashes can link records within the same runtime and UTC day. Other content can also connect traces, such as a website address or an account handle.
 - **No owner context.** Nod replaces your saved memory, learned skills and format preferences with `[owner context omitted]`, including memory notes and learned skills it reads with a tool. Those reads keep only their action, such as `memory_read`, not the note path, search words or skill name. The attention and review tasks that read your saved memory are not traced at all, and a codemode step keeps neither its script nor its result, because a script can read memory or a connected account.
 - **No images.** Images are replaced with `[image]`.
