@@ -7778,6 +7778,7 @@ test('startup reports require review and keep exact redacted content through sen
       phase: 'error',
       error: `Synthetic failure for ${privateName} ${secret}`,
       details: 'HTTP 503',
+      failure: { class: 'Error', httpStatus: 503 },
     },
     delivery: {
       configured: true,
@@ -7825,14 +7826,14 @@ test('startup reports require review and keep exact redacted content through sen
   });
   assert.ok(
     !boundary.content!.includes(secret.slice(0, 12)),
-    'Redact the whole line before limiting its display length.',
+    'Startup prose must be omitted before text bounds.',
   );
   const changedSecret = 'synthetic-rotated-startup-key';
   options.secrets.push(changedSecret);
   options.startupLog.entries.push({ ageMs: 0, line: `Synthetic rotated key ${changedSecret}` });
   const current = await service.review({ feedback: first.feedback, includeReport: true });
   assert.ok(!current.content!.includes(changedSecret));
-  assert.equal(JSON.parse(content).schema, 'nod-desktop-startup-report-v1');
+  assert.equal(JSON.parse(content).schema, 'nod-desktop-startup-report-v2');
   options.startupLog.entries = [{ ageMs: 0, line: 'Synthetic later event not reviewed' }];
   const sending = service.send(current.reviewId);
   await Promise.race([dispatched, sending]);
@@ -8128,7 +8129,9 @@ test('startup reports never open log paths and use only current desktop events',
     assert.equal(report.startupLog.status, 'collected');
     assert.equal(report.startupLog.scope, 'current-desktop-process');
     assert.equal(report.startupLog.truncated, true);
-    assert.deepEqual(report.startupLog.entries, options.startupLog.entries);
+    assert.deepEqual(report.startupLog.entries, [
+      { ageMs: 5, event: 'diagnostic_text_omitted', textOmitted: true },
+    ]);
     assert.ok(!snapshot.content!.includes('Synthetic unrelated private file'));
     const malformed = createStartupFeedback({
       ...options,
@@ -8539,9 +8542,11 @@ test('startup exports and receipts hide original overlapping private spans befor
       let exported = '';
       const service = createStartupFeedback({
         dataRoot: join(root, String(index)),
-        secrets: item.secrets,
-        names: [],
-        status: { phase: 'error', error: `Synthetic failure EIO ${item.input}` },
+        status: {
+          phase: 'error',
+          error: `Synthetic failure EIO ${item.input}`,
+          failure: Object.assign(new Error(item.input), { code: 'EIO' }),
+        },
         context: {
           appVersion: '0.9.0',
           appRelease: 'a'.repeat(40),
@@ -8570,8 +8575,9 @@ test('startup exports and receipts hide original overlapping private spans befor
       });
       const result = await service.send(review.reviewId);
       assert.equal(exported, review.content);
-      for (const value of [exported, result.message!]) {
-        assert.match(value, /EIO/);
+      assert.equal(result.message, undefined);
+      assert.equal(result.messageOmitted, true);
+      for (const value of [exported, JSON.stringify(result)]) {
         assert.ok(!value.includes('synthetic-private'));
         assert.ok(!value.includes('Synthetic Owner'));
         assert.ok(!value.includes(String.raw`synthetic+(private)[value]\key`));
@@ -8636,8 +8642,8 @@ test('startup attachment repair keeps the original ID and bytes and never repeat
   });
   const partialReceipt = await service.send(review.reviewId);
   assert.equal(partialReceipt.canRetryAttachments, true);
-  assert.match(partialReceipt.message!, /Synthetic delivery detail/);
-  assert.ok(!partialReceipt.message!.includes('synthetic-private-key'));
+  assert.equal(partialReceipt.message, undefined);
+  assert.equal(partialReceipt.messageOmitted, true);
   const repairing = service.repair(review.reviewId);
   await dispatched;
   const duplicate = service.repair(review.reviewId);

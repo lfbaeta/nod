@@ -57,6 +57,13 @@ import appPages from '../../src/shared/app-pages.json' with { type: 'json' };
 import posthogHost from '../../src/shared/posthog-host.json' with { type: 'json' };
 import { environmentSecrets } from '../../src/shared/environment-secrets.mjs';
 import { createLiteralMasker } from '../../src/shared/literal-masks.mjs';
+import {
+  startupStatusFacts,
+  startupEventFacts,
+  startupErrorFacts,
+  startupFailureMessage,
+  StartupFeedbackError,
+} from '../../src/shared/startup-feedback-facts.mjs';
 
 test('setup resources cannot read other origins or local files', () => {
   assert.equal(setupResource('nod-setup://app/index.html?firstSetup=true'), 'index.html');
@@ -595,6 +602,9 @@ async function runningDesktop(
     createStartupFeedbackClient,
     environmentSecrets,
     createLiteralMasker,
+    startupStatusFacts,
+    startupEventFacts,
+    startupErrorFacts,
     app: {
       on: (name, listener) => appEvents.on(name, listener),
       once: (name, listener) => appEvents.once(name, listener),
@@ -963,6 +973,10 @@ async function runningDesktop(
     .replace(/^import[\s\S]*?;\n/gm, '')
     .replace(/^const \{ environmentSecrets \} = await import\([\s\S]*?\);\n/m, '')
     .replace(/^const \{ createLiteralMasker \} = await import\([\s\S]*?\);\n/m, '')
+    .replace(
+      /^const \{ startupStatusFacts, startupEventFacts, startupErrorFacts \} = await import\([\s\S]*?\);\n/m,
+      '',
+    )
     .replaceAll(
       'import.meta.url',
       JSON.stringify(new URL('../main/main.mjs', import.meta.url).href),

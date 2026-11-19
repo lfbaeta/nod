@@ -13,7 +13,10 @@ export function createFeedbackDelivery(
     feedbackUrl !== defaultFeedbackUrl &&
     !env.NOD_FEEDBACK_RECEIPT_URL_PREFIX
   )
-    throw new Error('Set NOD_FEEDBACK_RECEIPT_URL_PREFIX when using a custom feedback intake.');
+    throw Object.assign(
+      new Error('Set NOD_FEEDBACK_RECEIPT_URL_PREFIX when using a custom feedback intake.'),
+      { code: 'FEEDBACK_RECEIPT_PREFIX_REQUIRED' },
+    );
   return createN8nFeedback({
     enabled: feedbackEnabled,
     url: feedbackUrl,

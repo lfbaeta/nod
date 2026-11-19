@@ -131,8 +131,9 @@ export function StartupFeedback({
               Include startup report
             </label>
             <p>
-              The report masks known secrets and personal details. It can miss information. Review
-              it before sending. Chat and app content are not collected.
+              The startup report includes technical states, counts and error codes. It omits log
+              text and personal details. Review it before sending. Chat and app content are not
+              collected.
             </p>
             {review?.content && (
               <>
@@ -157,7 +158,8 @@ export function StartupFeedback({
               : receipt.status === 'partial'
                 ? 'Sent without the diagnostic report.'
                 : receipt.status === 'rejected'
-                  ? receipt.message || 'The report was rejected. You can edit it and try again.'
+                  ? receipt.message ||
+                    `The collector rejected the report${receipt.httpStatus ? ` (HTTP ${receipt.httpStatus})` : ''}. You can edit it and try again.`
                   : 'The send result is unknown. Check its status before sending another report.'}
           </p>
         )}

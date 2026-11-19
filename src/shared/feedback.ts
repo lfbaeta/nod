@@ -110,5 +110,8 @@ export interface FeedbackReceipt {
   status: 'submitted' | 'partial' | 'unknown' | 'rejected';
   issueUrl?: string;
   message?: string;
+  messageOmitted?: boolean;
+  httpStatus?: number;
+  reason?: 'rate_limited';
   canRetryAttachments?: boolean;
 }

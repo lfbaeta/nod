@@ -266,6 +266,9 @@ const { environmentSecrets } = await import(
 const { createLiteralMasker } = await import(
   pathToFileURL(join(engineRoot, 'src/shared/literal-masks.mjs')).href
 );
+const { startupStatusFacts, startupEventFacts, startupErrorFacts } = await import(
+  pathToFileURL(join(engineRoot, 'src/shared/startup-feedback-facts.mjs')).href
+);
 const knownSecrets = new Set(environmentSecrets(process.env));
 const startupFeedback = createStartupFeedbackClient({
   fork: (...args) => utilityProcess.fork(...args),
@@ -279,8 +282,7 @@ const startupFeedback = createStartupFeedbackClient({
     return {
       dataRoot: profileRoot,
       context: await feedbackContext(),
-      status,
-      secrets: [...knownSecrets, engineRoot, profileRoot],
+      status: startupStatusFacts(status),
       startupLog: startupLogSnapshot(),
     };
   },
@@ -303,7 +305,7 @@ let chatReadCursors = createChatReadCursorStore(join(profileRoot, 'chat-read-cur
 const lifecycle = createDesktopLifecycle({
   prepareRuntime: async ({ signal, onStatus, onStorageReady }) => {
     await mkdir(profileRoot, { recursive: true, mode: 0o700 });
-    await writeDiagnostic('Preparing local runtime.').catch(() => {});
+    await writeDiagnostic('Preparing local runtime.', { event: 'runtime_prepare' }).catch(() => {});
     const started = Date.now();
     let phase = 'runtime';
     let step;
@@ -329,11 +331,13 @@ const lifecycle = createDesktopLifecycle({
       });
       await writeDiagnostic(
         `Local runtime prepared. ${diagnosticFields({ ms: Date.now() - started })}`,
+        { event: 'runtime_ready', durationMs: Date.now() - started },
       ).catch(() => {});
       return prepared;
     } catch (error) {
       await writeDiagnostic(
         `Local runtime failed. ${diagnosticFields({ phase, step, code: error.code, signal: error.signal, ms: Date.now() - started })}`,
+        { event: 'runtime_failed', stage: phase, error, durationMs: Date.now() - started },
       ).catch(() => {});
       throw error;
     }
@@ -453,6 +457,7 @@ function update(value) {
     message: bounded(value.message || status.message),
   };
   if (value.phase === 'ready' || value.phase === 'error') status.unlockingKeys = false;
+  if (value.phase === 'ready') delete status.failure;
   if (value.error) status.error = bounded(value.error);
   else if (Object.hasOwn(value, 'error') || (value.phase && value.phase !== 'error'))
     delete status.error;
@@ -732,25 +737,23 @@ let startupEventsTruncated = false;
 function startupLogSnapshot() {
   const now = Date.now();
   return {
-    entries: startupEvents.map(({ at, line }) => ({
+    entries: startupEvents.map(({ at, facts }) => ({
       ageMs: Math.min(31_536_000_000, Math.max(0, Math.round(now - at))),
-      line,
+      ...facts,
     })),
     truncated: startupEventsTruncated,
   };
 }
 
-function writeDiagnostic(value) {
-  const raw = bounded(value, Infinity);
-  const bytes = Buffer.byteLength(raw);
-  if (bytes <= 48_000) {
-    startupEvents.push({ at: Date.now(), line: raw });
-    startupEventBytes += bytes;
-    while (startupEvents.length > 100 || startupEventBytes > 48_000) {
-      startupEventBytes -= Buffer.byteLength(startupEvents.shift().line);
-      startupEventsTruncated = true;
-    }
-  } else startupEventsTruncated = true;
+function writeDiagnostic(value, details) {
+  const facts = startupEventFacts(undefined, details);
+  const bytes = Buffer.byteLength(JSON.stringify(facts));
+  startupEvents.push({ at: Date.now(), facts });
+  startupEventBytes += bytes;
+  while (startupEvents.length > 100 || startupEventBytes > 48_000) {
+    startupEventBytes -= Buffer.byteLength(JSON.stringify(startupEvents.shift().facts));
+    startupEventsTruncated = true;
+  }
   const written = diagnosticWrites.then(async () => {
     const directory = join(profileRoot, 'logs');
     const path = join(directory, 'startup.log');
@@ -782,7 +785,9 @@ function diagnosticFields(details) {
 }
 
 function updateEvent(stage, details = {}) {
-  return writeDiagnostic(`update ${stage} ${diagnosticFields(details)}`.trimEnd()).catch(() => {});
+  return writeDiagnostic(`update ${stage} ${diagnosticFields(details)}`.trimEnd(), {
+    event: 'update',
+  }).catch(() => {});
 }
 
 async function recordStart() {
@@ -2680,6 +2685,9 @@ async function validateStart() {
 }
 
 async function startEngine({ runtime, signal, pending = false }) {
+  void writeDiagnostic('Starting the background service.', { event: 'engine_start' }).catch(
+    () => {},
+  );
   if (engineFailure) throw new Error(engineFailure);
   if (engine && enginePreferencesReady) return finishEnginePreparation(pending);
   if (engine) {
@@ -2792,7 +2800,7 @@ async function startEngine({ runtime, signal, pending = false }) {
         void writeDiagnostic(line).catch(() => {});
       }
   });
-  child.on('exit', (code) => {
+  child.on('exit', (code, exitSignal) => {
     if (engine !== child) return;
     stayAwake(false);
     if (!closingEngine)
@@ -2806,6 +2814,12 @@ async function startEngine({ runtime, signal, pending = false }) {
     if (!closingEngine)
       void writeDiagnostic(
         `Engine exited with code ${code}. ${diagnosticFields({ phase: enginePreferencesReady ? 'engine-running' : 'engine-spawn', ms: Date.now() - started })}`,
+        {
+          event: 'engine_exit',
+          exitCode: code,
+          signal: exitSignal,
+          durationMs: Date.now() - started,
+        },
       ).catch(() => {});
     engine = undefined;
     enginePreferencesReady = false;
@@ -2827,6 +2841,7 @@ async function startEngine({ runtime, signal, pending = false }) {
         phase: 'error',
         message: failure,
         error: failure,
+        failure: startupErrorFacts({ exitCode: code, signal: exitSignal }),
       });
       showSettings('general', true);
     }
@@ -2834,9 +2849,11 @@ async function startEngine({ runtime, signal, pending = false }) {
   const deadline = started + 120_000;
   let ready = false;
   let lastFailure = 'none';
+  let lastHealthStatus;
   while (Date.now() < deadline && engine === child && !signal.aborted) {
     try {
       const response = await engineRequest('/api/health');
+      lastHealthStatus = response.status;
       if (response.ok && (await response.json()).ok === true) {
         ready = true;
         break;
@@ -2854,6 +2871,7 @@ async function startEngine({ runtime, signal, pending = false }) {
     const waited = ((Date.now() - started) / 1000).toFixed(1);
     await writeDiagnostic(
       `Background service health check timed out after ${waited}s. Engine process still running: yes. Last health check: ${lastFailure}. Engine reported its port: ${engineBound ? 'yes' : 'no'}.`,
+      { event: 'health_timeout', durationMs: Date.now() - started, httpStatus: lastHealthStatus },
     ).catch(() => {});
   }
   if (!ready || engine !== child || signal.aborted) {
@@ -2900,6 +2918,13 @@ async function prepare(options = {}) {
     .catch((error) => {
       void writeDiagnostic(
         `Startup failed. ${diagnosticFields({ phase: status.phase, stage: status.stage, code: error.code, ms: Date.now() - started })}\n${startupErrorDetails(error)}`,
+        {
+          event: 'startup_failed',
+          phase: status.phase,
+          stage: status.stage,
+          error,
+          durationMs: Date.now() - started,
+        },
       ).catch(() => {});
       const deferred =
         error.code === 'NOD_RESTART_DEFERRED' &&
@@ -2911,6 +2936,7 @@ async function prepare(options = {}) {
         phase: deferred ? 'ready' : 'error',
         message: bounded(error.message),
         error: bounded(error.message),
+        failure: startupErrorFacts(error),
         details: startupErrorDetails(error),
         needsRuntimeArchive: error.code === 'RUNTIME_ARCHIVE_REQUIRED',
         needsWsl: error.code === 'NOD_WSL_REQUIRED',
@@ -3312,8 +3338,7 @@ else {
         return (async () => {
           if (action === 'review') {
             await startupFeedback.request('snapshot', {
-              status,
-              secrets: [...knownSecrets, engineRoot, profileRoot],
+              status: startupStatusFacts(status),
               startupLog: startupLogSnapshot(),
             });
           }

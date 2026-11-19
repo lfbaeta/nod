@@ -11,7 +11,13 @@ import type {
 } from '../shared/feedback.ts';
 import { feedbackLimits } from '../shared/feedback.ts';
 import { feedbackTechnicalContext } from './feedback-context.ts';
-import { createFeedbackRedactor } from './feedback-redaction.ts';
+import {
+  StartupFeedbackError,
+  startupFailureMessage,
+  startupStatusFacts,
+  startupLogFacts,
+  startupReceiptFacts,
+} from '../shared/startup-feedback-facts.mjs';
 
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
 const uuid = z.uuidv4();
@@ -21,10 +27,10 @@ const pendingSchema = z
     payloadHash: z.string().regex(/^[a-f0-9]{64}$/),
   })
   .strict();
-class SavedStatusError extends Error {
+class SavedStatusError extends StartupFeedbackError {
   readonly canPreserve: boolean;
-  constructor(message: string, canPreserve = false) {
-    super(message);
+  constructor(reason: string, canPreserve = false) {
+    super(reason);
     this.canPreserve = canPreserve;
   }
 }
@@ -40,13 +46,8 @@ export function createStartupFeedback(options: {
   dataRoot: string;
   delivery: FeedbackDelivery;
   context: Omit<FeedbackContext, 'enabled' | 'recipient'>;
-  secrets: string[];
-  names: string[];
   status: unknown;
-  startupLog?: {
-    entries: Array<{ ageMs: number; line: string }>;
-    truncated: boolean;
-  };
+  startupLog?: unknown;
 }) {
   const context = feedbackTechnicalContext(options.context);
   const pendingPath = join(options.dataRoot, 'startup-feedback.json');
@@ -73,13 +74,12 @@ export function createStartupFeedback(options: {
 
   async function openStatus() {
     const before = await lstat(pendingPath);
-    if (!before.isFile() || before.nlink !== 1)
-      throw new SavedStatusError('The saved report status is not one regular file.');
+    if (!before.isFile() || before.nlink !== 1) throw new SavedStatusError('status_regular');
     const file = await open(pendingPath, constants.O_RDONLY | constants.O_NOFOLLOW);
     try {
       const info = await file.stat();
       if (!info.isFile() || info.nlink !== 1 || info.dev !== before.dev || info.ino !== before.ino)
-        throw new SavedStatusError('The saved report status changed while it was opened.');
+        throw new SavedStatusError('status_changed');
       return { file, info };
     } catch (error) {
       await file.close();
@@ -95,20 +95,15 @@ export function createStartupFeedback(options: {
         let value;
         try {
           const bytes = await readBytes(file, 1024);
-          if (bytes.length > 1024)
-            throw new SavedStatusError(
-              'The saved report status is larger than 1024 bytes.',
-              info.size <= 65_536,
-            );
+          if (bytes.length > 1024) throw new SavedStatusError('status_large', info.size <= 65_536);
           let parsed;
           try {
             parsed = JSON.parse(bytes.toString('utf8'));
           } catch {
-            throw new SavedStatusError('The saved report status has invalid JSON.', true);
+            throw new SavedStatusError('status_json', true);
           }
           const checked = pendingSchema.safeParse(parsed);
-          if (!checked.success)
-            throw new SavedStatusError('The saved report status has invalid fields.', true);
+          if (!checked.success) throw new SavedStatusError('status_fields', true);
           value = checked.data;
         } finally {
           await file.close();
@@ -122,18 +117,16 @@ export function createStartupFeedback(options: {
           restoredState = true;
           return;
         }
-        const code =
-          typeof error.code === 'string' && /^[A-Z0-9_]{1,32}$/.test(error.code)
-            ? error.code
-            : 'read failure';
         restoreFailure =
           cause instanceof SavedStatusError
             ? { message: cause.message, canPreserve: cause.canPreserve }
             : {
-                message: `The saved report status could not be read (${code}).`,
+                message: startupFailureMessage(new StartupFeedbackError('status_read', cause)),
                 canPreserve: false,
               };
-        throw new Error(restoreFailure.message, { cause });
+        throw cause instanceof SavedStatusError
+          ? cause
+          : new StartupFeedbackError('status_read', cause);
       }
     })().finally(() => {
       restored = undefined;
@@ -178,45 +171,14 @@ export function createStartupFeedback(options: {
   }
 
   async function report() {
-    const redact = createFeedbackRedactor({
-      secrets: options.secrets,
-      profile: { names: options.names },
-    });
-    if (!redact.isReady()) throw new Error('The startup report could not be redacted.');
-    const log = z
-      .object({
-        entries: z
-          .array(
-            z
-              .object({
-                ageMs: z.number().int().min(0).max(31_536_000_000),
-                line: z.string().max(48_000),
-              })
-              .strict(),
-          )
-          .max(100),
-        truncated: z.boolean(),
-      })
-      .strict()
-      .safeParse(options.startupLog);
     return JSON.stringify(
       {
-        schema: 'nod-desktop-startup-report-v1',
+        schema: 'nod-desktop-startup-report-v2',
         context,
-        startup: redact.value(options.status),
-        startupLog: {
-          status: log.success ? 'collected' : 'unavailable',
-          scope: 'current-desktop-process',
-          truncated: log.success && log.data.truncated,
-          entries: log.success
-            ? log.data.entries.map((row) => ({
-                ageMs: row.ageMs,
-                line: redact.text(row.line).slice(0, 4000),
-              }))
-            : [],
-        },
+        startup: startupStatusFacts(options.status),
+        startupLog: { scope: 'current-desktop-process', ...startupLogFacts(options.startupLog) },
         coverage:
-          'Desktop startup only. Chat, app content, settings, and database records are not collected.',
+          'Only bounded startup facts are collected. Startup prose, logs, paths, URLs, identifiers, chat, app content, settings and database records are omitted.',
       },
       null,
       2,
@@ -225,15 +187,9 @@ export function createStartupFeedback(options: {
 
   function present(value: FeedbackReceipt) {
     if (reviewed && reviewed.expiresAt <= Date.now()) reviewed = undefined;
-    const { message, ...fields } = value;
-    const safeMessage = message
-      ? createFeedbackRedactor({ secrets: options.secrets, profile: { names: options.names } })
-          .text(message)
-          .slice(0, 1000)
-      : undefined;
+    if (!pending) throw new StartupFeedbackError('original_required');
     return {
-      ...fields,
-      ...(safeMessage && { message: safeMessage }),
+      ...startupReceiptFacts(value, pending.submissionId),
       ...(value.status === 'partial' && {
         canRetryAttachments: Boolean(
           reviewed?.envelope.submissionId === value.submissionId &&
@@ -251,21 +207,20 @@ export function createStartupFeedback(options: {
     return (recovering ??= (async () => {
       await restore().catch(() => {});
       if (restoredState || !restoreFailure?.canPreserve)
-        throw new Error('Check the saved report status again before starting a new report.');
+        throw new StartupFeedbackError('status_check');
       const { file, info } = await openStatus();
       let bytes;
       try {
         bytes = await readBytes(file, 65_536);
         const after = await file.stat();
-        if (bytes.length > 65_536)
-          throw new Error('The saved report status is too large to preserve automatically.');
+        if (bytes.length > 65_536) throw new StartupFeedbackError('preserve_large');
         if (
           info.size !== bytes.length ||
           info.size !== after.size ||
           info.mtimeMs !== after.mtimeMs ||
           info.ctimeMs !== after.ctimeMs
         )
-          throw new Error('The saved report status changed. Check it again.');
+          throw new StartupFeedbackError('status_changed');
       } finally {
         await file.close();
       }
@@ -293,7 +248,7 @@ export function createStartupFeedback(options: {
           current.mtimeMs !== info.mtimeMs ||
           current.ctimeMs !== info.ctimeMs
         )
-          throw new Error('The saved report status changed. Check it again.');
+          throw new StartupFeedbackError('status_changed');
         await rm(pendingPath);
         pending = undefined;
         receipt = undefined;
@@ -338,12 +293,12 @@ export function createStartupFeedback(options: {
     async review(input: unknown) {
       await restore();
       const value = reviewSchema.parse(input);
-      if (!options.delivery.configured) throw new Error('Bug reports are turned off.');
+      if (!options.delivery.configured) throw new StartupFeedbackError('disabled');
       if (sending || (pending && (!receipt || receipt.status === 'unknown')))
-        throw new Error('Check the previous report status before starting another report.');
+        throw new StartupFeedbackError('previous_status');
       const content = value.includeReport ? await report() : null;
       if (content && Buffer.byteLength(content) > feedbackLimits.reportBytes)
-        throw new Error('The startup report is too large. Continue without the report.');
+        throw new StartupFeedbackError('report_large');
       const attachment = content
         ? {
             name: 'nod-diagnostic-report.json',
@@ -388,9 +343,9 @@ export function createStartupFeedback(options: {
       const id = uuid.parse(input);
       if (pending?.submissionId === id) return (await status())!;
       if (!reviewed || reviewed.envelope.submissionId !== id || reviewed.expiresAt <= Date.now())
-        throw new Error('Review the report again before sending it.');
+        throw new StartupFeedbackError('review_required');
       if (sending || (pending && (!receipt || receipt.status === 'unknown')))
-        throw new Error('Check the previous report status before sending another report.');
+        throw new StartupFeedbackError('previous_send');
       const envelope = reviewed.envelope;
       const previousPending = pending;
       const previousReceipt = receipt;
@@ -406,9 +361,9 @@ export function createStartupFeedback(options: {
           try {
             if (published) await savePending(previousPending);
           } catch (rollback) {
-            throw new AggregateError(
-              [error, rollback],
-              'The report was not sent. The previous saved report status could not be restored.',
+            throw new StartupFeedbackError(
+              'rollback_failed',
+              new AggregateError([error, rollback]),
             );
           }
           pending = previousPending;
@@ -426,19 +381,16 @@ export function createStartupFeedback(options: {
       await restore();
       const id = uuid.parse(input);
       if (!pending || pending.submissionId !== id)
-        throw new Error('Check the original report before sending its attachment again.');
+        throw new StartupFeedbackError('original_required');
       if (sending) return sending;
-      if (receipt?.status !== 'partial')
-        throw new Error('Check the report status before sending its attachment again.');
+      if (receipt?.status !== 'partial') throw new StartupFeedbackError('partial_required');
       if (
         !reviewed ||
         reviewed.envelope.submissionId !== id ||
         !reviewed.envelope.report ||
         reviewed.expiresAt <= Date.now()
       )
-        throw new Error(
-          'The original report bytes are no longer available. Start a new report to review new bytes.',
-        );
+        throw new StartupFeedbackError('bytes_unavailable');
       const envelope = reviewed.envelope;
       receipt = undefined;
       sending = (async () => {
