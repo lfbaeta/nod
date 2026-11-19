@@ -2823,7 +2823,6 @@ async function initializeApplication(
             ? await discovered.approvalDetails(action, resolved!, options.signal)
             : undefined;
         const verdict = await trust.check(turn, action, resolved ?? args, options.signal);
-        await options.admit?.(verdict.confirm);
         const prepared = resolved ?? (await prepare());
         let connected = http;
         let deleteBinding: string | undefined;

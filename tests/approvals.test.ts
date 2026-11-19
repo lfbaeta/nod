@@ -4754,6 +4754,64 @@ test(
       );
 
       await t.test(
+        'a pending background question cannot appear after admission allowed execution',
+        async () => {
+          const args = { id: randomUUID() };
+          const current = await begin('Synthetic allowed pause.', { source: 'event' });
+          const other = await begin('Synthetic pause question.', { source: 'event' });
+          const admission: boolean[] = [];
+          const before = calls.length;
+          try {
+            await assert.rejects(
+              approvals.request(current, 'NOD_schedule_pause', args, {
+                allowed: true,
+                admit: async (asks) => {
+                  admission.push(asks);
+                  await approvals.request(other, 'NOD_schedule_pause', args);
+                },
+              }),
+              { notRun: true },
+            );
+            assert.deepEqual(admission, [false]);
+            assert.equal(await proposal(current.turnId), undefined);
+            assert.equal((await proposal(other.turnId)).status, 'pending');
+            assert.equal(calls.length, before);
+          } finally {
+            await finish(current.turnId, 'cancelled');
+            await finish(other.turnId, 'cancelled');
+          }
+        },
+      );
+      await t.test('a shared question is checked again after admission waits', async () => {
+        const args = { id: randomUUID() };
+        const other = await begin('Synthetic pause question.', { source: 'event' });
+        await approvals.request(other, 'NOD_schedule_pause', args);
+        const card = await proposal(other.turnId);
+        const current = await begin('Synthetic shared pause.', { source: 'event' });
+        const admission: boolean[] = [];
+        const before = calls.length;
+        try {
+          await assert.rejects(
+            approvals.request(current, 'NOD_schedule_pause', args, {
+              allowed: true,
+              admit: async (asks) => {
+                admission.push(asks);
+                await db.pool.query("UPDATE approvals SET status='declined' WHERE id=$1", [
+                  card.id,
+                ]);
+              },
+            }),
+            { notRun: true },
+          );
+          assert.deepEqual(admission, [true]);
+          assert.equal(await proposal(current.turnId), undefined);
+          assert.equal(calls.length, before);
+        } finally {
+          await finish(current.turnId, 'cancelled');
+          await finish(other.turnId, 'cancelled');
+        }
+      });
+      await t.test(
         'a resume that does not trace back to an owner message carries no owner words',
         async () => {
           const generic = await running(
@@ -5067,7 +5125,7 @@ test(
           assert.equal(second.source_message_id, renewed.messageId);
           assert.equal(second.status, 'pending');
           assert.equal(calls.length, before + 1);
-          assert.ok(admission.includes(true));
+          assert.deepEqual(admission, [true]);
           assert.deepEqual(repeatedInputs.at(-1), { action, args, reply, question });
           await finish(renewed.turnId);
           const approvedAgain = await confirm(second.id, true);
@@ -5327,6 +5385,39 @@ test(
           assert.equal(calls.length, before);
         } finally {
           await finishRepeat(fixture);
+        }
+      });
+      await t.test('a repeat checks Stop and withdrawal after admission waits', async () => {
+        for (const change of ['stop', 'withdraw']) {
+          const fixture = await repeatFixture();
+          const before = calls.length;
+          repeatedAction = 'new';
+          let prepared = 0;
+          try {
+            await assert.rejects(
+              approvals.request(fixture.turn, fixture.action, fixture.args, {
+                allowed: true,
+                admit: async (asks) => {
+                  assert.equal(asks, true);
+                  await db.pool.query(
+                    change === 'stop'
+                      ? "UPDATE turns SET status='cancelled' WHERE id=$1"
+                      : 'UPDATE turns SET withdrawn=true WHERE id=$1',
+                    [fixture.turn.turnId],
+                  );
+                },
+                prepareConfirmation: async () => {
+                  prepared++;
+                  return { target: 'Synthetic private metadata' };
+                },
+              }),
+            );
+            assert.equal(prepared, 0);
+            assert.equal(await proposal(fixture.turn.turnId), undefined);
+            assert.equal(calls.length, before);
+          } finally {
+            await finishRepeat(fixture);
+          }
         }
       });
       await t.test(

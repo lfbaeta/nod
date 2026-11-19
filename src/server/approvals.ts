@@ -375,7 +375,6 @@ export async function createApprovals(
     let checkedRepeat: typeof renewal;
     const expectedRevision = options.expectedRevision;
     options.signal?.throwIfAborted();
-    await options.admit?.(!allowed);
     const inspect = async (client: PoolClient, describing = false) => {
       options.signal?.throwIfAborted();
       const current = await turnRow(client, turn.turnId);
@@ -642,7 +641,6 @@ export async function createApprovals(
         if (decision === 'new') {
           renewal = candidate;
           needsConfirmation = true;
-          await options.admit?.(true);
         }
         existing = await withTurnLock(turn.turnId, (client) => inspect(client, true));
         if (decision === 'uncertain') {
@@ -663,14 +661,29 @@ export async function createApprovals(
         }
       }
       if ('cached' in existing) {
-        if (existing.cached) return existing.result;
-        return { [appConfirmation]: existing.question as string };
+        await options.admit?.(!existing.cached);
+        options.signal?.throwIfAborted();
+        const current = await withTurnLock(turn.turnId, (client) => inspect(client, true));
+        if ('cached' in current && current.cached === existing.cached) {
+          if (current.cached) return current.result;
+          return { [appConfirmation]: current.question as string };
+        }
+        throw Object.assign(
+          conflict('This action changed while it was waiting to run. The action did not run.'),
+          { notRun: true },
+        );
       }
       if (existing.repeatedScope && !needsConfirmation) {
         needsConfirmation = true;
-        await options.admit?.(true);
       }
       if (needsConfirmation) {
+        await options.admit?.(true);
+        options.signal?.throwIfAborted();
+        existing = await withTurnLock(turn.turnId, (client) => inspect(client, true));
+        if ('cached' in existing) {
+          if (existing.cached) return existing.result;
+          return { [appConfirmation]: existing.question as string };
+        }
         if (options.prepareConfirmation)
           details = JSON.stringify({
             ...(details ? JSON.parse(details) : {}),
@@ -706,6 +719,10 @@ export async function createApprovals(
           throw new Error('The confirmation model did not produce a valid action label.');
       }
     }
+    if (!question) {
+      await options.admit?.(false);
+      options.signal?.throwIfAborted();
+    }
     const saveProposal = async (client: PoolClient) => {
       if (
         options.expectedChatRevision !== undefined &&
@@ -719,7 +736,14 @@ export async function createApprovals(
         );
       if (instructionChange) await validateInstructionChange(client, ownerId, instructionChange);
       const inspected = await inspect(client);
-      if ('cached' in inspected) return inspected;
+      if ('cached' in inspected) {
+        if (!inspected.cached && !question)
+          throw Object.assign(
+            conflict('This action now needs a confirmation. The action did not run.'),
+            { notRun: true },
+          );
+        return inspected;
+      }
       if (inspected.repeatedScope && !question)
         throw conflict('This repeated action needs a new confirmation. This action did not run.');
       await options.validate?.(client);

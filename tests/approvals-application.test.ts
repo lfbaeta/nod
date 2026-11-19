@@ -216,6 +216,8 @@ test(
     let repeatAfterConfirm: FixtureCall | FixtureCall[] | undefined;
     let questionAfterConfirm: string | undefined;
     let repeatDecision: 'new' | 'same' | 'uncertain' = 'same';
+    let holdRepeatCheck: (() => Promise<void>) | undefined;
+    let parallelRepeatWork: ((options: AgentSessionOptions) => Promise<void>) | undefined;
     let workflowUpdate: { workflowId: string; threshold: number } | undefined;
     const repeatChecks: Record<string, unknown>[] = [];
     const prompts = new Map<string, string>();
@@ -269,6 +271,7 @@ test(
         if (task === 'review' && 'reply' in input && 'question' in input && 'args' in input) {
           assert.match(instructions, /"probability"/);
           repeatChecks.push(input);
+          await holdRepeatCheck?.();
           return { repeatedAction: repeatDecision, probability: 1 };
         }
         if ('purpose' in input && input.purpose === 'connection' && connectionLabels.length)
@@ -538,7 +541,7 @@ test(
                     plan.tool === 'synthetic_mcp'
                       ? options.tools.find((item) => item.name.endsWith('__execute_workflow'))!.name
                       : (plan.tool ?? 'manage_personal_context');
-                  const result = await activePlan.run(instruction, () =>
+                  const pending = activePlan.run(instruction, () =>
                     options.tools
                       .find((tool) => tool.name === name)!
                       .execute(
@@ -558,6 +561,8 @@ test(
                                 : { action: plan.action, args: plan.args },
                       ),
                   );
+                  await parallelRepeatWork?.(options);
+                  const result = await pending;
                   results.set(options.turnId, result);
                   return;
                 }
@@ -5546,6 +5551,39 @@ test(
             asked.add(reply);
             plans.set(reply, { tool: 'synthetic_mcp', action: 'execute_workflow', args: input });
             repeatDecision = 'new';
+            let repeatEntered!: () => void;
+            const checkingRepeat = new Promise<void>((resolve) => {
+              repeatEntered = resolve;
+            });
+            let releaseRepeat!: () => void;
+            const repeatReady = new Promise<void>((resolve) => {
+              releaseRepeat = resolve;
+            });
+            holdRepeatCheck = async () => {
+              repeatEntered();
+              await repeatReady;
+            };
+            const commandsBefore = workspaceDispatches.length;
+            parallelRepeatWork = async (options) => {
+              parallelRepeatWork = undefined;
+              await checkingRepeat;
+              const queued = options.runTool(
+                'bash',
+                { command: 'cat synthetic-repeat.txt' },
+                async () => {
+                  workspaceDispatches.push('synthetic-repeat');
+                  return { content: [] };
+                },
+              );
+              try {
+                await delay(30);
+                assert.equal(workspaceDispatches.length, commandsBefore);
+              } finally {
+                releaseRepeat();
+                holdRepeatCheck = undefined;
+                await queued.catch(() => {});
+              }
+            };
             const repeated = await request('POST', '/api/messages', {
               text: reply,
               replyToMessageId: savedQuestion.id,
@@ -5558,6 +5596,7 @@ test(
             assert.equal(second.source_message_id, repeated.json().messageId);
             assert.deepEqual(second.args, first.args);
             assert.equal(executions.length, 1);
+            assert.equal(workspaceDispatches.length, commandsBefore);
             assert.deepEqual(updates, [7]);
             assert.equal(threshold, 7);
             assert.deepEqual(second.details.account, {
@@ -5683,6 +5722,8 @@ test(
               0,
             );
           } finally {
+            holdRepeatCheck = undefined;
+            parallelRepeatWork = undefined;
             questionAfterConfirm = undefined;
             workflowUpdate = undefined;
             repeatAfterConfirm = undefined;
