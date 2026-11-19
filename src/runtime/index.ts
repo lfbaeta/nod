@@ -22,7 +22,12 @@ import type {
   RuntimeResult,
   SkillLibrary,
 } from '../ports/agent.ts';
-import { appConfirmation, ContextLimitError, ModelRequestError } from '../ports/agent.ts';
+import {
+  appConfirmation,
+  ContextLimitError,
+  ModelRequestError,
+  ToolFailureError,
+} from '../ports/agent.ts';
 import type { Computer, Workspace } from '../ports/computer.ts';
 import { BrowserActionError } from '../ports/computer.ts';
 import { threadIdentity } from '../ports/thread-identity.ts';
@@ -1003,7 +1008,7 @@ export function createAgentRuntime(dependencies: {
             [],
           );
           if (childProgress.error)
-            throw new Error((dependencies.redactError ?? String)(childProgress.error));
+            throw new ToolFailureError((dependencies.redactError ?? String)(childProgress.error));
           if (failure) throw new Error(`The subagent model request failed: ${failure}`);
           if (incomplete) throw new Error('The subagent response was incomplete.');
           assertActive();
@@ -1336,7 +1341,8 @@ export function createAgentRuntime(dependencies: {
       );
       await pendingReplies;
       signal.throwIfAborted();
-      if (progress.error) throw new Error((dependencies.redactError ?? String)(progress.error));
+      if (progress.error)
+        throw new ToolFailureError((dependencies.redactError ?? String)(progress.error));
       const paused = () =>
         `Paused at the ${dollars(context.checkIn!.budgetUsd)} check-in. Reply to keep going.`;
       if (modelError)
