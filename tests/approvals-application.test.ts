@@ -1681,6 +1681,106 @@ test(
         },
       );
 
+      await t.test('a legacy browser repeat checks its target before wording', async (t) => {
+        for (const [kind, command] of [
+          ['y coordinate', { y: 0.5 }],
+          [
+            'points',
+            {
+              points: [
+                { x: 0.5, y: 0.5 },
+                { x: 0.5, y: 0.5 },
+              ],
+            },
+          ],
+        ] as const)
+          await t.test(kind, async () => {
+            const question = `Should I repeat the synthetic ${kind} click?`;
+            const reply = `Repeat the synthetic ${kind} click ${randomUUID()}.`;
+            const clicks = () => browserActs.filter((act) => act.action === 'click').length;
+            const before = clicks();
+            try {
+              const initial = await propose('click', { selector: '@e7' }, 'browser');
+              const [first] = await approvalsFor(initial);
+              assert.equal(first.action, 'NOD_browser');
+              questionAfterConfirm = question;
+              const accepted = await request('POST', '/api/messages', {
+                text: 'Click Authorize payment',
+                replyToMessageId: first.confirmation_message_id,
+                approvalAnswer: { approvalId: first.id, approved: true },
+              });
+              assert.equal(accepted.statusCode, 200, accepted.body);
+              await waitFor(accepted.json().turnId, 'waiting');
+              const saved = (await approvalsFor(initial))[0];
+              assert.equal(saved.status, 'completed');
+              assert.equal(clicks(), before + 1);
+              const savedQuestion = (
+                await pool.query(
+                  "SELECT id FROM messages WHERE turn_id=$1 AND role='assistant' AND text=$2",
+                  [accepted.json().turnId, question],
+                )
+              ).rows[0];
+              assert.ok(savedQuestion);
+              browserControls = [
+                { role: 'RootWebArea', name: 'Synthetic bank' },
+                { role: 'button', name: 'Secondary control' },
+              ];
+              const legacy = {
+                ...first.args,
+                control: browserControls,
+                command: { action: 'click', ...command },
+              };
+              await pool.query('UPDATE approvals SET args=$2::jsonb WHERE id=$1', [
+                first.id,
+                legacy,
+              ]);
+              let wording = 0;
+              browserWording = (input) => {
+                wording++;
+                return input.purpose === 'confirmation_review'
+                  ? { valid: true }
+                  : syntheticConfirmation(input);
+              };
+              asked.add(reply);
+              plans.set(reply, { tool: 'browser', action: 'click', args: { ...command } });
+              repeatDecision = 'new';
+              const repeated = await request('POST', '/api/messages', {
+                text: reply,
+                replyToMessageId: savedQuestion.id,
+              });
+              assert.equal(repeated.statusCode, 200, repeated.body);
+              await waitFor(repeated.json().turnId, 'waiting|failed');
+              assert.deepEqual(repeatChecks.at(-1), {
+                action: 'NOD_browser',
+                args: legacy,
+                reply,
+                question,
+              });
+              const turn = (
+                await pool.query('SELECT status,error FROM turns WHERE id=$1', [
+                  repeated.json().turnId,
+                ])
+              ).rows[0];
+              assert.equal(turn.status, 'failed');
+              assert.match(turn.error, /click target is not identified/);
+              assert.deepEqual(await approvalsFor(repeated.json().turnId), []);
+              assert.equal(wording, 0);
+              assert.equal(clicks(), before + 1);
+              const retained = (await approvalsFor(initial))[0];
+              assert.equal(retained.status, 'completed');
+              assert.deepEqual(retained.args, legacy);
+              assert.deepEqual(retained.result, saved.result);
+            } finally {
+              browserControls = [{ role: 'button', name: 'Authorize payment' }];
+              browserWording = undefined;
+              questionAfterConfirm = undefined;
+              repeatDecision = 'same';
+              plans.delete(reply);
+              asked.delete(reply);
+            }
+          });
+      });
+
       await t.test(
         'a labeled click keeps its replay command out of wording and waits for approval',
         async () => {
