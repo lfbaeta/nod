@@ -1173,6 +1173,7 @@ export async function openDevtools(url: string, targetId: string, signal?: Abort
           x: (quad[0]! + quad[2]! + quad[4]! + quad[6]!) / 4,
           y: (quad[1]! + quad[3]! + quad[5]! + quad[7]!) / 4,
         };
+        const inputPoint = { ...point };
         if (session !== page) {
           const { backendNodeId } = (await send(
             'DOM.getFrameOwner',
@@ -1199,6 +1200,25 @@ export async function openDevtools(url: string, targetId: string, signal?: Abort
           point.y += content[1]!;
         }
         const check = async () => {
+          if (session !== page) {
+            const { cssVisualViewport: viewport } = (await send(
+              'Page.getLayoutMetrics',
+              {},
+              page,
+            )) as {
+              cssVisualViewport: { clientWidth: number; clientHeight: number };
+            };
+            if (
+              point.x < 0 ||
+              point.y < 0 ||
+              point.x >= viewport.clientWidth ||
+              point.y >= viewport.clientHeight
+            )
+              throw signInFailure(
+                'control_hidden',
+                'The sign-in control is outside the browser viewport.',
+              );
+          }
           if (
             (await controlSnapshot(objectId, session!)) !== control.snapshot ||
             JSON.stringify(
@@ -1224,7 +1244,7 @@ export async function openDevtools(url: string, targetId: string, signal?: Abort
             throw signInFailure('control_covered', 'The sign-in control is covered.');
         };
         await check();
-        await send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...point }, page);
+        await send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...inputPoint }, session);
         await check();
         await send('Runtime.enable', {}, session);
         await send('Runtime.addBinding', { name, executionContextId: context }, session);
@@ -1257,16 +1277,16 @@ export async function openDevtools(url: string, targetId: string, signal?: Abort
         pressed = true;
         await send(
           'Input.dispatchMouseEvent',
-          { type: 'mousePressed', ...point, button: 'left', buttons: 1, clickCount: 1 },
-          page,
+          { type: 'mousePressed', ...inputPoint, button: 'left', buttons: 1, clickCount: 1 },
+          session,
         );
         if (guardRefused())
           throw signInFailure('click_guard_changed', 'The sign-in control changed.');
         await check();
         await send(
           'Input.dispatchMouseEvent',
-          { type: 'mouseReleased', ...point, button: 'left', buttons: 0, clickCount: 1 },
-          page,
+          { type: 'mouseReleased', ...inputPoint, button: 'left', buttons: 0, clickCount: 1 },
+          session,
         );
         pressed = false;
         timer = setTimeout(() => resolveClick(false), 5000);
@@ -1283,7 +1303,7 @@ export async function openDevtools(url: string, targetId: string, signal?: Abort
           await send(
             'Input.dispatchMouseEvent',
             { type: 'mouseReleased', x: -1, y: -1, button: 'left', buttons: 0 },
-            page,
+            session,
             true,
           ).catch(() => {});
         clearTimeout(timer);

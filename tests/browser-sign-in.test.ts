@@ -472,6 +472,84 @@ test(
 );
 
 test(
+  'private frame input refuses a control center outside the root viewport before dispatch',
+  { skip: process.env.NOD_TEST_NATIVE_DOWNLOAD !== 'true', timeout: 30_000 },
+  async (t) => {
+    const directory = await mkdtemp(join(tmpdir(), 'nod-method-viewport-'));
+    let submitted = 0;
+    const server = createHttpServer((request, response) => {
+      if (request.method === 'POST') {
+        submitted++;
+        response.end('Selected');
+        return;
+      }
+      response.setHeader('content-type', 'text/html');
+      response.end(
+        request.url === '/inner'
+          ? '<form action="/selected" method="post"><button id="primary" style="width:300px;height:40px">Continue</button></form>'
+          : `<iframe style="position:fixed;left:120px;top:50px;width:500px;height:300px;border:0" src="http://localhost:${(server.address() as { port: number }).port}/inner" onload="document.getElementById('ready').textContent='Frame ready'"></iframe><p id="ready"></p>`,
+      );
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    let socketPath = '';
+    const computer = createAgentBrowserComputer({
+      dataRoot: directory,
+      browserExecutable: process.env.NOD_TEST_BROWSER_EXECUTABLE,
+      privateNetwork: true,
+      headless: true,
+      viewport: { width: 180, height: 600 },
+      daemonCommand: async (path, command, signal, timeoutMs) => {
+        socketPath = path;
+        return existingDaemonCommand(path, command, signal, timeoutMs);
+      },
+    });
+    try {
+      const address = server.address();
+      assert.ok(address && typeof address !== 'string');
+      await computer.act('fixture', { action: 'open', url: `http://127.0.0.1:${address.port}` });
+      await computer.act('fixture', { action: 'wait', text: 'Frame ready' });
+      const connection = await existingDaemonCommand(socketPath, { action: 'cdp_url' });
+      const tabs = await existingDaemonCommand(socketPath, { action: 'tab_list' });
+      const tab = (tabs.tabs as { active: boolean; targetId: string }[]).find(
+        (value) => value.active,
+      )!;
+      const inspector = await openDevtools(String(connection.cdpUrl), tab.targetId);
+      const inputs: string[] = [];
+      try {
+        const bound = await inspector.signInControl({ selector: '#primary' });
+        const original = WebSocket.prototype.send;
+        const sending = t.mock.method(
+          WebSocket.prototype,
+          'send',
+          function (this: WebSocket, data: Parameters<WebSocket['send']>[0]) {
+            const message = typeof data === 'string' ? JSON.parse(data) : undefined;
+            if (message?.method === 'Input.dispatchMouseEvent') inputs.push(message.params.type);
+            original.call(this, data);
+          },
+        );
+        try {
+          await assert.rejects(inspector.selectSignInControl(bound), (error: unknown) => {
+            assert.equal(Object(error).signInGuard, 'control_hidden');
+            return true;
+          });
+        } finally {
+          sending.mock.restore();
+        }
+        assert.deepEqual(inputs, []);
+        assert.equal(submitted, 0);
+      } finally {
+        inspector.close();
+      }
+    } finally {
+      await computer.dispose();
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
   'private submission stops before a click when its browser closes',
   { timeout: 20_000 },
   async () => {
@@ -1448,9 +1526,32 @@ test(
           assert.equal(bound.targetFrameId === bound.frameId, path === '/foreign');
           assert.notEqual(bound.loaderId, await inspector.document());
           if (path === '/framed') {
+            const noInput = async (operation: () => Promise<unknown>) => {
+              const inputs: string[] = [];
+              const original = WebSocket.prototype.send;
+              const staleSend = t.mock.method(
+                WebSocket.prototype,
+                'send',
+                function (this: WebSocket, data: Parameters<WebSocket['send']>[0]) {
+                  const message = typeof data === 'string' ? JSON.parse(data) : undefined;
+                  if (message?.method === 'Input.dispatchMouseEvent')
+                    inputs.push(message.params.type);
+                  original.call(this, data);
+                },
+              );
+              try {
+                await assert.rejects(operation());
+              } finally {
+                staleSend.mock.restore();
+              }
+              assert.deepEqual(inputs, []);
+            };
+            await noInput(() =>
+              inspector.selectSignInControl({ ...bound, targetFrameId: 'synthetic-other-target' }),
+            );
             await act({ action: 'click', selector: '#reload-frame' });
             await act({ action: 'wait', text: 'Frame ready' });
-            await assert.rejects(inspector.selectSignInControl(bound));
+            await noInput(() => inspector.selectSignInControl(bound));
           }
           inspector.close();
           inspector = await openDevtools(String(connection.cdpUrl), tab.targetId);
@@ -1458,6 +1559,8 @@ test(
           inspector.close();
           inspector = await openDevtools(String(connection.cdpUrl), tab.targetId);
           let delayed = false;
+          let controlSession: string | undefined;
+          const dispatched: string[] = [];
           let guardTimer: ReturnType<typeof setTimeout> | undefined;
           const originalSend = WebSocket.prototype.send;
           const sending = t.mock.method(
@@ -1465,6 +1568,12 @@ test(
             'send',
             function (this: WebSocket, data: Parameters<WebSocket['send']>[0]) {
               const message = typeof data === 'string' ? JSON.parse(data) : undefined;
+              if (message?.method === 'DOM.getContentQuads') controlSession = message.sessionId;
+              if (message?.method === 'Input.dispatchMouseEvent') {
+                assert.ok(controlSession);
+                assert.equal(message.sessionId, controlSession);
+                dispatched.push(message.params.type);
+              }
               if (
                 path === '/framed' &&
                 !delayed &&
@@ -1485,6 +1594,7 @@ test(
             sending.mock.restore();
           }
           assert.equal(delayed, path === '/framed');
+          assert.deepEqual(dispatched, ['mouseMoved', 'mousePressed', 'mouseReleased']);
           const deadline = Date.now() + 5000;
           while (received.length < 4 + index && Date.now() < deadline) await delay(10);
           assert.deepEqual(received, Array(4 + index).fill('/selected'));
