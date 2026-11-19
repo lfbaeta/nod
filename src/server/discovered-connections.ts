@@ -53,18 +53,19 @@ type AccountRow = {
   owner_id: string;
   service: string;
   name: string;
+  display_name: string | null;
   account_name: string;
   account_id: string;
   paths: AccessPath[];
   reconnect_required: boolean;
 };
-type NamedAccountRow = AccountRow & { display_name: string | null };
 type ProposalRow = {
   id: string;
   owner_id: string;
   service: string;
   name: string;
   paths: AccessPath[];
+  display_name?: string | null;
   setup_url: string | null;
   setup_text: string | null;
   account_name: string | null;
@@ -260,10 +261,6 @@ export async function createDiscoveredConnections(
       account_name text NOT NULL,paths jsonb NOT NULL,
       created_at timestamptz NOT NULL DEFAULT now()
     );
-    CREATE TABLE IF NOT EXISTS discovered_mcp_names (
-      owner_id text NOT NULL,service text NOT NULL,name text NOT NULL,
-      PRIMARY KEY (owner_id,service)
-    );
     CREATE TABLE IF NOT EXISTS discovered_connection_proposals (
       id uuid PRIMARY KEY,owner_id text NOT NULL,service text NOT NULL,name text NOT NULL,
       paths jsonb NOT NULL,connection_id uuid,turn_id uuid,
@@ -273,7 +270,8 @@ export async function createDiscoveredConnections(
     );
     ALTER TABLE discovered_connections ADD COLUMN IF NOT EXISTS account_id uuid NOT NULL DEFAULT gen_random_uuid(),
       ADD COLUMN IF NOT EXISTS reconnect_required boolean NOT NULL DEFAULT false,
-      ADD COLUMN IF NOT EXISTS replaced_at timestamptz;
+      ADD COLUMN IF NOT EXISTS replaced_at timestamptz,
+      ADD COLUMN IF NOT EXISTS display_name text;
     ALTER TABLE discovered_connection_proposals ADD COLUMN IF NOT EXISTS oauth_status text,
       ADD COLUMN IF NOT EXISTS link_hash text,
       ADD COLUMN IF NOT EXISTS callback_return_to text,
@@ -298,12 +296,16 @@ export async function createDiscoveredConnections(
     if (!result.rows[0]) throw error('This connected account is unavailable.', 404);
     return result.rows[0];
   }
-  const namedAccounts = `SELECT account.*, names.name AS display_name
-    FROM discovered_connections account LEFT JOIN discovered_mcp_names names USING (owner_id,service)`;
+  async function lockDisplayName(client: PoolClient, service: string) {
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1),hashtext($2))', [
+      `discovered-mcp-name:${owner}`,
+      service,
+    ]);
+  }
   async function list(client?: PoolClient): Promise<Connection[]> {
     const rows = (
-      await (client ?? pool).query<NamedAccountRow>(
-        `${namedAccounts} WHERE account.owner_id=$1 ORDER BY account.created_at`,
+      await (client ?? pool).query<AccountRow>(
+        'SELECT * FROM discovered_connections WHERE owner_id=$1 ORDER BY created_at',
         [owner],
       )
     ).rows;
@@ -343,9 +345,12 @@ export async function createDiscoveredConnections(
       oauth_status: ProposalRow['oauth_status'];
       oauth_error: string | null;
     }>(
-      `SELECT id,service AS slug,name,oauth_status IS NOT DISTINCT FROM 'connected' AS completed,
+      `SELECT id,service AS slug,
+       COALESCE((SELECT min(display_name) FROM discovered_connections
+                 WHERE owner_id=p.owner_id AND service=p.service),name) AS name,
+       oauth_status IS NOT DISTINCT FROM 'connected' AS completed,
        expires_at<=now() AS expired,link_hash,oauth_status,oauth_error
-       FROM discovered_connection_proposals WHERE owner_id=$1
+       FROM discovered_connection_proposals p WHERE owner_id=$1
        AND (id=ANY($2::uuid[]) OR link_hash=ANY($3::text[]))`,
       [owner, requested, hashes],
     );
@@ -686,8 +691,9 @@ export async function createDiscoveredConnections(
   async function proposal(id: string, client: Pool | PoolClient = pool, lock = false) {
     const row = (
       await client.query<ProposalRow>(
-        `SELECT id,owner_id,service,name,paths,connection_id,turn_id,setup_url,setup_text,account_name,oauth_state_hash,oauth_status,oauth_error,callback_return_to,created_at
-       FROM discovered_connection_proposals
+        `SELECT id,owner_id,service,name,paths,connection_id,turn_id,setup_url,setup_text,account_name,oauth_state_hash,oauth_status,oauth_error,callback_return_to,created_at,
+       (SELECT min(display_name) FROM discovered_connections WHERE owner_id=p.owner_id AND service=p.service) AS display_name
+       FROM discovered_connection_proposals p
        WHERE id=$1 AND owner_id=$2 AND expires_at>now()${lock ? ' FOR UPDATE' : ''}`,
         [z.uuid().parse(id), owner],
       )
@@ -739,9 +745,16 @@ export async function createDiscoveredConnections(
           ],
         );
       } else {
+        const sharesName =
+          manualMcpService.test(pending.service) &&
+          pending.paths.some((path) => path.kind === 'mcp');
+        if (sharesName) await lockDisplayName(client, pending.service);
         await client.query(
-          `INSERT INTO discovered_connections
-           (id,owner_id,service,name,account_name,paths) VALUES($1,$2,$3,$4,$5,$6)`,
+          `INSERT INTO discovered_connections (id,owner_id,service,name,account_name,paths,display_name)
+           VALUES($1,$2,$3,$4,$5,$6,
+             CASE WHEN $7 THEN
+               (SELECT min(display_name) FROM discovered_connections WHERE owner_id=$2 AND service=$3)
+             END)`,
           [
             idToSave,
             owner,
@@ -749,6 +762,7 @@ export async function createDiscoveredConnections(
             pending.name,
             accountName,
             JSON.stringify(pending.paths),
+            sharesName,
           ],
         );
       }
@@ -1421,7 +1435,7 @@ export async function createDiscoveredConnections(
       returnTo,
       localOrigin,
     );
-    return { name, url: `/apps?connect=${id}` };
+    return { name: row.display_name ?? name, url: `/apps?connect=${id}` };
   }
   async function search(query: string, connectionId?: string, signal?: AbortSignal) {
     signal?.throwIfAborted();
@@ -1435,8 +1449,8 @@ export async function createDiscoveredConnections(
     const score = (text: string) =>
       words.filter((word) => text.toLowerCase().includes(word)).length;
     const rows = (
-      await pool.query<NamedAccountRow>(
-        `${namedAccounts} WHERE account.owner_id=$1 AND ($2::uuid IS NULL OR account.id=$2)`,
+      await pool.query<AccountRow>(
+        'SELECT * FROM discovered_connections WHERE owner_id=$1 AND ($2::uuid IS NULL OR id=$2)',
         [owner, connectionId ?? null],
       )
     ).rows;
@@ -1510,9 +1524,8 @@ export async function createDiscoveredConnections(
   }
   async function servers(): Promise<ConnectedMcpServer[]> {
     const rows = (
-      await pool.query<NamedAccountRow>(
-        `${namedAccounts} WHERE account.owner_id=$1 AND NOT account.reconnect_required
-         ORDER BY account.created_at`,
+      await pool.query<AccountRow>(
+        'SELECT * FROM discovered_connections WHERE owner_id=$1 AND NOT reconnect_required ORDER BY created_at',
         [owner],
       )
     ).rows;
@@ -1606,7 +1619,7 @@ export async function createDiscoveredConnections(
     const verifiedBinding = JSON.stringify([row.account_id, row.paths]);
     await assertBinding(row);
     signal?.throwIfAborted();
-    const account = { name: row.name, identity: row.account_name };
+    const account = { name: row.display_name ?? row.name, identity: row.account_name };
     if (call.kind === 'http')
       return {
         account,
@@ -1743,18 +1756,17 @@ export async function createDiscoveredConnections(
       const input = z.object({ name: proposalSchema.shape.name }).strict().safeParse(request.body);
       if (!input.success) throw error('To rename this server, enter a name of 1 to 80 characters.');
 
-      const result = await pool.query<{ name: string }>(
-        `INSERT INTO discovered_mcp_names (owner_id,service,name)
-         SELECT $1,$2,$3 WHERE EXISTS (
-           SELECT 1 FROM discovered_connections
-           WHERE owner_id=$1 AND service=$2 AND paths @> '[{"kind":"mcp"}]'::jsonb
-         )
-         ON CONFLICT (owner_id,service) DO UPDATE SET name=EXCLUDED.name RETURNING name`,
-        [owner, service, input.data.name],
-      );
-      if (!result.rows[0]) throw error('This custom MCP server is unavailable.', 404);
+      await transaction(async (client) => {
+        await lockDisplayName(client, service);
+        const result = await client.query(
+          `UPDATE discovered_connections SET display_name=$3
+           WHERE owner_id=$1 AND service=$2 AND paths @> '[{"kind":"mcp"}]'::jsonb`,
+          [owner, service, input.data.name],
+        );
+        if (!result.rowCount) throw error('This custom MCP server is unavailable.', 404);
+      }, pool);
       options.refresh?.();
-      return result.rows[0];
+      return { name: input.data.name };
     });
     app.post('/api/apps/mcp', async (request, reply) => {
       const parsed = z
@@ -1856,7 +1868,7 @@ export async function createDiscoveredConnections(
       );
       return reply.header('Cache-Control', 'no-store').send({
         service: row.service,
-        name: row.name,
+        name: row.display_name ?? row.name,
         catalogApp,
         hints: catalogApp ? apps.get(row.service)?.hints : undefined,
         credentialLabels:

@@ -33,7 +33,9 @@ async function connect(session: Session, fixture: (typeof fixtures)[number]) {
   if (!callback) throw new Error('The synthetic MCP sign-in did not return to Nod.');
   const { pathname, search } = new URL(callback);
   if (pathname !== '/api/apps/callback') throw new Error('Unexpected sign-in callback.');
-  await session.api('GET', pathname + search);
+  const finished = await session.api('GET', pathname + search, undefined, 'manual');
+  if (finished.status !== 302)
+    throw new Error(`The synthetic MCP sign-in callback did not redirect (${finished.status}).`);
 
   const { body } = await session.api('GET', '/api/apps');
   const account = (body as SavedConnection[]).find(

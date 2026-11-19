@@ -35,7 +35,7 @@ Nod loads n8n's tools only when a task needs them and follows n8n's own guide fo
 
 ## Connect another service
 
-If you know the service name and need help finding where to connect it, ask Nod in chat.
+Search **Apps** by service name. If it isn’t listed, select **Ask Nod** on the **Connect another tool** card for help setting it up.
 
 To connect an MCP server yourself, open **Apps** and select **Connect MCP**. Enter a name of up to 80 characters, such as `Work email (n8n)`, and the server URL, then choose browser sign-in, an access token or an API key. Select **Continue** to finish authentication in the private setup dialog. For any MCP server, including Notion, Linear and n8n, the dialog shows the service's reason if sign-in can't start. When the server ends sign-in with an error, the dialog shows that error, with secrets removed. Only a sign-in you decline counts as cancelled. **Connection details** shows any extra setup instructions. Tokens stay outside the chat.
 
