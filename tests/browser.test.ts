@@ -7919,6 +7919,13 @@ test('chat state reads make progress during refresh events and reject late repli
       };
       const reads = [];
       let ownerId = 'synthetic-owner';
+      let expireRead = false;
+      const deadlines = [];
+      AbortSignal.timeout = () => {
+        const controller = new AbortController();
+        deadlines.push(controller);
+        return controller.signal;
+      };
       const threadId = '00000000-0000-4000-8000-000000000901';
       const nextThreadId = '00000000-0000-4000-8000-000000000902';
       const message = (id, text) => ({ id, role: 'assistant', text, attachments: [],
@@ -7933,8 +7940,9 @@ test('chat state reads make progress during refresh events and reject late repli
           settings: { theme: 'system', onboardingCompleted: true, usageData: false, traces: false },
           capabilities: { developer: false, traces: false },
         });
-        if (path === '/api/state') return new Promise(resolve => {
+        if (path === '/api/state') return new Promise((resolve, reject) => {
           reads.push({ resolve, signal: options.signal });
+          if (expireRead) options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true });
         });
         if (path === '/api/conversation/reset') return Response.json({ ok: true, threadId: nextThreadId });
         if (path === '/api/apps') return Response.json([]);
@@ -7998,11 +8006,29 @@ test('chat state reads make progress during refresh events and reject late repli
         await complete(reads.at(-1), state([saved, message('recovered-reply', 'Synthetic recovered reply')]));
         assert.equal(app.error, '');
         assert.ok(document.querySelector('[data-message-id="recovered-reply"]'));
+        expireRead = true;
+        await act(async () => event({ type: 'refresh' }));
+        expireRead = false;
+        const timedOut = reads.at(-1);
+        const deadline = deadlines.at(-1);
+        await act(async () => event({ type: 'refresh' }));
+        const beforeTimeout = reads.length;
+        await act(async () => deadline.abort(new DOMException('Synthetic deadline', 'TimeoutError')));
+        assert.equal(timedOut.signal.aborted, true);
+        assert.match(app.error, /did not finish within 15 seconds/);
+        assert.equal(reads.length, beforeTimeout + 1);
+        assert.equal(reads.at(-1).signal.aborted, false);
+        await complete(reads.at(-1), state([message('after-timeout', 'Synthetic reply after timeout')]));
+        assert.equal(app.error, '');
+        assert.ok(document.querySelector('[data-message-id="after-timeout"]'));
+        await complete(timedOut, state([message('timed-out-reply', 'Synthetic expired reply')]));
+        assert.equal(document.querySelector('[data-message-id="timed-out-reply"]'), null);
         await act(async () => event({ type: 'refresh' }));
         const old = reads.at(-1);
         await act(async () => event({ type: 'refresh' }));
         await act(async () => app.resetConversation(threadId));
         assert.equal(app.state.threadId, nextThreadId);
+        assert.equal(app.error, '');
         assert.equal(document.querySelector('[data-message-id="saved-reply"]'), null);
         await act(async () => event({ type: 'refresh' }));
         assert.equal(old.signal.aborted, true);

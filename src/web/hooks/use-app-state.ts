@@ -68,10 +68,11 @@ export function useAppState(accountId?: string) {
     const version = ++requestVersion.current;
     const seen = activitySeen.current;
     const controller = new AbortController();
+    const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]);
     stateRequest.current = controller;
     const request = (async () => {
       try {
-        const next = await api<AppState>('/api/state', { signal: controller.signal });
+        const next = await api<AppState>('/api/state', { signal });
         if (!active.current || controller.signal.aborted || version !== requestVersion.current)
           return;
         if (retiredThreads.current.has(next.threadId)) return;
@@ -92,7 +93,11 @@ export function useAppState(accountId?: string) {
         setError('');
       } catch (cause) {
         if (active.current && !controller.signal.aborted && version === requestVersion.current)
-          setError(errorMessage(cause));
+          setError(
+            signal.aborted && signal.reason?.name === 'TimeoutError'
+              ? 'The chat update did not finish within 15 seconds.'
+              : errorMessage(cause),
+          );
       } finally {
         if (stateRequest.current === controller) stateRequest.current = null;
       }
