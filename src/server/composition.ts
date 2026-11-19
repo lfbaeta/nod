@@ -146,6 +146,7 @@ import type { TrustBasis } from './trust-basis.ts';
 import {
   validateInstructionRevision,
   validateScheduledInstructions,
+  instructionSourceMessageIds,
   type InstructionRevision,
 } from './owner-instructions.ts';
 import { localArtifacts } from './artifacts.ts';
@@ -1716,11 +1717,14 @@ async function initializeApplication(
                         const turn = { threadId: provenance.threadId, turnId: provenance.turnId };
                         let validateCalendar: (() => Promise<void>) | undefined;
                         if (isCalendarEventChange(action)) {
+                          const origin = await turnOrigin(provenance.turnId);
                           const saved = provenance.details?.target;
                           const revision = provenance.details?.verifiedCalendarRevision;
                           const instruction = z
                             .object({
                               rules: z.string(),
+                              standingInstruction: z.string().optional(),
+                              sourceMessageIds: z.array(z.uuid()).optional(),
                               chat: z
                                 .object({ threadId: z.uuid(), id: z.uuid() })
                                 .strict()
@@ -1733,10 +1737,19 @@ async function initializeApplication(
                             .strict()
                             .safeParse(provenance.details?.verifiedInstructionRevision);
                           if (
+                            !origin ||
                             !verifiedBinding ||
                             typeof revision !== 'string' ||
                             !/^[a-f0-9]{64}$/.test(revision) ||
                             !instruction.success ||
+                            (origin.source === 'event' &&
+                              instruction.data.standingInstruction === undefined) ||
+                            (origin.source === 'schedule' &&
+                              (!origin.scheduleInstruction ||
+                                !isDeepStrictEqual(
+                                  instruction.data.sourceMessageIds,
+                                  instructionSourceMessageIds(origin.scheduleInstruction),
+                                ))) ||
                             !saved ||
                             typeof saved !== 'object' ||
                             Array.isArray(saved) ||
@@ -1760,6 +1773,12 @@ async function initializeApplication(
                                   await withTurnLock(
                                     turnLock,
                                     async () => {
+                                      if (origin.source === 'schedule')
+                                        await validateScheduledInstructions(
+                                          client,
+                                          ownerId,
+                                          origin.scheduleInstruction,
+                                        );
                                       await validateInstructionRevision(
                                         client,
                                         ownerId,
@@ -1785,12 +1804,16 @@ async function initializeApplication(
                                 provenance.signal,
                               );
                             await validateCalendar();
+                            const readWork =
+                              (await turnOrigin(provenance.turnId))?.source === 'user'
+                                ? 'read'
+                                : 'background';
                             const current = await readCalendarTarget(
                               turn,
                               args,
                               verifiedBinding,
                               provenance.signal,
-                              'read',
+                              readWork,
                             );
                             if (
                               current.revision !== revision ||
@@ -1801,9 +1824,11 @@ async function initializeApplication(
                               );
                             await validateCalendar();
                           } catch (error) {
-                            provenance.signal?.throwIfAborted();
+                            const failed = provenance.signal?.aborted
+                              ? provenance.signal.reason
+                              : error;
                             throw Object.assign(
-                              error instanceof Error ? error : new Error(String(error)),
+                              failed instanceof Error ? failed : new Error(String(failed)),
                               { notRun: true },
                             );
                           }

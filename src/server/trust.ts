@@ -12,6 +12,7 @@ import {
   validateOwnerInstructions,
   validateScheduledInstructions,
   instructionMessages,
+  instructionSourceMessageIds,
   type InstructionChange,
   type InstructionRevision,
   type OwnerInstructions,
@@ -155,6 +156,12 @@ export function createTrust(options: {
       ...(captured.chatRevision ? { chatRevision: captured.chatRevision } : {}),
       instructionRevision: {
         rules: captured.words.userRules ?? '',
+        ...(origin.source === 'event'
+          ? { standingInstruction: captured.words.standingInstruction ?? '' }
+          : {}),
+        ...(origin.source === 'schedule' && instruction
+          ? { sourceMessageIds: instructionSourceMessageIds(instruction) }
+          : {}),
         ...(captured.task ? { task: captured.task } : {}),
         ...(captured.chatRevision
           ? { chat: { threadId: turn.threadId, id: captured.chatRevision } }

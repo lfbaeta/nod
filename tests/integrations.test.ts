@@ -14410,6 +14410,51 @@ test(
     const prepared = await f.service.prepare(owner, 'GITHUB_LIST_REPOSITORIES', {
       connectionId: connected.connectionId,
     });
+    for (const phase of ['session startup', 'before dispatch', 'after dispatch'])
+      await t.test(`approved action Stop during ${phase} keeps its dispatch outcome`, async () => {
+        const controller = new AbortController();
+        const stop = new Error('Synthetic boundary stop.');
+        const createSession = f.provider.createSession;
+        const execute = f.session.execute;
+        const before = f.executed.length;
+        f.provider.createSession = async (...args) => {
+          const session = await createSession(...args);
+          if (phase === 'session startup') controller.abort(stop);
+          return session;
+        };
+        f.session.execute = async (...args) => {
+          const result = await execute(...args);
+          if (phase === 'after dispatch') {
+            controller.abort(stop);
+            controller.signal.throwIfAborted();
+          }
+          return result;
+        };
+        try {
+          await assert.rejects(
+            f.service.executeApproved(
+              owner,
+              'GITHUB_LIST_REPOSITORIES',
+              prepared,
+              undefined,
+              controller.signal,
+              undefined,
+              async () => {
+                if (phase === 'before dispatch') controller.abort(stop);
+              },
+            ),
+            (error: Error & { notRun?: boolean }) => {
+              assert.match(error.message, /Synthetic boundary stop/);
+              assert.equal(error.notRun === true, phase !== 'after dispatch');
+              return true;
+            },
+          );
+          assert.equal(f.executed.length, before + (phase === 'after dispatch' ? 1 : 0));
+        } finally {
+          f.provider.createSession = createSession;
+          f.session.execute = execute;
+        }
+      });
     const execute = f.session.execute;
     for (const status of [400, 429, 503]) {
       f.session.execute = async () => {
@@ -14431,6 +14476,7 @@ test(
     ]);
     await assert.rejects(f.service.executeApproved(owner, 'GITHUB_LIST_REPOSITORIES', prepared), {
       statusCode: 404,
+      notRun: true,
     });
     await f.pool.query('UPDATE app_connections SET account_active=true WHERE id=$1', [
       connected.connectionId,
@@ -14445,7 +14491,16 @@ test(
     };
     await assert.rejects(f.service.executeApproved(owner, 'GITHUB_LIST_REPOSITORIES', prepared), {
       statusCode: 404,
+      notRun: true,
     });
+    assert.equal(f.executed.length, executions);
+    await f.pool.query('DELETE FROM app_connections WHERE id=$1', [connected.connectionId]);
+    const sessions = f.sessions.length;
+    await assert.rejects(f.service.executeApproved(owner, 'GITHUB_LIST_REPOSITORIES', prepared), {
+      statusCode: 404,
+      notRun: true,
+    });
+    assert.equal(f.sessions.length, sessions);
     assert.equal(f.executed.length, executions);
   },
 );

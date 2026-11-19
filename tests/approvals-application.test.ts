@@ -106,7 +106,7 @@ function syntheticConfirmation(input: Record<string, unknown>) {
 
 test(
   'personal approvals revalidate targets before execution',
-  { skip: !process.env.TEST_DATABASE_URL, timeout: 180_000 },
+  { skip: !process.env.TEST_DATABASE_URL, timeout: 240_000 },
   async (t) => {
     const suffix = randomUUID().replaceAll('-', '').slice(0, 16);
     const schema = `test_personal_review_${suffix}`;
@@ -217,6 +217,7 @@ test(
     let appResult: unknown;
     let calendarExecute: IntegrationSession['execute'] | undefined;
     let calendarSession: (() => Promise<void>) | undefined;
+    let calendarReadReview: (() => Promise<void>) | undefined;
     const calendarWording: Array<Record<string, any>> = [];
     const calendarTrust: Array<Record<string, any>> = [];
     let changeRulesOnDraftRead = false;
@@ -257,6 +258,8 @@ test(
       id: 'fixture',
       configured: true,
       curate: async ({ task, input, instructions }, _signal, report) => {
+        if (task === 'review' && Object(input).action?.name === 'GOOGLECALENDAR_EVENTS_GET')
+          await calendarReadReview?.();
         if (String(Object(input).action?.name).startsWith('GOOGLECALENDAR_'))
           calendarTrust.push(structuredClone(input));
         if (task === 'review' && heldReview?.purpose === Object(input).purpose && heldReview) {
@@ -6612,10 +6615,106 @@ test(
               clientMessageId: randomUUID(),
               approvalAnswer: { approvalId: approval.id, approved: true },
             });
+          const submitEvent = async () => {
+            const text = `Synthetic Calendar event ${randomUUID()}`;
+            plans.set(text, { tool: 'apps', action: 'GOOGLECALENDAR_PATCH_EVENT', args });
+            const id = await enqueueTurn(text, { source: 'event', background: true });
+            turn = id;
+            await waitFor(id, 'waiting|succeeded|failed');
+            return { turn: id, approval: (await approvalsFor(id))[0] };
+          };
+          const submitSchedule = async (approvalBacked = false) => {
+            const schedule = await reminder({
+              title: 'Synthetic Calendar schedule',
+              prompt: `Review the synthetic Calendar ${randomUUID()}.`,
+            });
+            const warm = await request('POST', `/api/schedules/${schedule.id}/run`, {
+              requestId: randomUUID(),
+              expectedRevision: 0,
+            });
+            assert.equal(warm.statusCode, 200, warm.body);
+            await waitFor(warm.json().turnId, 'succeeded');
+            const prompt = (
+              await pool.query('SELECT prompt FROM turns WHERE id=$1', [warm.json().turnId])
+            ).rows[0].prompt;
+            plans.set(prompt, { tool: 'apps', action: 'GOOGLECALENDAR_PATCH_EVENT', args });
+            const sourceTurn = randomUUID();
+            const sourceMessage = randomUUID();
+            const contextMessage = randomUUID();
+            const threadId = (await request('GET', '/api/state')).json().threadId;
+            const text =
+              'Read the synthetic Calendar. Never send an event update without approval.';
+            await pool.query(
+              "INSERT INTO turns(id,owner_id,thread_id,session_id,source,prompt,status,finished_at) VALUES($1,$2,$3,$3,'user',$4,'succeeded',now())",
+              [sourceTurn, ownerId, threadId, text],
+            );
+            await pool.query(
+              "INSERT INTO messages(id,owner_id,thread_id,turn_id,role,text) VALUES($1,$2,$3,$4,'user',$5),($6,$2,$3,$4,'assistant','Synthetic schedule proposal')",
+              [sourceMessage, ownerId, threadId, sourceTurn, text, contextMessage],
+            );
+            const authority = approvalBacked
+              ? {
+                  messages: [],
+                  approvals: [
+                    {
+                      id: randomUUID(),
+                      at: new Date().toISOString(),
+                      definition: {
+                        title: 'Synthetic Calendar schedule',
+                        prompt: text,
+                        kind: 'once',
+                        runAt: '2099-01-01T09:00:00Z',
+                        timeZone: 'UTC',
+                        enabled: true,
+                      },
+                    },
+                  ],
+                }
+              : {
+                  messages: [
+                    {
+                      id: sourceMessage,
+                      at: new Date().toISOString(),
+                      text,
+                      replyTo: { id: contextMessage, text: 'Synthetic schedule proposal' },
+                    },
+                  ],
+                };
+            await pool.query('UPDATE schedules SET authority=$2 WHERE id=$1', [
+              schedule.id,
+              JSON.stringify(authority),
+            ]);
+            const run = await request('POST', `/api/schedules/${schedule.id}/run`, {
+              requestId: randomUUID(),
+              expectedRevision: 0,
+            });
+            assert.equal(run.statusCode, 200, run.body);
+            const id = run.json().turnId;
+            turn = id;
+            await waitFor(id, 'waiting|succeeded|failed');
+            return {
+              turn: id,
+              approval: (await approvalsFor(id))[0],
+              schedule,
+              sourceTurn,
+              sourceMessage,
+              contextMessage,
+              authority,
+              prompt,
+            };
+          };
           const writeCount = () =>
             calls.filter((call) => call.action !== 'GOOGLECALENDAR_EVENTS_GET').length;
           const readCount = () =>
             calls.filter((call) => call.action === 'GOOGLECALENDAR_EVENTS_GET').length;
+          const settledApproval = async (id: string) => {
+            for (let attempt = 0; attempt < 100; attempt++) {
+              const [saved] = await approvalsFor(id);
+              if (!['pending', 'confirmed', 'executing'].includes(saved.status)) return saved;
+              await delay(20);
+            }
+            return (await approvalsFor(id))[0];
+          };
           const failure = async (id: string) =>
             (await pool.query('SELECT error FROM turns WHERE id=$1', [id])).rows[0].error;
           await t.test(
@@ -6707,7 +6806,16 @@ test(
                 assert.equal(card.details.target.scope, 'occurrence');
                 assert.equal(readCount(), reads + 1);
                 assert.equal(writeCount(), writes);
-                await decline(id);
+                const accepted = await accept(card);
+                assert.equal(accepted.statusCode, 200, accepted.body);
+                await waitFor(accepted.json().turnId, 'succeeded');
+                assert.equal((await approvalsFor(id))[0].status, 'completed');
+                assert.equal(readCount(), reads + 2);
+                assert.equal(writeCount(), writes + 1);
+                const { connectionId: _connectionId, ...providerArgs } = input;
+                assert.deepEqual(calls.at(-1), { action, args: providerArgs, accountId });
+                assert.equal((await accept(card)).statusCode, 409);
+                assert.equal(writeCount(), writes + 1);
               },
             );
 
@@ -6773,6 +6881,9 @@ test(
               try {
                 const { turn: id, approval: card } = await submit();
                 assert.equal(card.status, 'pending');
+                assert.equal(card.details.target.endExclusive, true);
+                for (const item of calendarWording.slice(-2))
+                  assert.equal(item.data.details.target.endExclusive, true);
                 for (const [key, value] of Object.entries(expected))
                   assert.equal(card.details.target[key], value);
                 if (name === 'all-day event')
@@ -6792,6 +6903,8 @@ test(
             ['missing start', { ...event, start: {} }],
             ['missing end', { ...event, end: {} }],
             ['invalid title', { ...event, summary: 17 }],
+            ['unspecified end', { ...event, endTimeUnspecified: true }],
+            ['invalid end flag', { ...event, endTimeUnspecified: 'false' }],
             ['mixed date forms', { ...event, start: { date: '2030-11-24' } }],
             ['reversed dates', { ...event, end: { dateTime: '2030-11-23T10:00:00+01:00' } }],
             [
@@ -6859,6 +6972,192 @@ test(
               ]);
             }
           });
+
+          for (const phase of ['preparation', 'execution'])
+            for (const [before, after] of [
+              ['', 'Read Calendar only. Never change an event.'],
+              ['Read Calendar only. Never change an event.', ''],
+            ])
+              await t.test(
+                `Calendar event ${phase} binds a changed standing instruction ${Boolean(before)}`,
+                async () => {
+                  const original = (
+                    await pool.query(
+                      'SELECT notification_rule FROM preferences WHERE owner_id=$1',
+                      [ownerId],
+                    )
+                  ).rows[0].notification_rule;
+                  const writes = writeCount();
+                  let changed = false;
+                  const change = async () => {
+                    changed = true;
+                    await pool.query(
+                      'UPDATE preferences SET notification_rule=$2 WHERE owner_id=$1',
+                      [ownerId, after],
+                    );
+                  };
+                  await pool.query(
+                    'UPDATE preferences SET notification_rule=$2 WHERE owner_id=$1',
+                    [ownerId, before],
+                  );
+                  if (phase === 'preparation') onRead = change;
+                  try {
+                    const { turn: id, approval: card } = await submitEvent();
+                    if (phase === 'preparation') {
+                      assert.equal(card, undefined);
+                      assert.match(await failure(id), /standing instruction changed/);
+                    } else {
+                      assert.equal(card.status, 'pending');
+                      assert.equal(
+                        card.details.verifiedInstructionRevision.standingInstruction,
+                        before,
+                      );
+                      onRead = change;
+                      const accepted = await accept(card);
+                      assert.equal(accepted.statusCode, 200, accepted.body);
+                      await waitFor(accepted.json().turnId, 'waiting|succeeded|failed');
+                      const [saved] = await approvalsFor(id);
+                      assert.equal(saved.status, 'expired');
+                      assert.match(JSON.stringify(saved), /standing instruction changed/);
+                    }
+                    assert.equal(changed, true);
+                    assert.equal(writeCount(), writes);
+                  } finally {
+                    onRead = undefined;
+                    await pool.query(
+                      'UPDATE preferences SET notification_rule=$2 WHERE owner_id=$1',
+                      [ownerId, original],
+                    );
+                  }
+                },
+              );
+
+          for (const background of [false, true])
+            await t.test(
+              `Calendar final read keeps ${background ? 'background' : 'foreground'} service-wait policy`,
+              async () => {
+                const { turn: id, approval: card } = await (background ? submitEvent() : submit());
+                assert.equal(card.status, 'pending');
+                const writes = writeCount();
+                const reads = readCount();
+                let held = false;
+                calendarReadReview = async () => {
+                  held = true;
+                  connectionWait = {
+                    until: Date.now() + 120_000,
+                    status: 429,
+                    code: 'installation_busy',
+                  };
+                };
+                try {
+                  const accepted = await accept(card);
+                  assert.equal(accepted.statusCode, 200, accepted.body);
+                  await waitFor(accepted.json().turnId, 'waiting|succeeded|failed');
+                  const [saved] = await approvalsFor(id);
+                  assert.equal(held, true);
+                  assert.equal(saved.status, background ? 'expired' : 'completed');
+                  assert.equal(readCount(), reads + (background ? 0 : 1));
+                  assert.equal(writeCount(), writes + (background ? 0 : 1));
+                  if (background)
+                    assert.match(JSON.stringify(saved), /Nod did not read this source/);
+                } finally {
+                  calendarReadReview = undefined;
+                  connectionWait = undefined;
+                }
+              },
+            );
+
+          await t.test(
+            'an event Calendar approval without its standing snapshot cannot dispatch',
+            async () => {
+              const { turn: id, approval: card } = await submitEvent();
+              assert.equal(card.status, 'pending');
+              const reads = readCount();
+              const writes = writeCount();
+              await pool.query(
+                "UPDATE approvals SET details=jsonb_set(details,'{verifiedInstructionRevision}',(details->'verifiedInstructionRevision')-'standingInstruction') WHERE id=$1",
+                [card.id],
+              );
+              const accepted = await accept(card);
+              assert.equal(accepted.statusCode, 200, accepted.body);
+              await waitFor(accepted.json().turnId, 'waiting|succeeded|failed');
+              assert.equal((await approvalsFor(id))[0].status, 'expired');
+              assert.equal(readCount(), reads);
+              assert.equal(writeCount(), writes);
+            },
+          );
+
+          for (const change of [
+            'source withdrawn',
+            'context hidden',
+            'parent edit',
+            'approval-backed',
+            'legacy snapshot',
+          ])
+            await t.test(
+              `Calendar schedule approval handles ${change} with frozen authority`,
+              async () => {
+                const fixture = await submitSchedule(change === 'approval-backed');
+                const { turn: id, approval: card } = fixture;
+                assert.equal(card.status, 'pending');
+                assert.deepEqual(
+                  card.details.verifiedInstructionRevision.sourceMessageIds,
+                  change === 'approval-backed'
+                    ? []
+                    : [fixture.sourceMessage, fixture.contextMessage],
+                );
+                const writes = writeCount();
+                const reads = readCount();
+                const succeeds = ['parent edit', 'approval-backed'].includes(change);
+                if (change === 'legacy snapshot')
+                  await pool.query(
+                    "UPDATE approvals SET details=jsonb_set(details,'{verifiedInstructionRevision}',(details->'verifiedInstructionRevision')-'sourceMessageIds') WHERE id=$1",
+                    [card.id],
+                  );
+                onRead = async () => {
+                  if (change === 'source withdrawn')
+                    await pool.query('UPDATE turns SET withdrawn=true WHERE id=$1', [
+                      fixture.sourceTurn,
+                    ]);
+                  else if (change === 'context hidden')
+                    await pool.query('UPDATE messages SET hidden_at=now() WHERE id=$1', [
+                      fixture.contextMessage,
+                    ]);
+                  else if (change === 'parent edit') {
+                    const edited = await request('PATCH', `/api/schedules/${fixture.schedule.id}`, {
+                      prompt: 'A different future instruction.',
+                      expectedRevision: 0,
+                    });
+                    assert.equal(edited.statusCode, 200, edited.body);
+                  }
+                };
+                try {
+                  const accepted = await accept(card);
+                  assert.equal(accepted.statusCode, 200, accepted.body);
+                  await waitFor(accepted.json().turnId, 'waiting|succeeded|failed');
+                  const [saved] = await approvalsFor(id);
+                  assert.equal(saved.status, succeeds ? 'completed' : 'expired');
+                  assert.equal(writeCount(), writes + (succeeds ? 1 : 0));
+                  assert.equal(readCount(), reads + (change === 'legacy snapshot' ? 0 : 1));
+                  const frozen = (
+                    await pool.query('SELECT authority FROM schedule_runs WHERE turn_id=$1', [id])
+                  ).rows[0].authority;
+                  assert.deepEqual(frozen, fixture.authority);
+                  if (['source withdrawn', 'context hidden'].includes(change))
+                    assert.match(JSON.stringify(saved), /withdrawn or unavailable/);
+                } finally {
+                  onRead = undefined;
+                  await pool.query('UPDATE turns SET withdrawn=false WHERE id=$1', [
+                    fixture.sourceTurn,
+                  ]);
+                  await pool.query('UPDATE messages SET hidden_at=NULL WHERE id=$1', [
+                    fixture.contextMessage,
+                  ]);
+                  plans.delete(fixture.prompt);
+                  await request('DELETE', `/api/schedules/${fixture.schedule.id}`);
+                }
+              },
+            );
 
           for (const changeRules of [false, true])
             await t.test(
@@ -7130,27 +7429,28 @@ test(
               },
             );
 
-          for (const etag of [undefined, ''])
-            await t.test(
-              `Calendar approval refuses a ${etag === undefined ? 'missing' : 'blank'} final event version`,
-              async () => {
-                const writes = writeCount();
-                const { turn: id, approval: card } = await submit();
-                assert.equal(card.status, 'pending');
-                observed = { data: { ...structuredClone(event), etag }, successful: true };
-                try {
-                  const accepted = await accept(card);
-                  assert.equal(accepted.statusCode, 200, accepted.body);
-                  await waitFor(accepted.json().turnId, 'waiting|succeeded|failed');
-                  const [saved] = await approvalsFor(id);
-                  assert.equal(saved.status, 'expired');
-                  assert.match(JSON.stringify(saved), /cannot verify the Calendar event/);
-                  assert.equal(writeCount(), writes);
-                } finally {
-                  observed = { data: structuredClone(event), successful: true };
-                }
-              },
-            );
+          for (const [name, data] of [
+            ['missing event version', { ...event, etag: undefined }],
+            ['blank event version', { ...event, etag: '' }],
+            ['unspecified end', { ...event, endTimeUnspecified: true }],
+          ] as const)
+            await t.test(`Calendar approval refuses ${name} on its final read`, async () => {
+              const writes = writeCount();
+              const { turn: id, approval: card } = await submit();
+              assert.equal(card.status, 'pending');
+              observed = { data: structuredClone(data), successful: true };
+              try {
+                const accepted = await accept(card);
+                assert.equal(accepted.statusCode, 200, accepted.body);
+                await waitFor(accepted.json().turnId, 'waiting|succeeded|failed');
+                const [saved] = await approvalsFor(id);
+                assert.equal(saved.status, 'expired');
+                assert.match(JSON.stringify(saved), /cannot verify the Calendar event/);
+                assert.equal(writeCount(), writes);
+              } finally {
+                observed = { data: structuredClone(event), successful: true };
+              }
+            });
 
           await t.test('Calendar approval refuses a changed target before dispatch', async () => {
             const writes = writeCount();
@@ -7253,6 +7553,41 @@ test(
                 onRead = undefined;
                 if (correction?.statusCode === 200)
                   await waitFor(correction.json().turnId, 'succeeded');
+              }
+            },
+          );
+
+          await t.test(
+            'Stop during the final Calendar read records that the write did not run',
+            async () => {
+              const { turn: id, approval: card } = await submit();
+              const writes = writeCount();
+              let entered!: (signal?: AbortSignal) => void;
+              const reading = new Promise<AbortSignal | undefined>((resolve) => {
+                entered = resolve;
+              });
+              let release!: () => void;
+              const held = new Promise<void>((resolve) => {
+                release = resolve;
+              });
+              onRead = async (signal) => {
+                entered(signal);
+                await held;
+              };
+              try {
+                const accepted = await accept(card);
+                assert.equal(accepted.statusCode, 200, accepted.body);
+                const signal = await reading;
+                assert.equal((await request('POST', '/api/thread/stop', {})).statusCode, 200);
+                assert.equal(signal?.aborted, true);
+                release();
+                await waitFor(accepted.json().turnId, 'cancelled');
+                assert.equal((await settledApproval(id)).status, 'expired');
+                assert.equal(writeCount(), writes);
+                assert.equal((await approvalsFor(id)).length, 1);
+              } finally {
+                release();
+                onRead = undefined;
               }
             },
           );
@@ -7437,7 +7772,7 @@ test(
                 assert.equal(accepted.statusCode, 200, accepted.body);
                 await waitFor(accepted.json().turnId, 'waiting|succeeded|failed|cancelled');
                 assert.equal(changed, true);
-                if (change !== 'Stop') assert.equal((await approvalsFor(id))[0].status, 'expired');
+                assert.equal((await settledApproval(id)).status, 'expired');
                 assert.equal(writeCount(), writes);
               } finally {
                 calendarSession = undefined;

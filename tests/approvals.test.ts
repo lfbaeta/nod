@@ -1008,6 +1008,21 @@ test('Calendar approval binds the private event version before projecting its ta
     assert.equal(calendarEventTarget({ ...event, etag }, event.id), undefined);
 });
 
+test('Calendar approval does not claim an unspecified end and marks known ends exclusive', () => {
+  const event = {
+    id: 'synthetic-event',
+    etag: '"synthetic-calendar-version"',
+    start: { date: '2030-11-24' },
+    end: { date: '2030-11-25' },
+  };
+  assert.equal(calendarEventTarget({ ...event, endTimeUnspecified: true }, event.id), undefined);
+  const known = calendarEventTarget({ ...event, endTimeUnspecified: false }, event.id);
+  assert.ok(known);
+  assert.equal(known.target.startsAt, '2030-11-24');
+  assert.equal(known.target.endsAt, '2030-11-25');
+  assert.equal(known.target.endExclusive, true);
+});
+
 test('Calendar local times use the event zones instead of the host zone', () => {
   const event = {
     id: 'synthetic-event',
@@ -3430,6 +3445,10 @@ test(
           );
           compareVerdict(unrelated, { confirm: true, reason: 'unrequested' });
           assert.equal(unrelated.chatRevision, originalMessageId);
+          assert.deepEqual(unrelated.instructionRevision, {
+            rules: '',
+            chat: { threadId: resumed.threadId, id: originalMessageId },
+          });
           aligned = () => ({ run: true, because: requestText });
           const followOn = await trust.check(
             resumed,
@@ -4141,10 +4160,12 @@ test(
             await begin('Synthetic event', { source: 'event' }),
             await attachSchedule(await begin('Synthetic scheduled work', { source: 'schedule' })),
           ]) {
-            compareVerdict(await trust.check(turn, 'GMAIL_SEND_EMAIL', send), {
+            const checked = await trust.check(turn, 'GMAIL_SEND_EMAIL', send);
+            compareVerdict(checked, {
               confirm: true,
               reason: 'rule',
             });
+            assert.equal(checked.instructionRevision.rules, rules);
             assert.equal(reviews.at(-1)?.userRules, rules);
             assert.ok(prompts.at(-1)!.startsWith(plain));
             assert.match(prompts.at(-1)!, /userRules/);
@@ -4367,7 +4388,15 @@ test(
             [summaryMessageId, ownerId, hotel.threadId, hotel.turnId],
           );
           await finish(hotel.turnId, 'succeeded');
-          await trust.check(turn, 'GMAIL_SEND_EMAIL', { to: 'hotel@example.test' });
+          const checked = await trust.check(turn, 'GMAIL_SEND_EMAIL', { to: 'hotel@example.test' });
+          assert.deepEqual(checked.instructionRevision, {
+            rules: '',
+            task: {
+              id: task.id,
+              revision: (await db.pool.query('SELECT revision FROM tasks WHERE id=$1', [task.id]))
+                .rows[0].revision,
+            },
+          });
           const started = reviews.at(-1)!.userMessages.map((item: { text: string }) => item.text);
           assert.deepEqual(started.slice(-2), [
             'Read my fixture flight dates.',

@@ -157,6 +157,7 @@ export function calendarEventTarget(result: unknown, expectedId: string) {
   const event = object(outer.data) ?? outer;
   if (event.id !== expectedId || event.status === 'cancelled') return;
   if (typeof event.etag !== 'string' || !event.etag.trim() || event.etag.length > 1024) return;
+  if (event.endTimeUnspecified !== undefined && event.endTimeUnspecified !== false) return;
   if (event.summary != null && typeof event.summary !== 'string') return;
   const start = object(event.start);
   const allDay = start?.dateTime === undefined;
@@ -257,6 +258,7 @@ export function calendarEventTarget(result: unknown, expectedId: string) {
         : title || 'Untitled event',
     startsAt: startsAt.value,
     endsAt: endsAt.value,
+    endExclusive: true,
     allDay,
     ...(startsAt.timeZone ? { timeZone: startsAt.timeZone } : {}),
     ...(endsAt.timeZone ? { endTimeZone: endsAt.timeZone } : {}),
