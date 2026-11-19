@@ -337,9 +337,9 @@ export function modelEnvironment(
   };
 }
 
-export function createDefaultAdapters(
+export function createFeedbackDelivery(
   env: Record<string, string | undefined> = process.env,
-): ApplicationAdapters {
+): FeedbackDelivery {
   const defaultFeedbackUrl = 'https://internal.users.n8n.cloud/webhook/nod/feedback';
   const feedbackUrl = env.NOD_FEEDBACK_URL ?? defaultFeedbackUrl;
   const feedbackEnabled = env.NOD_FEEDBACK_ENABLED !== 'false';
@@ -350,6 +350,19 @@ export function createDefaultAdapters(
     !env.NOD_FEEDBACK_RECEIPT_URL_PREFIX
   )
     throw new Error('Set NOD_FEEDBACK_RECEIPT_URL_PREFIX when using a custom feedback intake.');
+  return createN8nFeedback({
+    enabled: feedbackEnabled,
+    url: feedbackUrl,
+    token: env.NOD_FEEDBACK_TOKEN,
+    receiptUrlPrefix:
+      feedbackUrl === defaultFeedbackUrl ? undefined : env.NOD_FEEDBACK_RECEIPT_URL_PREFIX,
+    recipient: feedbackUrl === defaultFeedbackUrl ? 'n8n' : undefined,
+  });
+}
+
+export function createDefaultAdapters(
+  env: Record<string, string | undefined> = process.env,
+): ApplicationAdapters {
   const bootstrap = modelEnvironment(env);
   const { provider } = bootstrap;
   const model = bootstrap.model || agentModels[provider];
@@ -685,14 +698,7 @@ export function createDefaultAdapters(
         env.NOD_ONBOARDING_EMAIL_URL ??
         'https://internal.users.n8n.cloud/webhook/nod/onboarding-updates',
     }),
-    feedback: createN8nFeedback({
-      enabled: feedbackEnabled,
-      url: feedbackUrl,
-      token: env.NOD_FEEDBACK_TOKEN,
-      receiptUrlPrefix:
-        feedbackUrl === defaultFeedbackUrl ? undefined : env.NOD_FEEDBACK_RECEIPT_URL_PREFIX,
-      recipient: feedbackUrl === defaultFeedbackUrl ? 'n8n' : undefined,
-    }),
+    feedback: createFeedbackDelivery(env),
     traces,
     get model() {
       return models.current;

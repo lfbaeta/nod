@@ -220,7 +220,11 @@ Select **Report bug** in the chat. When something in Nod itself fails, Nod also 
 
 If the workspace crashes, use **Report bug** on the error screen before **Reload Nod** to include the captured error.
 
-In the desktop app, if Nod's background service or its window stops, Nod shows its error screen. Select **Report bug** there: Nod restarts and opens the report as soon as it's back, with the crash in the diagnostic report. If Nod can't restart, select **Show startup log** and send it with a screenshot of the error.
+In the desktop app, if Nod's background service or its window stops, Nod shows its error screen. Select **Report bug** there. A separate report form opens without restarting the failed service. The menu bar **Report bug…** entry opens the same form while startup has failed.
+
+Describe the failure, then select **Review**. The startup report includes the startup state and up to 100 recent startup log lines, read from the last 48 KB. It masks known secrets and recognized personal details before review. It does not collect chat, connected app content, settings, or database records. You can untick **Include startup report** to send only your description. Review the exact attachment, then select **Send report**. Keep the form open until you send it; the startup form does not save an unsent draft.
+
+If the send result is unknown, select **Check status**. Nod keeps the submission reference across an app restart and checks its receipt instead of sending it again. **Show startup log** still opens the local log when you need it.
 
 Choose a feedback category and describe what happened. Include what you expected, what actually happened, and the steps that trigger the problem. **Include diagnostic report** starts selected for every category until you change it. Nod remembers your choice for your account on this device after sending or discarding a draft.
 

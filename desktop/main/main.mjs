@@ -60,6 +60,7 @@ import { clearInstalledWindowsUpdates, startWindowsInstall } from './windows-upd
 import { appOpenPath } from './app-links.mjs';
 import { trustSystemCertificates } from './system-certificates.mjs';
 import { opensAtLogin, setOpenAtLogin } from './login-item.mjs';
+import { createStartupFeedbackClient } from './feedback-client.mjs';
 
 trustSystemCertificates();
 
@@ -199,6 +200,7 @@ let engineFocusRequested = false;
 let resumeWindow;
 let resumePort;
 let pendingFeedback = false;
+let startupFeedbackOpen = false;
 let engine;
 let engineFailure;
 let welcomePassed = false;
@@ -259,6 +261,24 @@ let status = {
   },
 };
 const knownSecrets = new Set();
+const startupFeedback = createStartupFeedbackClient({
+  fork: (...args) => utilityProcess.fork(...args),
+  file: join(engineRoot, 'desktop', 'main', 'feedback.mjs'),
+  environment: Object.fromEntries(
+    Object.entries(baseEnvironment()).filter(
+      ([key]) => !key.startsWith('NOD_') || key.startsWith('NOD_FEEDBACK_'),
+    ),
+  ),
+  input: async () => {
+    await diagnosticWrites;
+    return {
+      dataRoot: profileRoot,
+      context: await feedbackContext(),
+      status,
+      secrets: [...knownSecrets],
+    };
+  },
+});
 const engineWindows = new Set();
 const zoomStates = new WeakMap();
 let lastZoomWindow;
@@ -1037,6 +1057,7 @@ function showSettings(section = 'general', loading = false) {
       setupWindow = undefined;
       connectionSettingsOpen = false;
       onboardingSetupOpen = false;
+      startupFeedbackOpen = false;
     }
   });
   setupWindowLoaded = Promise.all([
@@ -1059,6 +1080,13 @@ function showSettings(section = 'general', loading = false) {
 
 function showEngine({ focus = true } = {}) {
   if (quitting) return;
+  if (startupFeedbackOpen && setupWindow && !setupWindow.isDestroyed()) {
+    if (focus) {
+      setupWindow.show();
+      setupWindow.focus();
+    }
+    return;
+  }
   if (
     (connectionSettingsOpen || onboardingSetupOpen) &&
     setupWindow &&
@@ -1194,6 +1222,19 @@ function showEngine({ focus = true } = {}) {
 
 function showFeedback() {
   if (quitting) return;
+  if (
+    !enginePreferencesReady ||
+    status.phase === 'error' ||
+    status.windowError ||
+    status.runtime?.phase === 'error'
+  ) {
+    startupFeedbackOpen = true;
+    void showSettings('general', true).then(() => {
+      if (startupFeedbackOpen && setupWindow && !setupWindow.isDestroyed())
+        setupWindow.webContents.send('nod:startup-feedback:open');
+    });
+    return;
+  }
   pendingFeedback = true;
   showEngine();
 }
@@ -2513,6 +2554,7 @@ async function quitApp() {
 
 async function quit(complete, failure = 'Nod could not finish shutting down.', update = false) {
   quitting = true;
+  startupFeedback.close();
   stayAwake(false);
   await persistCurrentZoomFactor().catch(
     (error) => void writeDiagnostic(error.message).catch(() => {}),
@@ -3214,6 +3256,27 @@ else {
         if (!isEngine(event)) throw new Error('This action is unavailable.');
         return feedbackContext();
       });
+      ipcMain.handle('nod:startup-feedback:open', (event) => {
+        allowSetup(event);
+        showFeedback();
+      });
+      ipcMain.handle('nod:startup-feedback:close', (event) => {
+        allowSetup(event);
+        startupFeedbackOpen = false;
+        if (enginePreferencesReady && status.phase === 'ready') showEngine();
+      });
+      ipcMain.handle('nod:startup-feedback:action', (event, action, input) => {
+        allowSetup(event);
+        if (!startupFeedbackOpen || !['context', 'review', 'send', 'status'].includes(action))
+          throw new Error('This report action is unavailable.');
+        return (async () => {
+          if (action === 'review') {
+            await diagnosticWrites;
+            await startupFeedback.request('snapshot', { status, secrets: [...knownSecrets] });
+          }
+          return startupFeedback.request(action, input);
+        })();
+      });
       ipcMain.handle('nod:feedback:capture', (event) => {
         if (!isEngine(event)) throw new Error('This action is unavailable.');
         return captureFeedbackScreenshot(event).catch(() => null);
@@ -3313,7 +3376,7 @@ else {
         if (!isSetup(event) && !isEngine(event)) throw new Error('This action is unavailable.');
         if (isEngine(event) && remoteConnection) throw new Error('Local setup is unavailable.');
         if (options?.retry === true && !enginePreferencesReady) welcomeTransferError = undefined;
-        if (options?.retry === true) pendingFeedback = options.report === true;
+        if (options?.retry === true) pendingFeedback = false;
         await transferWelcome();
         if (options?.retry === true && status.windowError) {
           showEngine();

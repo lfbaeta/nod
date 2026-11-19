@@ -7388,3 +7388,202 @@ function withOwnerIds<
     userMessages: words.userMessages?.map((message, index) => ({ ...message, id: ids[index] })),
   };
 }
+
+test('startup reports require review and keep exact redacted content through send and restart', async (t) => {
+  const { createStartupFeedback } = await import('../src/server/startup-feedback.ts');
+  const { mkdir, writeFile } = await import('node:fs/promises');
+  const root = await mkdtemp(join(tmpdir(), 'nod-startup-feedback-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(join(root, 'logs'));
+  const secret = 'synthetic-startup-private-key';
+  const privateName = 'Synthetic Person';
+  await writeFile(
+    join(root, 'logs', 'startup.log'),
+    `2026-11-19T00:00:00.000Z Startup failed ${secret} ${privateName} private@example.test /Users/private-person/record.txt https://private.example.test/account\n`,
+  );
+  const context = {
+    appVersion: '0.9.0',
+    appRelease: 'a'.repeat(40),
+    appModified: false,
+    platform: 'win32-x64',
+    development: false,
+    source: 'desktop' as const,
+  };
+  const submitted: import('../src/ports/feedback.ts').FeedbackEnvelope[] = [];
+  const statusCalls: string[][] = [];
+  let release!: (value: import('../src/shared/feedback.ts').FeedbackReceipt) => void;
+  let nextStatus: import('../src/shared/feedback.ts').FeedbackReceipt['status'] = 'unknown';
+  const options = {
+    dataRoot: root,
+    context,
+    secrets: [secret],
+    names: [privateName],
+    status: {
+      phase: 'error',
+      error: `Synthetic failure for ${privateName} ${secret}`,
+      details: 'HTTP 503',
+    },
+    delivery: {
+      configured: true,
+      recipient: 'n8n',
+      async submit(envelope: import('../src/ports/feedback.ts').FeedbackEnvelope) {
+        submitted.push(envelope);
+        return new Promise<import('../src/shared/feedback.ts').FeedbackReceipt>((resolve) => {
+          release = resolve;
+        });
+      },
+      async status(id: string, payloadHash: string) {
+        statusCalls.push([id, payloadHash]);
+        return { submissionId: id, status: nextStatus };
+      },
+    },
+  };
+  const service = createStartupFeedback(options);
+  assert.equal((await service.context()).recipient, 'n8n');
+  assert.equal(submitted.length, 0);
+  await assert.rejects(service.send(randomUUID()), /Review the report again/);
+  const first = await service.review({
+    feedback: 'Synthetic startup does not finish.',
+    includeReport: true,
+  });
+  assert.equal(submitted.length, 0);
+  const content = first.content!;
+  for (const value of [
+    secret,
+    privateName,
+    'private@example.test',
+    '/Users/private-person',
+    'private.example.test',
+  ])
+    assert.ok(!content.includes(value), value);
+  assert.match(content, /503/);
+  await writeFile(
+    join(root, 'logs', 'startup.log'),
+    `2026-11-19T00:00:00.000Z ${'Synthetic detail '.repeat(233)}${secret} end\n`,
+  );
+  const boundary = await service.review({
+    feedback: 'Synthetic boundary check.',
+    includeReport: true,
+  });
+  assert.ok(
+    !boundary.content!.includes(secret.slice(0, 12)),
+    'Redact the whole line before limiting its display length.',
+  );
+  const current = await service.review({ feedback: first.feedback, includeReport: true });
+  assert.equal(JSON.parse(content).schema, 'nod-desktop-startup-report-v1');
+  await writeFile(join(root, 'logs', 'startup.log'), 'Synthetic later log not reviewed\n');
+  const sending = service.send(current.reviewId);
+  for (let attempt = 0; attempt < 100 && !release; attempt++)
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(submitted.length, 1);
+  assert.equal(Buffer.from(submitted[0].report!.data, 'base64').toString(), current.content);
+  assert.equal(submitted[0].feedback, first.feedback);
+  const duplicate = service.send(current.reviewId);
+  await assert.rejects(
+    service.review({ feedback: 'Changed', includeReport: false }),
+    /Check the previous report/,
+  );
+  release({ submissionId: current.reviewId, status: 'unknown' });
+  assert.equal((await sending).status, 'unknown');
+  assert.equal((await duplicate).status, 'unknown');
+  assert.equal(submitted.length, 1);
+  const saved = await readFile(join(root, 'startup-feedback.json'), 'utf8');
+  assert.deepEqual(Object.keys(JSON.parse(saved)).sort(), ['payloadHash', 'submissionId']);
+  assert.ok(!saved.includes('Synthetic'));
+  const restarted = createStartupFeedback(options);
+  assert.equal((await restarted.context()).pending?.status, 'unknown');
+  assert.equal((await restarted.send(current.reviewId)).status, 'unknown');
+  assert.equal(submitted.length, 1);
+  assert.equal(statusCalls.at(-1)?.[0], current.reviewId);
+  assert.equal(statusCalls.at(-1)?.[1], submitted[0].payloadHash);
+  await assert.rejects(
+    restarted.review({ feedback: 'Changed', includeReport: false }),
+    /Check the previous report/,
+  );
+  nextStatus = 'submitted';
+  assert.equal((await restarted.status())?.status, 'submitted');
+  const second = await restarted.review({
+    feedback: 'A different startup report.',
+    includeReport: false,
+  });
+  assert.equal(second.content, null);
+  await assert.rejects(restarted.send(current.reviewId + 'x'));
+  const third = await restarted.review({
+    feedback: 'Latest exact description.',
+    includeReport: false,
+  });
+  await assert.rejects(restarted.send(second.reviewId), /Review the report again/);
+  assert.notEqual(third.reviewId, second.reviewId);
+});
+
+test('startup reports omit unsafe logs and refuse invalid input or failed durable saves', async (t) => {
+  const { createStartupFeedback } = await import('../src/server/startup-feedback.ts');
+  const { mkdir, writeFile, unlink } = await import('node:fs/promises');
+  const root = await mkdtemp(join(tmpdir(), 'nod-startup-feedback-unsafe-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const dataRoot = join(root, 'profile');
+  await mkdir(join(dataRoot, 'logs'), { recursive: true });
+  const target = join(root, 'private.log');
+  await writeFile(target, 'Synthetic private target\n');
+  await symlink(target, join(dataRoot, 'logs', 'startup.log'));
+  let sends = 0;
+  const options = {
+    dataRoot,
+    context: {
+      appVersion: 'private version',
+      appRelease: 'private release',
+      appModified: null,
+      platform: 'private device',
+      development: true,
+      source: 'desktop' as const,
+    },
+    secrets: [],
+    names: [],
+    status: { phase: 'error' },
+    delivery: {
+      configured: true,
+      recipient: 'n8n',
+      async submit(envelope: import('../src/ports/feedback.ts').FeedbackEnvelope) {
+        sends++;
+        return { submissionId: envelope.submissionId, status: 'submitted' as const };
+      },
+      async status(id: string) {
+        return { submissionId: id, status: 'unknown' as const };
+      },
+    },
+  };
+  const service = createStartupFeedback(options);
+  const reviewed = await service.review({ feedback: 'Synthetic failure.', includeReport: true });
+  const report = JSON.parse(reviewed.content!);
+  assert.equal(report.startupLog.status, 'unavailable');
+  assert.deepEqual(report.startupLog.entries, []);
+  assert.ok(!reviewed.content!.includes('private'));
+  assert.equal(report.context.appVersion, null);
+  assert.equal(report.context.platform, null);
+  await assert.rejects(service.review({ feedback: 'x', includeReport: true, extra: true }));
+  await assert.rejects(service.review({ feedback: '', includeReport: true }));
+  const disabled = createStartupFeedback({
+    ...options,
+    delivery: { ...options.delivery, configured: false },
+  });
+  await assert.rejects(
+    disabled.review({ feedback: 'Synthetic failure.', includeReport: false }),
+    /turned off/,
+  );
+  await rm(dataRoot, { recursive: true });
+  await writeFile(dataRoot, 'Synthetic blocking file');
+  await assert.rejects(service.send(reviewed.reviewId));
+  assert.equal(sends, 0);
+  await unlink(dataRoot);
+  await mkdir(dataRoot);
+  assert.equal((await service.send(reviewed.reviewId)).status, 'submitted');
+  assert.equal(
+    sends,
+    1,
+    'A known failure before dispatch must allow the reviewed report to be sent.',
+  );
+  await writeFile(join(dataRoot, 'startup-feedback.json'), '{"submissionId":"bad"}');
+  const corrupt = createStartupFeedback(options);
+  await assert.rejects(corrupt.context(), /saved report status could not be read/);
+  assert.equal(sends, 1);
+});
