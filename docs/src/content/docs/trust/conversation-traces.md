@@ -49,7 +49,7 @@ Each trace includes the Nod version as `app_version` metadata when a valid relea
 
 ### IDs, errors, and cost
 
-Version coverage for `user_id`, stable `thread_id`, and the expanded error classes: **Unreleased (after v0.9.0)**. The [release marker](/deploy/analytics/#event-properties) must name the first shipping version when that release is prepared.
+First desktop release for `user_id`, stable `thread_id`, and the expanded error classes: **v0.9.1**. See [release coverage](/deploy/analytics/#event-properties) for older data and fallback IDs.
 
 A trace can lack `user_id` when Nod cannot load the analytics ID. Nod still sends the trace. Count analytics IDs only where this field exists. Older releases can also omit it.
 
