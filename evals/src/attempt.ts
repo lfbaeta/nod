@@ -276,6 +276,7 @@ async function run(spec: AttemptSpec): Promise<AttemptResult> {
     if (result && stack) {
       const usage = stack.finalUsage;
       result.costUsd = usage?.costUsd ?? null;
+      if (usage?.budgetCostUsd !== undefined) result.budgetCostUsd = usage.budgetCostUsd;
       if (usage) {
         result.modelCalls = usage.modelCalls;
         result.tokens = usage.tokens;
