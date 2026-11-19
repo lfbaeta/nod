@@ -1943,6 +1943,99 @@ describe('account routes', () => {
     );
   });
 
+  test('conversation trace IDs survive idle gaps and runtime restarts without an analytics ID', async (t) => {
+    const { traceKey } = await import('../src/server/access.ts');
+    const root = await mkdtemp(join(tmpdir(), 'nod-stable-traces-'));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const delivered: ModelTrace[] = [];
+    const open = async () => {
+      const traces = createModelTraces(async (trace) => {
+        delivered.push(trace);
+      });
+      traces.configure({
+        enabled: true,
+        conversationKey: Buffer.from(await traceKey(root), 'base64url'),
+      });
+      return traces;
+    };
+    const sessionId = randomUUID();
+    const turnId = randomUUID();
+    const trace = (day: number): ModelTrace => ({
+      id: randomUUID(),
+      name: 'fixture-model',
+      provider: 'fixture',
+      startedAt: `2026-11-${day}T10:00:00.000Z`,
+      endedAt: `2026-11-${day}T10:00:01.000Z`,
+      messages: [{ role: 'user', content: 'Synthetic request from lena@example.test.' }],
+      tools: [],
+      output: { role: 'assistant', content: 'Synthetic answer.' },
+      usage: {
+        inputTokens: 10,
+        outputTokens: 2,
+        totalTokens: 12,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        costUsd: null,
+      },
+      metadata: {
+        source: 'agent',
+        session_id: sessionId,
+        turn_id: turnId,
+        user_id: 'private-forged-id',
+      },
+    });
+    const settle = async (count: number) => {
+      for (let attempt = 0; attempt < 100 && delivered.length < count; attempt++)
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      assert.equal(delivered.length, count);
+    };
+    const first = await open();
+    assert.equal(first.active(), true);
+    const ids = first.withTurn({ sessionId, turnId }, (ids) => {
+      first.record(trace(19));
+      return ids;
+    });
+    await settle(1);
+    first.record(trace(21));
+    await settle(2);
+    const restarted = await open();
+    const next = restarted.withTurn({ sessionId, turnId: randomUUID() }, (ids) => {
+      restarted.record(trace(23));
+      return ids;
+    });
+    await settle(3);
+    assert.equal(next.thread_id, ids.thread_id);
+    for (const item of delivered) {
+      assert.equal(item.metadata.thread_id, ids.thread_id);
+      assert.equal(item.metadata.user_id, undefined);
+    }
+    const userId = `local:${randomUUID()}`;
+    restarted.configure({ userId });
+    restarted.record(trace(24));
+    await settle(4);
+    assert.equal(delivered[3].metadata.user_id, userId);
+    assert.equal(delivered[3].metadata.thread_id, ids.thread_id);
+    restarted.configure({ userId: 'invalid' });
+    restarted.record(trace(25));
+    await settle(5);
+    assert.equal(delivered[4].metadata.user_id, undefined);
+    assert.equal(delivered[4].metadata.thread_id, ids.thread_id);
+    restarted.withTurn({ sessionId: randomUUID(), turnId: randomUUID() }, () =>
+      restarted.record(trace(26)),
+    );
+    await settle(6);
+    assert.notEqual(delivered[5].metadata.thread_id, ids.thread_id);
+    const key = await readFile(join(root, 'trace-key'), 'utf8');
+    assert.equal((await lstat(join(root, 'trace-key'))).mode & 0o077, 0);
+    for (const privateValue of [sessionId, turnId, key, 'private-forged-id', 'lena@example.test'])
+      assert.ok(
+        !JSON.stringify(delivered).includes(privateValue),
+        privateValue === key ? 'trace key' : privateValue,
+      );
+    restarted.configure({ enabled: false });
+    assert.equal(restarted.active(), false);
+  });
+
   test('conversation traces stay off until the owner opts in, stop at once and leave without personal data', async (t) => {
     const delivered: ModelTrace[] = [];
     const traces = createModelTraces(async (trace) => {
@@ -2061,7 +2154,7 @@ describe('account routes', () => {
     traces.record(trace('A request after a long pause', 57));
     await settle(3);
     assert.equal(delivered[1].metadata.thread_id, delivered[0].metadata.thread_id);
-    assert.notEqual(delivered[2].metadata.thread_id, delivered[1].metadata.thread_id);
+    assert.equal(delivered[2].metadata.thread_id, delivered[1].metadata.thread_id);
     await request({ traces: false });
     traces.record(trace('After opting out'));
     await settle(4);

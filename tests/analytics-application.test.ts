@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -32,7 +32,7 @@ const gate = () => {
 const classification = () => ({ entered: gate(), released: gate(), usageId: randomUUID() });
 
 test(
-  'application workers classify completed turns within their original analytics consent',
+  'application workers preserve analytics consent when the persistent trace key is unavailable',
   { skip: !process.env.TEST_DATABASE_URL, timeout: 45_000 },
   async (t) => {
     const suffix = randomUUID().replaceAll('-', '').slice(0, 16);
@@ -51,6 +51,9 @@ test(
     process.env.DATABASE_URL = url.href;
     process.env.PGBOSS_SCHEMA = bossSchema;
     const dataDirectory = await mkdtemp(join(tmpdir(), 'nod-analytics-application-'));
+    await writeFile(join(dataDirectory, 'trace-key'), 'invalid-synthetic-trace-key', {
+      mode: 0o600,
+    });
     process.env.NOD_DATA_ROOT = dataDirectory;
     process.env.NOD_ANALYTICS_ID = randomUUID();
     t.after(() => rm(dataDirectory, { recursive: true, force: true }));

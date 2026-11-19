@@ -126,7 +126,7 @@ import { createPublicLinkPreviewProvider } from '../providers/public-web/link-pr
 import { createAgentRuntime } from '../runtime/index.ts';
 import { coreSkills } from '../runtime/prompt.ts';
 import { createApp } from './app.ts';
-import { credentialRequestKey } from './access.ts';
+import { credentialRequestKey, traceKey } from './access.ts';
 import { createWorkAdmission, createWorkConsumers } from './work-admission.ts';
 import { createWritingStyleLearning } from './writing-style.ts';
 import { createChatVerification } from './chat-verification.ts';
@@ -767,6 +767,15 @@ async function initializeApplication(
     failure: FailureLogSink;
   },
 ) {
+  if (adapters.traces) {
+    try {
+      adapters.traces.configure({
+        conversationKey: Buffer.from(await traceKey(dataRoot), 'base64url'),
+      });
+    } catch (error) {
+      logFailure('trace_conversation_key_unavailable', error);
+    }
+  }
   const analytics = await createAnalytics({
     provider: adapters.analytics,
     environment: analyticsEnvironment(process.env),

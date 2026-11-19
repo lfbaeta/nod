@@ -59,7 +59,7 @@ Nod:    Sends to [email]:
         anything is missing. [owner]
 ```
 
-The trace also includes Nod's instructions, the model name, token counts, cost, and fixed error classes. Its conversation ID changes after 30 minutes without a request to the model and whenever Nod restarts.
+The trace also includes Nod's instructions, the model name, token counts, cost, and fixed error classes. Its pseudonymous conversation ID stays the same for the saved chat, task, or background session, across idle gaps and restarts. Nod keeps its private hashing key in the runtime profile.
 
 Traces carry the same analytics ID as usage analytics, even when usage sharing is off. This ID stays the same across conversations, days, and restarts. It links traces from the same runtime profile. This ID can link traces to earlier usage data, About you choices, and an email submitted for updates. Server usage events and traces also share pseudonymous conversation and work IDs. One work ID is a request, schedule fire, background batch, or continuation, not a user-message count.
 
