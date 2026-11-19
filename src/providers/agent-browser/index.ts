@@ -1083,7 +1083,7 @@ export function createAgentBrowserComputer(options: {
             [input.text, input.url, input.load].filter(Boolean).length !== 1 ||
             (input.load && !['load', 'domcontentloaded', 'networkidle'].includes(input.load))
           )
-            throw new Error('Wait for one of text, url or load.');
+            throw new BrowserActionError('browser_wait_condition_required');
           try {
             await command(
               state,

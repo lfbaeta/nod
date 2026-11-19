@@ -15,6 +15,8 @@ const browserErrors = {
     'The snapshot selector did not match an element on the current page. Take a snapshot without a selector to read the page, or choose a selector that matches.',
   browser_snapshot_scope_invalid:
     'The snapshot selector is not valid CSS. Take a snapshot without a selector to read the page, or use a valid CSS selector.',
+  browser_wait_condition_required:
+    'The browser wait needs exactly one condition: text, url, or load. Use waitMs to set the timeout for that condition.',
   browser_card_paused:
     'A private entry document is still open. Reload it before Pi reads or controls it. Check the result before another attempt.',
   browser_script_paused:

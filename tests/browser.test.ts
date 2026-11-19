@@ -2165,6 +2165,56 @@ test('visual browser actions fence the session when releasing the pointer fails'
 
 describe('native browser controls', { concurrency: 3 }, () => {
   test(
+    'the browser bridge reports invalid wait conditions and keeps the page usable',
+    {
+      skip: process.env.NOD_TEST_NATIVE_DOWNLOAD !== 'true' || process.platform !== 'linux',
+      timeout: 30_000,
+    },
+    async () => {
+      const directory = await mkdtemp(join(tmpdir(), 'nod-wait-'));
+      const server = createHttpServer((_request, response) => {
+        response.setHeader('content-type', 'text/html');
+        response.end('<p>Results ready</p>');
+      });
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+      const address = server.address();
+      assert.ok(address && typeof address !== 'string');
+      const bridge = await harness({
+        computer: createAgentBrowserComputer({
+          ...containerBrowserOptions(directory),
+          privateNetwork: true,
+        }),
+      });
+      const computer = bridge.client('/synthetic/browser-wait');
+      try {
+        const url = `http://127.0.0.1:${address.port}/`;
+        await computer.act('fixture', { action: 'open', url });
+        for (const args of [{ waitMs: 3000 }, { text: 'Results ready', load: 'load' as const }])
+          await assert.rejects(computer.act('fixture', { action: 'wait', ...args }), {
+            name: 'BrowserActionError',
+            code: 'browser_wait_condition_required',
+          });
+        const ready = await computer.act('fixture', { action: 'wait', text: 'Results ready' });
+        assert.equal(ready.url, url);
+        assert.match(ready.text, /Results ready/);
+        assert.doesNotMatch(ready.text, /condition was not met/);
+        const timeout = await computer.act('fixture', {
+          action: 'wait',
+          text: 'An absent result',
+          waitMs: 50,
+        });
+        assert.equal(timeout.url, url);
+        assert.match(timeout.text, /condition was not met/);
+        assert.match(timeout.text, /Results ready/);
+      } finally {
+        await bridge.close();
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+        await rm(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test(
     'a rejected snapshot scope preserves the page and reports its reason across the bridge',
     {
       skip: process.env.NOD_TEST_NATIVE_DOWNLOAD !== 'true' || process.platform !== 'linux',
