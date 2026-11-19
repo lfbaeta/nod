@@ -955,7 +955,7 @@ for (const action of ['snapshot', 'click'] as const)
       browser.fail('snapshot', upstreamError);
       const before = browser.actions.length;
       await assert.rejects(
-        computer.act('fixture', { action, ...(action === 'click' ? { selector: 'button' } : {}) }),
+        computer.act('fixture', { action, selector: 'button' }),
         (error: unknown) => {
           assert.ok(error instanceof BrowserActionError);
           assert.equal(error.code, 'browser_observation_failed');
@@ -2164,6 +2164,66 @@ test('visual browser actions fence the session when releasing the pointer fails'
 });
 
 describe('native browser controls', { concurrency: 3 }, () => {
+  test(
+    'a rejected snapshot scope preserves the page and reports its reason across the bridge',
+    {
+      skip: process.env.NOD_TEST_NATIVE_DOWNLOAD !== 'true' || process.platform !== 'linux',
+      timeout: 30_000,
+    },
+    async () => {
+      const directory = await mkdtemp(join(tmpdir(), 'nod-snapshot-scope-'));
+      const server = createHttpServer((_request, response) => {
+        response.setHeader('content-type', 'text/html');
+        response.end(
+          '<article id="summary"><button>Continue</button></article><aside>Outside scope</aside>',
+        );
+      });
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+      const address = server.address();
+      assert.ok(address && typeof address !== 'string');
+      const bridge = await harness({
+        computer: createAgentBrowserComputer({
+          ...containerBrowserOptions(directory),
+          privateNetwork: true,
+        }),
+      });
+      const computer = bridge.client('/synthetic/snapshot-scope');
+      try {
+        const url = `http://127.0.0.1:${address.port}/`;
+        await computer.act('fixture', { action: 'open', url });
+        const missing = '[data-region="synthetic-private-value"]';
+        const snapshot = (selector?: string) =>
+          computer.act('fixture', { action: 'snapshot', selector });
+        const rejectScope = (selector: string, code: string) =>
+          assert.rejects(snapshot(selector), (error: unknown) => {
+            assert.ok(error instanceof BrowserActionError);
+            assert.equal(error.code, code);
+            assert.equal(error.detail, undefined);
+            assert.doesNotMatch(error.message, /synthetic-private-value/);
+            return true;
+          });
+        await rejectScope(missing, 'browser_snapshot_scope_missing');
+        assert.ok((await computer.screenshot('fixture'))?.length);
+        await rejectScope(missing, 'browser_snapshot_scope_missing');
+        await rejectScope(
+          '[data-region="synthetic-private-value"]]',
+          'browser_snapshot_scope_invalid',
+        );
+        const scoped = await snapshot('#summary');
+        assert.match(scoped.text, /Continue/);
+        assert.doesNotMatch(scoped.text, /Outside scope/);
+        const recovered = await snapshot();
+        assert.equal(recovered.url, url);
+        assert.match(recovered.text, /Continue/);
+        assert.match(recovered.text, /Outside scope/);
+      } finally {
+        await bridge.close();
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+        await rm(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
   test(
     'native container browser stays responsive, streams live frames and refuses passkeys after heavy stderr output',
     {

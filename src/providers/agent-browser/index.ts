@@ -658,9 +658,15 @@ export function createAgentBrowserComputer(options: {
     try {
       return await command(state, request, options);
     } catch (error) {
-      if (error instanceof DaemonCommandError)
-        throw new BrowserActionError('browser_observation_failed');
-      throw error;
+      if (!(error instanceof DaemonCommandError)) throw error;
+      const scope = request.action === 'snapshot' ? request.selector : undefined;
+      if (typeof scope === 'string') {
+        if (error.detail === `Selector '${scope}' did not match any element`)
+          throw new BrowserActionError('browser_snapshot_scope_missing');
+        if (error.detail?.startsWith(`Invalid selector '${scope}': SyntaxError:`))
+          throw new BrowserActionError('browser_snapshot_scope_invalid');
+      }
+      throw new BrowserActionError('browser_observation_failed');
     }
   }
 

@@ -11,6 +11,10 @@ const browserErrors = {
   browser_start_failed: 'The workspace browser could not start, so no page opened.',
   browser_observation_failed:
     'The browser could not read the updated page. Take a fresh screenshot before requesting another snapshot. Keep the current page open and check its state before repeating any click or submission.',
+  browser_snapshot_scope_missing:
+    'The snapshot selector did not match an element on the current page. Take a snapshot without a selector to read the page, or choose a selector that matches.',
+  browser_snapshot_scope_invalid:
+    'The snapshot selector is not valid CSS. Take a snapshot without a selector to read the page, or use a valid CSS selector.',
   browser_card_paused:
     'A private entry document is still open. Reload it before Pi reads or controls it. Check the result before another attempt.',
   browser_script_paused:
