@@ -8384,6 +8384,106 @@ test('startup recovery refuses a failed durable backup and retries a recovered s
   }
 });
 
+test('startup exports and receipts hide original overlapping private spans before text changes', async (t) => {
+  const { createStartupFeedback } = await import('../src/server/startup-feedback.ts');
+  const root = await mkdtemp(join(tmpdir(), 'nod-report-overlap-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const cases = [
+    {
+      name: 'contained',
+      secrets: ['k7X', 'k7Xsynthetic-private-contained'],
+      input: 'k7Xsynthetic-private-contained',
+    },
+    {
+      name: 'crossing',
+      secrets: ['prefixABC', 'ABCsynthetic-private-cross-tail'],
+      input: 'prefixABCsynthetic-private-cross-tail',
+    },
+    {
+      name: 'chain',
+      secrets: ['prefixABC', 'ABCsynthetic-private-middle', 'middleXYZtail'],
+      input: 'prefixABCsynthetic-private-middleXYZtail',
+    },
+    {
+      name: 'adjacent',
+      secrets: ['synthetic-private-first', 'synthetic-private-second'],
+      input: 'synthetic-private-firstsynthetic-private-second',
+    },
+    {
+      name: 'literal',
+      secrets: [String.raw`synthetic+(private)[value]\key`],
+      input: String.raw`synthetic+(private)[value]\key`,
+    },
+    {
+      name: 'repeated masks',
+      secrets: ['red', 'synthetic-private-repeat'],
+      input: '[redacted] synthetic-private-repeat [redacted]',
+    },
+    {
+      name: 'POSIX root',
+      secrets: ['/Applications/Synthetic Owner/engine', 'engine/synthetic-private-path-tail'],
+      input: '/Applications/Synthetic Owner/engine/synthetic-private-path-tail',
+    },
+    {
+      name: 'Windows root',
+      secrets: [
+        String.raw`C:\Synthetic Owner\engine`,
+        String.raw`engine\synthetic-private-path-tail`,
+      ],
+      input: String.raw`C:\Synthetic Owner\engine\synthetic-private-path-tail`,
+    },
+    {
+      name: 'short credential in root',
+      secrets: ['/', '/Applications/Synthetic Owner/engine'],
+      input: '/Applications/Synthetic Owner/engine/startup',
+    },
+  ];
+  for (const [index, item] of cases.entries())
+    await t.test(item.name, async () => {
+      let exported = '';
+      const service = createStartupFeedback({
+        dataRoot: join(root, String(index)),
+        secrets: item.secrets,
+        names: [],
+        status: { phase: 'error', error: `Synthetic failure EIO ${item.input}` },
+        context: {
+          appVersion: '0.9.0',
+          appRelease: 'a'.repeat(40),
+          appModified: false,
+          development: false,
+          source: 'desktop',
+          platform: 'darwin-arm64',
+        },
+        delivery: {
+          configured: true,
+          recipient: 'n8n',
+          async submit(envelope) {
+            exported = Buffer.from(envelope.report!.data, 'base64').toString('utf8');
+            return {
+              submissionId: envelope.submissionId,
+              status: 'submitted',
+              message: `Synthetic collector reason EIO ${item.input}`,
+            };
+          },
+          status: () => assert.fail('No status request is needed.'),
+        },
+      });
+      const review = await service.review({
+        feedback: 'Synthetic overlap report.',
+        includeReport: true,
+      });
+      const result = await service.send(review.reviewId);
+      assert.equal(exported, review.content);
+      for (const value of [exported, result.message!]) {
+        assert.match(value, /EIO/);
+        assert.ok(!value.includes('synthetic-private'));
+        assert.ok(!value.includes('Synthetic Owner'));
+        assert.ok(!value.includes(String.raw`synthetic+(private)[value]\key`));
+        assert.ok(!value.includes('[['));
+      }
+    });
+});
+
 test('startup attachment repair keeps the original ID and bytes and never repeats the description', async (t) => {
   const { createStartupFeedback } = await import('../src/server/startup-feedback.ts');
   const root = await mkdtemp(join(tmpdir(), 'nod-report-repair-'));
@@ -8425,6 +8525,7 @@ test('startup attachment repair keeps the original ID and bytes and never repeat
         return {
           submissionId: value.submissionId,
           status: value.action === 'repair' ? 'submitted' : 'partial',
+          message: 'Synthetic delivery detail synthetic-private-key',
         };
       },
       async status(id: string) {
@@ -8437,7 +8538,10 @@ test('startup attachment repair keeps the original ID and bytes and never repeat
     feedback: 'Synthetic original description.',
     includeReport: true,
   });
-  assert.equal((await service.send(review.reviewId)).canRetryAttachments, true);
+  const partialReceipt = await service.send(review.reviewId);
+  assert.equal(partialReceipt.canRetryAttachments, true);
+  assert.match(partialReceipt.message!, /Synthetic delivery detail/);
+  assert.ok(!partialReceipt.message!.includes('synthetic-private-key'));
   const repairing = service.repair(review.reviewId);
   await dispatched;
   const duplicate = service.repair(review.reviewId);

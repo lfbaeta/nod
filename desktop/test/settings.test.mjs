@@ -56,6 +56,7 @@ import { createStartupFeedbackClient } from '../main/feedback-client.mjs';
 import appPages from '../../src/shared/app-pages.json' with { type: 'json' };
 import posthogHost from '../../src/shared/posthog-host.json' with { type: 'json' };
 import { environmentSecrets } from '../../src/shared/environment-secrets.mjs';
+import { createLiteralMasker } from '../../src/shared/literal-masks.mjs';
 
 test('setup resources cannot read other origins or local files', () => {
   assert.equal(setupResource('nod-setup://app/index.html?firstSetup=true'), 'index.html');
@@ -593,6 +594,7 @@ async function runningDesktop(
     trustSystemCertificates: trustCertificates,
     createStartupFeedbackClient,
     environmentSecrets,
+    createLiteralMasker,
     app: {
       on: (name, listener) => appEvents.on(name, listener),
       once: (name, listener) => appEvents.once(name, listener),
@@ -960,6 +962,7 @@ async function runningDesktop(
     .replaceAll('\r\n', '\n')
     .replace(/^import[\s\S]*?;\n/gm, '')
     .replace(/^const \{ environmentSecrets \} = await import\([\s\S]*?\);\n/m, '')
+    .replace(/^const \{ createLiteralMasker \} = await import\([\s\S]*?\);\n/m, '')
     .replaceAll(
       'import.meta.url',
       JSON.stringify(new URL('../main/main.mjs', import.meta.url).href),
@@ -10988,6 +10991,9 @@ test('startup status masks overlapping credentials and private roots in one pass
       ROOT_API_KEY: '/',
       MASK_API_KEY: 'red',
       LITERAL_API_KEY: literalSecret,
+      CROSS_API_KEY: 'prefixABC',
+      CROSS_OTHER_API_KEY: 'ABCsynthetic-private-cross-tail',
+      PATH_CROSS_API_KEY: 'engine/synthetic-private-path-tail',
     },
     prepareRuntime: async () => {
       throw new Error(
@@ -11009,6 +11015,11 @@ test('startup status masks overlapping credentials and private roots in one pass
   );
   assert.equal(f.bounded(literalSecret), '[redacted]');
   assert.equal(f.bounded('syntheticX(private)[value]key'), 'syntheticX(private)[value]key');
+  const crossing = 'prefixABCsynthetic-private-cross-tail';
+  const crossingPath = `${engineRoot.replaceAll('\\', '/')}/synthetic-private-path-tail`;
+  assert.equal(f.bounded(crossing), '[redacted]');
+  assert.equal(f.bounded(crossingPath), '[redacted]');
+  f.status().details = [crossing, crossingPath].map((value) => f.bounded(value)).join('\n');
   const prefix = ('Synthetic context ' + 'detail '.repeat(400)).slice(0, 1980);
   const clipped = f.bounded(prefix + secret);
   assert.equal(clipped, prefix + '[redacted]');
@@ -11046,4 +11057,6 @@ test('startup status masks overlapping credentials and private roots in one pass
   });
   assert.ok(!review.content.includes('synthetic-private-tail'));
   assert.ok(!review.content.includes('Synthetic Private Owner'));
+  assert.ok(!review.content.includes('synthetic-private-cross-tail'));
+  assert.ok(!review.content.includes('synthetic-private-path-tail'));
 });

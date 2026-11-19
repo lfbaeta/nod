@@ -2174,6 +2174,7 @@ test('engine source includes startup reporting and documentation without site de
   for (const path of [
     'src/server/index.ts',
     'src/shared/environment-secrets.mjs',
+    'src/shared/literal-masks.mjs',
     page,
     'docs/package.json',
     'docs/src/assets/fixture.png',
@@ -2201,7 +2202,11 @@ test('engine source includes startup reporting and documentation without site de
     await readFile(join(target, 'desktop/main/system-certificates.mjs'), 'utf8'),
     'Synthetic engine fixture',
   );
-  for (const path of ['desktop/main/feedback.mjs', 'src/shared/environment-secrets.mjs'])
+  for (const path of [
+    'desktop/main/feedback.mjs',
+    'src/shared/environment-secrets.mjs',
+    'src/shared/literal-masks.mjs',
+  ])
     assert.equal(await readFile(join(target, path), 'utf8'), 'Synthetic engine fixture');
   await assert.rejects(access(join(target, 'docs/package.json')));
   await assert.rejects(access(join(target, 'docs/src/assets/fixture.png')));

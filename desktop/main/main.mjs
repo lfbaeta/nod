@@ -263,6 +263,9 @@ let status = {
 const { environmentSecrets } = await import(
   pathToFileURL(join(engineRoot, 'src/shared/environment-secrets.mjs')).href
 );
+const { createLiteralMasker } = await import(
+  pathToFileURL(join(engineRoot, 'src/shared/literal-masks.mjs')).href
+);
 const knownSecrets = new Set(environmentSecrets(process.env));
 const startupFeedback = createStartupFeedbackClient({
   fork: (...args) => utilityProcess.fork(...args),
@@ -429,7 +432,7 @@ function updateReadinessNotice() {
 
 function bounded(value, limit = 2000) {
   let message = String(value || 'The operation could not be completed.');
-  const masks = new Map([
+  const mask = createLiteralMasker([
     [profileRoot, '<profile>'],
     [profileRoot.replaceAll('\\', '/'), '<profile>'],
     [engineRoot, '<engine>'],
@@ -439,12 +442,7 @@ function bounded(value, limit = 2000) {
     ['<profile>', '<profile>'],
     ['<engine>', '<engine>'],
   ]);
-  const pattern = [...masks.keys()]
-    .filter(Boolean)
-    .sort((a, b) => b.length - a.length)
-    .map((value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
-    .join('|');
-  if (pattern) message = message.replace(new RegExp(pattern, 'g'), (value) => masks.get(value));
+  message = mask(message);
   return message.replace(/\bsk-[A-Za-z0-9_-]+/g, '[redacted]').slice(0, limit);
 }
 

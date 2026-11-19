@@ -225,8 +225,15 @@ export function createStartupFeedback(options: {
 
   function present(value: FeedbackReceipt) {
     if (reviewed && reviewed.expiresAt <= Date.now()) reviewed = undefined;
+    const { message, ...fields } = value;
+    const safeMessage = message
+      ? createFeedbackRedactor({ secrets: options.secrets, profile: { names: options.names } })
+          .text(message)
+          .slice(0, 1000)
+      : undefined;
     return {
-      ...value,
+      ...fields,
+      ...(safeMessage && { message: safeMessage }),
       ...(value.status === 'partial' && {
         canRetryAttachments: Boolean(
           reviewed?.envelope.submissionId === value.submissionId &&
