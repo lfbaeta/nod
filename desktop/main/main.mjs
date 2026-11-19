@@ -726,7 +726,9 @@ function startupLogSnapshot() {
 }
 
 function writeDiagnostic(value) {
-  const raw = String(value || 'The operation could not be completed.');
+  const raw = bounded(value, Infinity)
+    .replaceAll(profileRoot, '<profile>')
+    .replaceAll(engineRoot, '<engine>');
   const bytes = Buffer.byteLength(raw);
   if (bytes <= 48_000) {
     startupEvents.push({ at: Date.now(), line: raw });

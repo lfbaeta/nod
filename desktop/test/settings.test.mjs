@@ -500,6 +500,7 @@ async function runningDesktop(
     environment = {},
     platform = process.platform === 'win32' ? 'win32' : 'darwin',
     packaged = false,
+    resourcesPath,
     existingProfileRoot = false,
     buildMetadata,
     nativeMetadataRead = () => {},
@@ -633,7 +634,7 @@ async function runningDesktop(
       platform,
       argv,
       env: typeof environment === 'function' ? environment(dirname(storage.path)) : environment,
-      resourcesPath: dirname(storage.path),
+      resourcesPath: resourcesPath ?? dirname(storage.path),
       versions: { electron: '0.0.0' },
       getSystemVersion: () => '0.0.0',
     },
@@ -1011,6 +1012,7 @@ async function runningDesktop(
       replayOnboarding,
       showFeedback,
       writeDiagnostic,
+      engineRoot,
       knownSecrets,
       saveEngineDownload,
       setReady: (ready) => { status.phase = ready ? 'ready' : 'starting'; },
@@ -10599,6 +10601,8 @@ test('startup report events survive retry and disk failure with bounded memory a
   let attempts = 0;
   const f = await runningDesktop(t, async () => assert.fail('The failed engine is not needed.'), {
     initialState: 'idle',
+    packaged: true,
+    resourcesPath: '/Applications/Synthetic Owner Name/Nod.app/Contents/Resources',
     allowStart: true,
     prepareRuntime: async () => {
       attempts++;
@@ -10619,6 +10623,7 @@ test('startup report events survive retry and disk failure with bounded memory a
   for (let index = 0; index < 105; index++)
     await f.writeDiagnostic(`Synthetic retry event ${index}`);
   f.knownSecrets.add('synthetic-current-runtime-key');
+  await f.writeDiagnostic(`Synthetic roots ${f.engineRoot}/startup ${f.profileRoot}/startup`);
   f.showFeedback();
   for (
     let attempt = 0;
@@ -10639,6 +10644,27 @@ test('startup report events survive retry and disk failure with bounded memory a
   assert.ok(!initial.startupLog.entries.some((entry) => entry.line === 'Synthetic retry event 0'));
   assert.ok(initial.startupLog.entries.some((entry) => entry.line === 'Synthetic retry event 104'));
   assert.ok(initial.secrets.includes('synthetic-current-runtime-key'));
+  const roots = initial.startupLog.entries.find((entry) =>
+    entry.line.startsWith('Synthetic roots'),
+  );
+  assert.ok(roots.line.includes('<engine>/startup'));
+  assert.ok(roots.line.includes('<profile>/startup'));
+  assert.ok(!roots.line.includes(f.engineRoot));
+  assert.ok(!roots.line.includes(f.profileRoot));
+  const { createStartupFeedback } = await import('../../src/server/startup-feedback.ts');
+  const service = createStartupFeedback({
+    ...initial,
+    names: [],
+    delivery: {
+      configured: true,
+      recipient: 'n8n',
+      submit: () => assert.fail('A review must not send the report.'),
+      status: () => assert.fail('An unsent report has no receipt.'),
+    },
+  });
+  const exported = await service.review({ feedback: 'Synthetic roots.', includeReport: true });
+  assert.ok(!exported.content.includes(f.engineRoot));
+  assert.ok(!exported.content.includes(f.profileRoot));
   await f.writeDiagnostic('Synthetic oversized event ' + 'x'.repeat(48_000));
   for (let index = 0; index < 3; index++)
     await f.writeDiagnostic(`Synthetic large event ${index} ` + 'x '.repeat(12_000));
