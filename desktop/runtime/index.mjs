@@ -118,6 +118,7 @@ export function execute(
     });
     let output = '';
     let stdout = '';
+    let stdoutBytes = 0;
     let timedOut = false;
     let spawnError;
     let killTimer;
@@ -141,7 +142,8 @@ export function execute(
     child.stderr.setEncoding(encoding);
     child.stdout.on('data', (chunk) => {
       collect(chunk);
-      if (stdout.length <= 8 * 1024 * 1024) stdout += chunk;
+      stdoutBytes += Buffer.byteLength(chunk, encoding);
+      if (stdoutBytes <= 8 * 1024 * 1024) stdout += chunk;
     });
     child.stderr.on('data', collect);
     child.on('error', (error) => {
@@ -181,7 +183,7 @@ export function execute(
           ),
         );
       }
-      if (stdout.length > 8 * 1024 * 1024)
+      if (stdoutBytes > 8 * 1024 * 1024)
         return reject(failure('Nod runtime command produced too much output.'));
       resolveRun(stdout.trim());
     });

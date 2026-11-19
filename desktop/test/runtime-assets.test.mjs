@@ -4221,10 +4221,23 @@ test('runtime command results are bounded by an explicit limit instead of trunca
   ]);
   assert.ok(output.length > 128 * 1024);
   assert.equal(JSON.parse(output).entries.length, 20000);
-  await assert.rejects(
-    execute(process.execPath, ['-e', "process.stdout.write('x'.repeat(9 * 1024 * 1024))"]),
-    { message: 'Nod runtime command produced too much output.' },
-  );
+  for (const [character, count, encoding] of [
+    ['x', 9 * 1024 * 1024, 'utf8'],
+    ['€', 3 * 1024 * 1024, 'utf8'],
+    ['x', 5 * 1024 * 1024, 'utf16le'],
+  ]) {
+    await assert.rejects(
+      execute(
+        process.execPath,
+        [
+          '-e',
+          `process.stdout.write(Buffer.from(${JSON.stringify(character)}.repeat(${count}), '${encoding}'))`,
+        ],
+        { encoding },
+      ),
+      { message: 'Nod runtime command produced too much output.' },
+    );
+  }
 });
 
 test('stopping a runtime command reports cancellation and timeouts', async () => {
