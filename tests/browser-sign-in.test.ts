@@ -1113,6 +1113,12 @@ test(
         response.end('<h1>Selected</h1>');
         return;
       }
+      if (request.url === '/scrolled' || request.url === '/scrolled-xy') {
+        response.end(
+          `<form action="/selected" method="post" style="margin:1800px 0 0 ${request.url === '/scrolled-xy' ? 1600 : 0}px"><button id="primary">Continue with Example</button></form><button id="change" onclick="const cover=document.createElement('div');cover.style.cssText='position:fixed;inset:0;z-index:1000';document.body.append(cover)">Cover control</button>`,
+        );
+        return;
+      }
       if (
         ['/framed', '/foreign', '/duplicate', '/scaled-half', '/scaled-double'].includes(
           request.url!,
@@ -1460,6 +1466,41 @@ test(
       const deadline = Date.now() + 5000;
       while (received.length < 6 && Date.now() < deadline) await delay(10);
       assert.deepEqual(received, [...Array(5).fill('/selected'), '/ordinary']);
+      for (const path of ['/scrolled', '/scrolled-xy']) {
+        await act({ action: 'open', url: origin + path });
+        const ref = /button "Continue with Example"[^\n]*ref=(e\d+)/.exec(
+          (await act({ action: 'snapshot' })).text,
+        )?.[1];
+        assert.ok(ref);
+        const before = [...received];
+        const bound = await client.signInMethods!('fixture', origin, [
+          { label: 'Ignored', selector: '@' + ref },
+        ]);
+        assert.equal(bound.methods[0]!.label, 'Continue with Example');
+        assert.deepEqual(
+          (await client.currentPage!('fixture', { action: 'click', selector: '@' + ref })).submits,
+          { method: 'POST', to: origin + '/selected' },
+        );
+        assert.deepEqual(received, before);
+        const selection = { origin, document: bound.document, methodId: bound.methods[0]!.id };
+        await client.selectSignInMethod!('fixture', selection);
+        await act({ action: 'wait', url: '**/done' });
+        assert.deepEqual(received, [...before, '/selected']);
+        await assert.rejects(client.selectSignInMethod!('fixture', selection));
+        await act({ action: 'open', url: origin + path });
+        const covered = await client.signInMethods!('fixture', origin, [
+          { label: 'Ignored', selector: '#primary' },
+        ]);
+        await act({ action: 'click', selector: '#change' });
+        await assert.rejects(
+          client.selectSignInMethod!('fixture', {
+            origin,
+            document: covered.document,
+            methodId: covered.methods[0]!.id,
+          }),
+        );
+        assert.deepEqual(received, [...before, '/selected']);
+      }
     } finally {
       await worker.close();
       server.closeAllConnections();

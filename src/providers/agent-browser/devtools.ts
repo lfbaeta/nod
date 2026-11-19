@@ -365,9 +365,16 @@ export async function openDevtools(url: string, targetId: string, signal?: Abort
         .node.backendNodeId;
     const hit = async (x: number, y: number, target: string, frame?: string) => {
       type Hit = { nodeName: string; backendNodeId: number; frameId?: string; pseudoType?: string };
+      const { cssLayoutViewport: view } = (await send('Page.getLayoutMetrics', {}, target)) as {
+        cssLayoutViewport: { pageX: number; pageY: number };
+      };
       const found = (await send(
         'DOM.getNodeForLocation',
-        { x, y, ignorePointerEventsNone: !hitTest },
+        {
+          x: Math.round(x + view.pageX),
+          y: Math.round(y + view.pageY),
+          ignorePointerEventsNone: !hitTest,
+        },
         target,
       )) as { backendNodeId?: number; frameId?: string };
       if (!found.backendNodeId || (frame && found.frameId !== frame)) return undefined;
