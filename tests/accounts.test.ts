@@ -7457,9 +7457,11 @@ test('startup reports require review and keep exact redacted content through sen
   ])
     assert.ok(!content.includes(value), value);
   assert.match(content, /503/);
+  assert.ok(!content.includes('2026-11-19T'));
+  assert.equal(typeof JSON.parse(content).startupLog.entries[0].ageMs, 'number');
   await writeFile(
     join(root, 'logs', 'startup.log'),
-    `2026-11-19T00:00:00.000Z ${'Synthetic detail '.repeat(233)}${secret} end\n`,
+    `2026-11-19T00:00:00.000Z ${'Synthetic detail '.repeat(234)}${secret} end\n`,
   );
   const boundary = await service.review({
     feedback: 'Synthetic boundary check.',
@@ -7587,3 +7589,117 @@ test('startup reports omit unsafe logs and refuse invalid input or failed durabl
   await assert.rejects(corrupt.context(), /saved report status could not be read/);
   assert.equal(sends, 1);
 });
+
+test('the startup feedback factory ignores unrelated engine configuration and dotenv keys', async (t) => {
+  const { writeFile } = await import('node:fs/promises');
+  const { execFile } = await import('node:child_process');
+  const { promisify } = await import('node:util');
+  const root = await mkdtemp(join(tmpdir(), 'nod-startup-factory-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await writeFile(
+    join(root, '.env'),
+    'PORT=invalid-synthetic-port\nOPENAI_API_KEY=synthetic-model-key-canary\nDATABASE_POOL_MAX=invalid-synthetic-pool\n',
+  );
+  const source = new URL('../src/server/feedback-delivery.ts', import.meta.url).href;
+  const script = join(root, 'check.mjs');
+  await writeFile(
+    script,
+    `const { createFeedbackDelivery } = await import(${JSON.stringify(source)}); const delivery = createFeedbackDelivery({NOD_FEEDBACK_ENABLED:'false'}); process.stdout.write(JSON.stringify({modelKeyLoaded:Object.hasOwn(process.env,'OPENAI_API_KEY'),dotenvPortLoaded:Object.hasOwn(process.env,'PORT'),configured:delivery.configured}));`,
+  );
+  const result = await promisify(execFile)(process.execPath, [script], {
+    cwd: root,
+    env: Object.fromEntries(
+      ['PATH', 'SystemRoot', 'SYSTEMROOT'].flatMap((key) =>
+        process.env[key] ? [[key, process.env[key]]] : [],
+      ),
+    ),
+  });
+  assert.deepEqual(JSON.parse(result.stdout), {
+    modelKeyLoaded: false,
+    dotenvPortLoaded: false,
+    configured: false,
+  });
+});
+
+test(
+  'startup report save failures restore disk state before a recovered restart',
+  { skip: process.platform === 'win32' },
+  async (t) => {
+    const { createStartupFeedback } = await import('../src/server/startup-feedback.ts');
+    const { open } = await import('node:fs/promises');
+    for (const previous of [false, true]) {
+      await t.test(previous ? 'prior resolved receipt' : 'no previous report', async (t) => {
+        const root = await mkdtemp(join(tmpdir(), 'nod-startup-save-restart-'));
+        t.after(() => rm(root, { recursive: true, force: true }));
+        let sends = 0;
+        const options = {
+          dataRoot: root,
+          secrets: [],
+          names: [],
+          status: { phase: 'error' },
+          context: {
+            appVersion: '0.9.0',
+            appRelease: 'a'.repeat(40),
+            appModified: false,
+            platform: 'darwin-arm64',
+            development: false,
+            source: 'desktop' as const,
+          },
+          delivery: {
+            configured: true,
+            recipient: 'n8n',
+            async submit(envelope: import('../src/ports/feedback.ts').FeedbackEnvelope) {
+              sends++;
+              return { submissionId: envelope.submissionId, status: 'submitted' as const };
+            },
+            async status(id: string) {
+              return { submissionId: id, status: 'submitted' as const };
+            },
+          },
+        };
+        const service = createStartupFeedback(options);
+        let oldId: string | undefined;
+        if (previous) {
+          const old = await service.review({
+            feedback: 'Synthetic earlier report.',
+            includeReport: false,
+          });
+          oldId = old.reviewId;
+          await service.send(oldId);
+        }
+        const candidate = await service.review({
+          feedback: 'Synthetic new report.',
+          includeReport: false,
+        });
+        const directory = await open(root, 'r');
+        const prototype = Object.getPrototypeOf(directory);
+        const sync = prototype.sync;
+        await directory.close();
+        try {
+          prototype.sync = async function (this: Awaited<ReturnType<typeof open>>) {
+            if ((await this.stat()).isDirectory())
+              throw Object.assign(new Error('Synthetic directory sync failure.'), { code: 'EIO' });
+            return sync.call(this);
+          };
+          await assert.rejects(service.send(candidate.reviewId));
+        } finally {
+          prototype.sync = sync;
+        }
+        assert.equal(sends, previous ? 1 : 0);
+        const disk = await readFile(join(root, 'startup-feedback.json'), 'utf8').catch((error) => {
+          if (error.code === 'ENOENT') return null;
+          throw error;
+        });
+        assert.equal(disk ? JSON.parse(disk).submissionId : undefined, oldId);
+        const restarted = createStartupFeedback(options);
+        assert.equal((await restarted.context()).pending?.submissionId, oldId);
+        const recovered = await restarted.review({
+          feedback: 'Synthetic report after disk recovery.',
+          includeReport: false,
+        });
+        assert.equal((await restarted.send(recovered.reviewId)).status, 'submitted');
+        assert.equal(sends, previous ? 2 : 1);
+      });
+    }
+  },
+);

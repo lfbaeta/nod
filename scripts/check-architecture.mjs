@@ -57,7 +57,10 @@ for (const file of await files(sourceRoot)) {
               ? ['server', 'runtime', 'providers', 'ports', 'shared']
               : ['server', 'ports', 'shared'],
         }[layer];
-        if (!allowed?.includes(target))
+        if (
+          !allowed?.includes(target) &&
+          !(name === 'server/feedback-delivery.ts' && dependency === '../providers/n8n/feedback.ts')
+        )
           problem(`Import of ${dependency} crosses the ${layer} boundary.`);
       }
     }

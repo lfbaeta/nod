@@ -5,7 +5,7 @@ import { trustSystemCertificates } from './system-certificates.mjs';
 
 trustSystemCertificates();
 register();
-const { createFeedbackDelivery } = await import('../../src/server/composition.ts');
+const { createFeedbackDelivery } = await import('../../src/server/feedback-delivery.ts');
 const { createStartupFeedback } = await import('../../src/server/startup-feedback.ts');
 const { createFeedbackRedactor } = await import('../../src/server/feedback-redaction.ts');
 const { environmentSecrets } = await import('../../src/server/redaction.ts');
@@ -44,7 +44,18 @@ process.parentPort.on('message', async ({ data }) => {
       error:
         error?.name === 'ZodError'
           ? 'The report input is invalid. Review the report again.'
-          : redact.text(String(error?.message || 'The report action failed.')).slice(0, 2000),
+          : redact
+              .text(
+                [
+                  error?.message || 'The report action failed.',
+                  ...(Array.isArray(error?.errors)
+                    ? error.errors.slice(0, 2).map((cause) => cause?.message)
+                    : []),
+                ]
+                  .filter((value) => typeof value === 'string')
+                  .join(' '),
+              )
+              .slice(0, 2000),
     });
   }
 });

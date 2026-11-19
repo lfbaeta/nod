@@ -70,7 +70,7 @@ import type { MessagingTransport } from '../ports/messaging.ts';
 import type { ChannelSetupVerifier } from '../ports/channel-settings.ts';
 import type { LinkPreviewProvider } from '../ports/link-preview.ts';
 import type { FeedbackDelivery } from '../ports/feedback.ts';
-import { createN8nFeedback } from '../providers/n8n/feedback.ts';
+import { createFeedbackDelivery } from './feedback-delivery.ts';
 import { createN8nTraces } from '../providers/n8n/traces.ts';
 import { createOtlpTelemetry } from '../providers/otlp/telemetry.ts';
 import type { UsageTelemetry } from '../ports/provider-usage.ts';
@@ -335,29 +335,6 @@ export function modelEnvironment(
       }),
     },
   };
-}
-
-export function createFeedbackDelivery(
-  env: Record<string, string | undefined> = process.env,
-): FeedbackDelivery {
-  const defaultFeedbackUrl = 'https://internal.users.n8n.cloud/webhook/nod/feedback';
-  const feedbackUrl = env.NOD_FEEDBACK_URL ?? defaultFeedbackUrl;
-  const feedbackEnabled = env.NOD_FEEDBACK_ENABLED !== 'false';
-  if (
-    feedbackEnabled &&
-    feedbackUrl &&
-    feedbackUrl !== defaultFeedbackUrl &&
-    !env.NOD_FEEDBACK_RECEIPT_URL_PREFIX
-  )
-    throw new Error('Set NOD_FEEDBACK_RECEIPT_URL_PREFIX when using a custom feedback intake.');
-  return createN8nFeedback({
-    enabled: feedbackEnabled,
-    url: feedbackUrl,
-    token: env.NOD_FEEDBACK_TOKEN,
-    receiptUrlPrefix:
-      feedbackUrl === defaultFeedbackUrl ? undefined : env.NOD_FEEDBACK_RECEIPT_URL_PREFIX,
-    recipient: feedbackUrl === defaultFeedbackUrl ? 'n8n' : undefined,
-  });
 }
 
 export function createDefaultAdapters(

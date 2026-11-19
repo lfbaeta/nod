@@ -56,6 +56,43 @@ export function createStartupFeedback(options: {
     });
   restored.catch(() => {});
 
+  async function syncStatusDirectory() {
+    if (process.platform === 'win32') return;
+    const directory = await open(options.dataRoot, 'r');
+    try {
+      await directory.sync();
+    } finally {
+      await directory.close();
+    }
+  }
+
+  async function savePending(
+    value: z.infer<typeof pendingSchema> | undefined,
+    published = () => {},
+  ) {
+    if (!value) {
+      await rm(pendingPath, { force: true });
+      await syncStatusDirectory();
+      return;
+    }
+    const temporary = `${pendingPath}.${randomUUID()}.tmp`;
+    try {
+      await mkdir(options.dataRoot, { recursive: true, mode: 0o700 });
+      const file = await open(temporary, 'wx', 0o600);
+      try {
+        await file.writeFile(JSON.stringify(value));
+        await file.sync();
+      } finally {
+        await file.close();
+      }
+      await rename(temporary, pendingPath);
+      published();
+      await syncStatusDirectory();
+    } finally {
+      await rm(temporary, { force: true }).catch(() => {});
+    }
+  }
+
   async function report() {
     const redact = createFeedbackRedactor({
       secrets: options.secrets,
@@ -81,7 +118,17 @@ export function createStartupFeedback(options: {
           .slice(info.size > bytes.length ? 1 : 0)
           .filter(Boolean);
         truncated = info.size > bytes.length || lines.length > 100;
-        startupLog = lines.slice(-100).map((line) => redact.text(line).slice(0, 4000));
+        const now = Date.now();
+        startupLog = lines.slice(-100).map((line) => {
+          const stamp = /^(\d{4}-\d{2}-\d{2}T[\d:.]+Z) /.exec(line);
+          const age = stamp ? now - Date.parse(stamp[1]) : NaN;
+          return {
+            ageMs: Number.isFinite(age)
+              ? Math.min(31_536_000_000, Math.max(0, Math.round(age)))
+              : null,
+            line: redact.text(line.slice(stamp?.[0].length ?? 0)).slice(0, 4000),
+          };
+        });
         collected = true;
       } finally {
         await file.close();
@@ -182,31 +229,24 @@ export function createStartupFeedback(options: {
       pending = { submissionId: id, payloadHash: envelope.payloadHash };
       receipt = undefined;
       sending = (async () => {
-        const temporary = `${pendingPath}.${randomUUID()}.tmp`;
+        let published = false;
         try {
-          await mkdir(options.dataRoot, { recursive: true, mode: 0o700 });
-          const file = await open(temporary, 'wx', 0o600);
-          try {
-            await file.writeFile(JSON.stringify(pending));
-            await file.sync();
-          } finally {
-            await file.close();
-          }
-          await rename(temporary, pendingPath);
-          if (process.platform !== 'win32') {
-            const directory = await open(options.dataRoot, 'r');
-            try {
-              await directory.sync();
-            } finally {
-              await directory.close();
-            }
-          }
+          await savePending(pending, () => {
+            published = true;
+          });
         } catch (error) {
-          pending = previousPending;
-          receipt = previousReceipt;
+          try {
+            if (published) await savePending(previousPending);
+          } catch (rollback) {
+            throw new AggregateError(
+              [error, rollback],
+              'The report was not sent. The previous saved report status could not be restored.',
+            );
+          } finally {
+            pending = previousPending;
+            receipt = previousReceipt;
+          }
           throw error;
-        } finally {
-          await rm(temporary, { force: true }).catch(() => {});
         }
         receipt = await options.delivery.submit(envelope);
         return receipt;
