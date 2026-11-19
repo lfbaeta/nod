@@ -1,4 +1,5 @@
 import { type KeyboardEvent, useRef } from 'react';
+import { flushSync } from 'react-dom';
 import { Button } from './ui';
 import { shortcutLabel } from '../lib/navigation';
 import { desktopSettingsAvailable } from '../lib/desktop';
@@ -30,6 +31,89 @@ export function toggleSidebarState(state: SidebarState): SidebarState {
   return { ...state, hidden: !state.hidden };
 }
 
+let sliding: Animation[] = [];
+
+/**
+ * Slides the sidebar for a pointer press on the toggle. The layout changes once, up front;
+ * only transform and clip-path move. The shortcut, the keyboard and the drag stay instant.
+ */
+function slideSidebar(toggle: HTMLElement, apply: () => void) {
+  const shell = toggle.closest<HTMLElement>('.app-shell');
+  const sidebar = shell?.querySelector<HTMLElement>('.sidebar');
+  const body = shell?.querySelector<HTMLElement>('.workspace-body');
+  if (
+    !shell ||
+    !sidebar ||
+    !body ||
+    window.matchMedia('(max-width: 640px), (prefers-reduced-motion: reduce)').matches
+  )
+    return apply();
+  const toolbar = shell.querySelector<HTMLElement>('.desktop-toolbar');
+  const centre = (element: HTMLElement) => {
+    const rect = element.getBoundingClientRect();
+    return (rect.left + rect.right) / 2;
+  };
+  // Measure where things are on screen now, mid-slide or not, so a second press picks up from there.
+  const edge = sidebar.getBoundingClientRect();
+  const bodyFrom = centre(body);
+  const toggleFrom = toggle.getBoundingClientRect().left;
+  for (const animation of sliding) animation.cancel();
+  shell.toggleAttribute('data-sliding', true);
+  flushSync(apply);
+  const hidden = shell.classList.contains('sidebar-hidden');
+  sidebar.style.width = hidden ? `${edge.width}px` : '';
+  const width = hidden ? edge.width : sidebar.getBoundingClientRect().width;
+  const timing = {
+    duration: 300,
+    easing: getComputedStyle(shell).getPropertyValue('--ease-enter').trim() || 'ease-out',
+  };
+  const bodyShift = bodyFrom - centre(body);
+  // The desktop toggle never moves; it must not get a transform (see sidebar-toggle.css).
+  const toggleShift = toggleFrom - toggle.getBoundingClientRect().left;
+  const covered = toolbar ? Math.max(0, edge.right - toolbar.getBoundingClientRect().left) : 0;
+  // The divider sits in the page area; carry it on the sidebar's edge for the whole slide.
+  const divider = shell.querySelector<HTMLElement>('.sidebar-resizer');
+  const dividerAt = divider ? centre(divider) : 0;
+  const panel = sidebar.animate(
+    {
+      transform: [`translateX(${edge.right - width}px)`, hidden ? 'translateX(-100%)' : 'none'],
+    },
+    timing,
+  );
+  sliding = [
+    panel,
+    // Half the sidebar's travel keeps centred content where it was instead of jumping.
+    body.animate({ transform: [`translateX(${bodyShift}px)`, 'none'] }, timing),
+    ...(toggleShift
+      ? [toggle.animate({ transform: [`translateX(${toggleShift}px)`, 'none'] }, timing)]
+      : []),
+    ...(divider?.offsetWidth
+      ? [
+          divider.animate(
+            {
+              transform: [
+                `translateX(${edge.right - dividerAt}px)`,
+                `translateX(${(hidden ? 0 : width) - dividerAt}px)`,
+              ],
+            },
+            timing,
+          ),
+        ]
+      : []),
+    // The toolbar is already at its new place; uncover it as the sidebar's edge passes.
+    ...(toolbar && covered
+      ? [toolbar.animate({ clipPath: [`inset(0 0 0 ${covered}px)`, 'inset(0)'] }, timing)]
+      : []),
+  ];
+  panel.finished.then(
+    () => {
+      shell.removeAttribute('data-sliding');
+      sidebar.style.width = '';
+    },
+    () => {},
+  );
+}
+
 export function SidebarToggle({
   hidden,
   unread,
@@ -56,7 +140,10 @@ export function SidebarToggle({
       aria-expanded={!hidden}
       aria-controls="sidebar-navigation"
       aria-keyshortcuts={desktop ? `${mac ? 'Meta' : 'Control'}+B` : undefined}
-      onClick={onToggle}
+      onClick={(event) =>
+        // A click from the keyboard has detail 0.
+        event.detail ? slideSidebar(event.currentTarget, onToggle) : onToggle()
+      }
     >
       <svg
         className="sidebar-toggle-symbol"

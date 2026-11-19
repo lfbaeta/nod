@@ -79,6 +79,10 @@
 .sidebar-hidden .sidebar-resizer::before {
   background: transparent;
 }
+/* Sliding out: the line stays on the sidebar's edge until it is gone. */
+.app-shell[data-sliding] .sidebar-resizer::before {
+  background: color-mix(in srgb, var(--border) 45%, transparent);
+}
 .sidebar-hidden .sidebar-resizer::after {
   inset-inline-start: 0;
 }
@@ -115,6 +119,10 @@
 @media (max-width: 800px) {
   :root:not([data-desktop='true']) .app-shell:not(.sidebar-hidden) {
     --desktop-sidebar-width: var(--side-rail-width);
+  }
+  /* Centred in the icons-only rail, in line with the icons below it. */
+  :root:not([data-desktop='true']) .app-shell:not(.sidebar-hidden) .sidebar-toggle.button {
+    left: calc((var(--side-rail-width) - 28px) / 2);
   }
   :root:not([data-desktop='true']) .sidebar-resizer {
     display: none;
