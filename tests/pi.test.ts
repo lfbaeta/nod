@@ -1079,6 +1079,295 @@ test('codemode app calls keep untrusted output and stop after an approval', asyn
     });
 });
 
+test('a failed Codemode script keeps the outcomes of calls it already started', async (t) => {
+  for (const mode of ['write', 'approval', 'rejection', 'stop'] as const)
+    await t.test(mode, { timeout: 10_000 }, async (t) => {
+      const directory = await mkdtemp(join(tmpdir(), 'nod-script-outcomes-'));
+      t.after(() => rm(directory, { recursive: true, force: true }));
+      let entered!: () => void;
+      const started = new Promise<void>((resolve) => (entered = resolve));
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => (release = resolve));
+      const stop = new AbortController();
+      const dispatched: string[] = [];
+      const outcomes: Array<{ name: string; output?: unknown; status: string }> = [];
+      const requests: string[] = [];
+      let writes = 0;
+      let approvals = 0;
+      let round = 0;
+      const runtime = createAgentRuntime({
+        agent: createPiAgent({
+          provider: 'openai',
+          apiKey: 'fixture-key',
+          sessionRoot: join(directory, 'sessions'),
+          createSession: async (options) => {
+            const result = await createAgentSession(options);
+            result.session.agent.streamFunction = (_model, request) => {
+              requests.push(
+                JSON.stringify(request.messages.filter((item) => item.role === 'toolResult')),
+              );
+              const first = round++ === 0;
+              const message = fauxAssistantMessage(
+                first
+                  ? [
+                      {
+                        type: 'toolCall',
+                        id: 'synthetic-script',
+                        name: 'codemode',
+                        arguments: {
+                          code:
+                            (mode === 'write' ? '// @options: {"timeout_ms": 1000}\n' : '') +
+                            'await Promise.all([tools.apps({action:"SYNTHETIC_FAILED_READ",args:{}}),tools.apps({action:"SYNTHETIC_SIBLING",args:{}})]); await tools.apps({action:"SYNTHETIC_LATE_WRITE",args:{}});',
+                        },
+                      },
+                    ]
+                  : 'The synthetic check finished.',
+                { stopReason: first ? 'toolUse' : 'stop' },
+              );
+              const stream = createAssistantMessageEventStream();
+              stream.push({ type: 'start', partial: message });
+              stream.push({ type: 'done', reason: first ? 'toolUse' : 'stop', message });
+              return stream;
+            };
+            return result;
+          },
+        }),
+        computer: fakeComputer(),
+        workspace: fakeWorkspace(),
+        observe: (_id, event) => {
+          if (event.type === 'tool_end') outcomes.push(event);
+        },
+      });
+      t.after(() => runtime.dispose());
+      const pending = runtime.runTurn({
+        ...context(directory),
+        turnId: randomUUID(),
+        signal: stop.signal,
+        integration: async (action, _args, _signal, admit) => {
+          await admit?.(false);
+          dispatched.push(action);
+          if (action === 'SYNTHETIC_FAILED_READ') {
+            await started;
+            throw new Error('Synthetic read failed before dispatch.');
+          }
+          assert.equal(action, 'SYNTHETIC_SIBLING');
+          entered();
+          if (mode === 'stop') await held;
+          else await setTimeout(75);
+          if (mode === 'rejection') throw new Error('Synthetic sibling failed after the script.');
+          if (mode === 'approval') {
+            approvals++;
+            return { [appConfirmation]: 'Synthetic approval question.' };
+          }
+          if (mode === 'write') writes++;
+          return { status: 'completed' };
+        },
+      });
+      try {
+        await started;
+        if (mode === 'stop') {
+          const rejected = assert.rejects(pending, /abort|stop/i);
+          await setTimeout(75);
+          stop.abort(new Error('Owner stopped the synthetic turn.'));
+          await rejected;
+          release();
+          await setTimeout(25);
+          assert.equal(requests.length, 1);
+        } else {
+          const result = await pending;
+          assert.equal(result.status, mode === 'approval' ? 'waiting_user' : 'succeeded');
+          if (mode === 'approval') {
+            assert.equal(result.waitingFor, 'approval');
+            assert.equal(requests.length, 1);
+          } else {
+            const response = requests.at(-1)!;
+            assert.doesNotMatch(response, /apps \(cancelled\)|"status":"unfinished"/);
+            assert.match(
+              response,
+              mode === 'write' ? /apps \(error\), apps \(ok\)/ : /apps \(error\), apps \(error\)/,
+            );
+            assert.equal(requests.length, 2);
+            const script = outcomes.findIndex((event) => event.name === 'codemode');
+            assert.equal(outcomes.filter((event) => event.name === 'apps').length, 2);
+            assert.equal(script, 2);
+          }
+        }
+        assert.deepEqual(dispatched, ['SYNTHETIC_FAILED_READ', 'SYNTHETIC_SIBLING']);
+        assert.equal(writes, Number(mode === 'write'));
+        assert.equal(approvals, Number(mode === 'approval'));
+      } finally {
+        stop.abort();
+        release();
+        await pending.catch(() => {});
+      }
+    });
+});
+
+test(
+  'Stop ends the Codemode wait even when a nested tool ignores its signal',
+  { timeout: 5_000 },
+  async () => {
+    const { executeCodemode } = await import(
+      new URL(
+        '../node_modules/@earendil-works/pi-coding-agent/dist/extensions/codemode/execute.js',
+        import.meta.url,
+      ).href
+    );
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => (entered = resolve));
+    let reject!: (error: Error) => void;
+    const held = new Promise<never>((_resolve, refuse) => (reject = refuse));
+    const stop = new AbortController();
+    const calls: string[] = [];
+    const pending = executeCodemode(
+      'synthetic-direct-stop',
+      {
+        code: 'await Promise.all([tools.synthetic_fail({}),tools.synthetic_wait({})]); await tools.synthetic_late({});',
+      },
+      stop.signal,
+      undefined,
+      {
+        tools: ['synthetic_fail', 'synthetic_wait', 'synthetic_late'].map((name) => ({
+          name,
+          label: name,
+          description: 'Synthetic tool.',
+          parameters: Type.Object({}),
+          execute: async () => ({ content: [], details: {} }),
+        })),
+        sessionManager: SessionManager.inMemory(process.cwd()),
+        executeTool: async (name: string) => {
+          calls.push(name);
+          if (name === 'synthetic_wait') {
+            entered();
+            await held;
+          }
+          await started;
+          return {
+            toolCall: {
+              type: 'toolCall',
+              id: `synthetic-direct-stop/${calls.length}`,
+              name,
+              arguments: {},
+            },
+            result: { content: [{ type: 'text', text: 'Synthetic tool failed.' }], details: {} },
+            isError: true,
+          };
+        },
+      },
+    );
+    try {
+      await started;
+      await setTimeout(75);
+      let finished = false;
+      void pending.then(() => (finished = true));
+      await setTimeout(25);
+      assert.equal(finished, false);
+      stop.abort(new Error('Owner stopped the synthetic script.'));
+      const result = await pending;
+      assert.equal(result.isError, true);
+      assert.deepEqual(calls, ['synthetic_fail', 'synthetic_wait']);
+      reject(new Error('Synthetic tool rejected after Stop.'));
+      await setTimeout(25);
+    } finally {
+      stop.abort();
+      reject(new Error('Synthetic tool cleanup.'));
+      await pending;
+    }
+  },
+);
+
+test('a Codemode deadline ends the wait with an unknown tool outcome', async (t) => {
+  const { executeCodemode } = await import(
+    new URL(
+      '../node_modules/@earendil-works/pi-coding-agent/dist/extensions/codemode/execute.js',
+      import.meta.url,
+    ).href
+  );
+  for (const mode of ['timeout', 'failure', 'unawaited'] as const)
+    for (const late of ['resolve', 'reject'] as const)
+      await t.test(`${mode} then ${late}`, { timeout: 5_000 }, async () => {
+        let entered!: () => void;
+        const started = new Promise<void>((resolve) => (entered = resolve));
+        let reject!: (error: Error) => void;
+        let release!: () => void;
+        const held = new Promise<void>((resolve, refuse) => {
+          release = resolve;
+          reject = refuse;
+        });
+        const stop = new AbortController();
+        const calls: string[] = [];
+        let commits = 0;
+        const code =
+          '// @options: {"timeout_ms": 250}\n' +
+          (mode === 'timeout'
+            ? 'await tools.synthetic_wait({});'
+            : mode === 'failure'
+              ? 'await Promise.all([tools.synthetic_fail({}),tools.synthetic_wait({})]);'
+              : 'void tools.synthetic_wait({}); await tools.synthetic_barrier({}); text("Local script finished.");');
+        const pending = executeCodemode('synthetic-deadline', { code }, stop.signal, undefined, {
+          tools: ['synthetic_fail', 'synthetic_wait', 'synthetic_barrier'].map((name) => ({
+            name,
+            label: name,
+            description: 'Synthetic tool.',
+            parameters: Type.Object({}),
+            execute: async () => ({ content: [], details: {} }),
+          })),
+          sessionManager: SessionManager.inMemory(process.cwd()),
+          executeTool: async (name: string) => {
+            calls.push(name);
+            if (name === 'synthetic_wait') {
+              entered();
+              await held;
+              commits++;
+            }
+            await started;
+            return {
+              toolCall: { type: 'toolCall', id: name, name, arguments: {} },
+              result: { content: [{ type: 'text', text: 'Synthetic result.' }], details: {} },
+              isError: name === 'synthetic_fail',
+            };
+          },
+        });
+        let deadline: ReturnType<typeof globalThis.setTimeout> | undefined;
+        try {
+          const result = await Promise.race([
+            pending,
+            new Promise<never>((_resolve, fail) => {
+              deadline = globalThis.setTimeout(
+                () => fail(new Error('The script exceeded its deadline.')),
+                1_000,
+              );
+            }),
+          ]);
+          assert.equal(stop.signal.aborted, false);
+          const text = result.content.map((part: { text?: string }) => part.text ?? '').join('\n');
+          assert.match(text, /outcome unknown|results are still unknown/i);
+          assert.doesNotMatch(text, /synthetic_wait \((?:cancelled|ok)\)/);
+          const snapshot = JSON.stringify(result.details);
+          assert.equal(
+            result.details.calls.find((call: { name: string }) => call.name === 'synthetic_wait')
+              .status,
+            'running',
+          );
+          assert.equal(result.isError === true, mode !== 'unawaited');
+          if (mode === 'timeout') assert.match(text, /timed out/);
+          if (mode === 'unawaited') assert.match(text, /Local script finished/);
+          assert.equal(commits, 0);
+          if (late === 'resolve') release();
+          else reject(new Error('Synthetic tool rejected after the deadline.'));
+          await setTimeout(25);
+          assert.equal(JSON.stringify(result.details), snapshot);
+          assert.equal(commits, Number(late === 'resolve'));
+          assert.equal(calls.filter((name) => name === 'synthetic_wait').length, 1);
+        } finally {
+          if (deadline) globalThis.clearTimeout(deadline);
+          stop.abort();
+          reject(new Error('Synthetic deadline cleanup.'));
+          await pending;
+        }
+      });
+});
+
 test('a new Pi request follows refreshed owner context after an approval pause', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'nod-pi-approval-next-'));
   const requests: string[] = [];
@@ -9852,6 +10141,64 @@ test('turn-bound review and memory timeouts retain their cause while Stop ends r
           assert.equal(new Set(reports.map(({ id }) => id)).size, calls);
         },
       );
+});
+
+test('model HTTP failures keep their response status within each request and retry', async (t) => {
+  const statuses: number[] = [];
+  let disconnected = false;
+  t.mock.method(globalThis, 'fetch', async () => {
+    if (disconnected)
+      throw Object.assign(new Error('Synthetic disconnect.'), { code: 'ECONNRESET' });
+    const status = statuses.shift();
+    assert.ok(status);
+    return status !== 200
+      ? Response.json({ error: { message: 'Synthetic service refusal.' } }, { status })
+      : new Response(
+          `data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: '{"access":false}' }, finish_reason: 'stop' }], usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } })}\n\ndata: [DONE]\n\n`,
+          { headers: { 'content-type': 'text/event-stream' } },
+        );
+  });
+  const access = smallContextAccess('compatible', 'fixture-response-status', 128000);
+  const { runtime, model, requestFacts } = await createPiModelRuntime(access);
+  const request = {
+    messages: [{ role: 'user' as const, content: 'Synthetic mail.', timestamp: 1 }],
+  };
+  for (const status of [403, 200, 401]) {
+    statuses.push(status);
+    const result = await runtime.completeSimple(model, request);
+    assert.equal(result.stopReason, status === 200 ? 'stop' : 'error');
+    if (status !== 200) assert.match(result.errorMessage ?? '', new RegExp(`HTTP ${status}`));
+    assert.equal(requestFacts(result)?.requestPhase, status === 200 ? 'stream' : 'response');
+  }
+  disconnected = true;
+  const failed = await runtime.completeSimple(model, request);
+  assert.equal(failed.stopReason, 'error');
+  assert.doesNotMatch(failed.errorMessage ?? '', /HTTP \d{3}/);
+  assert.equal(requestFacts(failed)?.requestPhase, 'request');
+  disconnected = false;
+  statuses.push(503, 403);
+  const reports: Array<Partial<ProviderUsageEvent>> = [];
+  const curator = createPiMemoryCurator({
+    provider: 'compatible',
+    configured: () => true,
+    resolve: async () => access,
+  });
+  await assert.rejects(
+    curator.curate(
+      { task: 'access', instructions: 'Check synthetic mail.', input: {} },
+      new AbortController().signal,
+      (usage) => reports.push(usage),
+    ),
+    (error: Error & { providerStatus?: number }) => {
+      assert.equal(error.providerStatus, 403);
+      assert.match(error.message, /HTTP 403/);
+      assert.doesNotMatch(error.message, /HTTP 503/);
+      return true;
+    },
+  );
+  assert.equal(statuses.length, 0);
+  assert.equal(reports.length, 2);
+  assert.ok(reports.every(({ status }) => status === 'failed'));
 });
 
 test('action review failures identify the task, model, provider, and bounded provider reason', async (t) => {
