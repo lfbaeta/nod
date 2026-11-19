@@ -4106,6 +4106,10 @@ test('each model call yields one chat-format trace without image data', async ()
     ['Too many requests. (HTTP 429)', 'rate_limit'],
     ['fetch failed (transport cause: ECONNRESET)', 'connection'],
     ['The request timed out.', 'connection'],
+    ['The daily report endpoint timed out.', 'connection'],
+    ['The per-day endpoint returned too many requests. (HTTP 429)', 'rate_limit'],
+    ['The free-tier model connection failed.', 'connection'],
+    ['Unknown parameter: daily.', 'unknown'],
     [
       'Automatic preparation stopped because this model has no cost estimate.',
       'model_config',
@@ -4278,6 +4282,10 @@ test('agent and curator traces share analytics IDs across parallel turns and sep
     provider: { capture: (event) => events.push(event), shutdown: async () => {} },
     environment: 'production',
     dataRoot: root,
+    withTraceContext: (operation) => {
+      const turnId = randomUUID();
+      return traces.withTurn({ sessionId: turnId, turnId }, operation);
+    },
   });
   t.after(() => analytics.shutdown());
   const traces = createModelTraces(
@@ -4346,12 +4354,14 @@ test('agent and curator traces share analytics IDs across parallel turns and sep
                 run_id: randomUUID(),
               }),
             );
-            await curator.curate({
-              task: 'plan',
-              instructions: 'Return JSON.',
-              input: {},
-              automatic: source !== 'user',
-            });
+            await analytics.withSystemWork('synthetic-owner', 'onboarding', () =>
+              curator.curate({
+                task: 'plan',
+                instructions: 'Return JSON.',
+                input: {},
+                automatic: source !== 'user',
+              }),
+            );
             analytics.capture('synthetic-owner', {
               event: 'turn_started',
               properties: {
@@ -4379,12 +4389,14 @@ test('agent and curator traces share analytics IDs across parallel turns and sep
   };
   await settle(15);
   assert.equal(events.length, 5);
+  assert.equal(new Set(events.map((event) => event.properties.turn_id)).size, 5);
   assert.equal(new Set(sent.map(({ run }) => run.metadata.thread_id)).size, 1);
   assert.equal(new Set(sent.map(({ run }) => run.metadata.turn_id)).size, 5);
   for (const event of events) {
     const runs = sent.filter(({ run }) => run.metadata.turn_id === event.properties.turn_id);
     assert.equal(runs.length, 3);
-    assert.ok(runs.some(({ run }) => run.metadata.source === 'curator'));
+    assert.equal(runs.filter(({ run }) => run.metadata.source === 'curator').length, 1);
+    assert.equal(runs.filter(({ run }) => run.metadata.source === 'agent').length, 2);
     for (const { run } of runs) {
       assert.equal(run.metadata.user_id, event.distinctId);
       assert.equal(run.metadata.thread_id, event.properties.thread_id);
@@ -4394,13 +4406,50 @@ test('agent and curator traces share analytics IDs across parallel turns and sep
     }
   }
   assert.ok(!JSON.stringify(sent).includes(sessionId));
+  await Promise.all(
+    [0, 1].map(() =>
+      analytics.withSystemWork('synthetic-owner', 'onboarding', () =>
+        curator.curate(
+          { task: 'plan', instructions: 'Return JSON.', input: {} },
+          undefined,
+          (usage) =>
+            analytics.capture('synthetic-owner', {
+              event: 'model_used',
+              properties: {
+                provider: 'other',
+                purpose: 'tasks',
+                request_kind: 'tasks',
+                outcome: 'succeeded',
+                input_tokens: usage.inputTokens ?? 0,
+                output_tokens: usage.outputTokens ?? 0,
+                pricing: 'api',
+                cost_usd: usage.costUsd ?? undefined,
+              },
+            }),
+        ),
+      ),
+    ),
+  );
+  await settle(17);
+  assert.equal(events.length, 7);
+  const systemEvents = events.slice(5);
+  assert.equal(new Set(systemEvents.map((event) => event.properties.turn_id)).size, 2);
+  for (const event of systemEvents) {
+    const runs = sent.filter(({ run }) => run.metadata.turn_id === event.properties.turn_id);
+    assert.equal(runs.length, 1);
+    assert.equal(runs[0].run.metadata.source, 'curator');
+    assert.equal(runs[0].run.metadata.thread_id, event.properties.thread_id);
+    assert.equal(runs[0].run.metadata.user_id, event.distinctId);
+    assert.equal(event.properties.system_activity, 'onboarding');
+    assert.equal(event.properties.run_id, undefined);
+  }
   analytics.setUsageData('synthetic-owner', false);
   await curator.curate({ task: 'brief', instructions: 'Return JSON.', input: {} });
-  await settle(16);
+  await settle(18);
   assert.equal(sent.at(-1)!.run.metadata.user_id, analytics.distinctId);
   assert.match(String(sent.at(-1)!.run.metadata.thread_id), /^[0-9a-f]{32}$/);
   assert.match(String(sent.at(-1)!.run.metadata.turn_id), /^[0-9a-f]{32}$/);
-  assert.equal(events.length, 5);
+  assert.equal(events.length, 7);
   const failed = piModelTrace(
     {
       ...call(),
@@ -4415,21 +4464,21 @@ test('agent and curator traces share analytics IDs across parallel turns and sep
   );
   traces.configure({ secrets: ['synthetic-private-key'] });
   traces.record(failed);
-  await settle(17);
+  await settle(19);
   assert.doesNotMatch(
     sent.at(-1)!.run.error!,
     /Marta|Vidal|marta@example.com|synthetic-private-key/,
   );
   for (const cost of [0, null]) {
     traces.record({ ...piModelTrace(call(), {}), usage: { ...failed.usage, costUsd: cost } });
-    await settle(cost === 0 ? 18 : 19);
+    await settle(cost === 0 ? 20 : 21);
     assert.equal(sent.at(-1)!.run.metadata.cost_usd, cost ?? undefined);
     assert.equal(sent.at(-1)!.run.usage.total_cost, cost ?? undefined);
   }
   traces.configure({ enabled: false });
   traces.record(piModelTrace(call(), {}));
   await setTimeout(10);
-  assert.equal(sent.length, 19);
+  assert.equal(sent.length, 21);
   const standalone = await createAnalytics({ environment: 'production', dataRoot: root });
   assert.equal(standalone.distinctId, analytics.distinctId);
   assert.equal(standalone.configuration('synthetic-owner').enabled, false);

@@ -773,6 +773,12 @@ async function initializeApplication(
     dataRoot,
     installationId: process.env.NOD_ANALYTICS_ID,
     appVersion: process.env.NOD_APP_VERSION,
+    withTraceContext:
+      adapters.traces &&
+      ((operation) => {
+        const turnId = randomUUID();
+        return adapters.traces!.withTurn({ sessionId: turnId, turnId }, operation);
+      }),
   });
   let observeConnections: ((only?: 'apps' | 'models') => Promise<void>) | undefined;
   let observeChannels: (() => Promise<void>) | undefined;

@@ -22,6 +22,14 @@ import {
 import type { RuntimeObservation } from '../ports/agent.ts';
 
 export type { AnalyticsEvent } from './analytics-events.ts';
+type TraceIds = { thread_id: string; turn_id: string };
+
+function safeTraceIds(ids?: TraceIds): TraceIds | undefined {
+  return ids && [ids.thread_id, ids.turn_id].every((id) => /^[0-9a-f]{32}$/.test(id))
+    ? { thread_id: ids.thread_id, turn_id: ids.turn_id }
+    : undefined;
+}
+
 export interface AnalyticsDelivery {
   uuid?: string;
   timestamp?: Date;
@@ -126,6 +134,7 @@ export async function createAnalytics(options: {
   dataRoot: string;
   installationId?: string;
   appVersion?: string;
+  withTraceContext?: <T>(operation: (ids: TraceIds) => T) => T;
 }) {
   const appVersion = analyticsVersion.safeParse(options.appVersion).data;
   const localId = await installationId(options.dataRoot, options.installationId).catch(() => null);
@@ -140,7 +149,7 @@ export async function createAnalytics(options: {
     owner: string;
     id: string;
     consent: ReturnType<typeof consent>;
-    traceIds?: { thread_id: string; turn_id: string };
+    traceIds?: TraceIds;
     model?: ReturnType<typeof analyticsModel>;
     work?: { work_type: 'immediate' | 'scheduled' | 'background'; owner_requested: boolean };
   }>();
@@ -148,6 +157,7 @@ export async function createAnalytics(options: {
     owner: string;
     activity: z.infer<typeof systemActivity>;
     consent: ReturnType<typeof consent>;
+    traceIds?: TraceIds;
   }>();
   let closed = false;
   function state(owner: string) {
@@ -238,7 +248,7 @@ export async function createAnalytics(options: {
             capture_source: 'server',
             ...(version ? { app_version: version } : {}),
             ...(runId ? { run_id: runId } : {}),
-            ...(run?.traceIds ?? {}),
+            ...(context?.traceIds ?? {}),
             ...(run?.work ??
               (system
                 ? {
@@ -336,18 +346,9 @@ export async function createAnalytics(options: {
     setOnboardingProfileAnswers,
     setOnboardingProfileProperties,
     setUpdatesEmail,
-    withRun<T>(
-      owner: string,
-      operation: () => T,
-      traceIds?: { thread_id: string; turn_id: string },
-    ): T {
-      const ids = traceIds && {
-        thread_id: traceIds.thread_id,
-        turn_id: traceIds.turn_id,
-      };
-      const valid = ids && Object.values(ids).every((id) => /^[0-9a-f]{32}$/.test(id));
+    withRun<T>(owner: string, operation: () => T, traceIds?: TraceIds): T {
       return runs.run(
-        { owner, id: randomUUID(), consent: consent(owner), ...(valid ? { traceIds: ids } : {}) },
+        { owner, id: randomUUID(), consent: consent(owner), traceIds: safeTraceIds(traceIds) },
         operation,
       );
     },
@@ -358,7 +359,12 @@ export async function createAnalytics(options: {
     ): T {
       const parsed = systemActivity.safeParse(activity);
       if (runs.getStore() || systems.getStore() || !parsed.success) return operation();
-      return systems.run({ owner, activity: parsed.data, consent: consent(owner) }, operation);
+      const run = (ids?: TraceIds) =>
+        systems.run(
+          { owner, activity: parsed.data, consent: consent(owner), traceIds: safeTraceIds(ids) },
+          operation,
+        );
+      return options.withTraceContext ? options.withTraceContext(run) : run();
     },
     currentRun(owner: string) {
       const run = runs.getStore();

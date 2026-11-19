@@ -49,7 +49,11 @@ function errorType(error: string, phase?: ModelRequestFacts['requestPhase']) {
     )
   )
     return 'billing';
-  if (/insufficient_quota|free[_ -]?tier|daily|per[_ -]?day/i.test(error)) return 'quota';
+  if (
+    /insufficient_quota/i.test(error) ||
+    (/free[_ -]?tier|daily|per[_ -]?day/i.test(error) && /quota|limit|allowance/i.test(error))
+  )
+    return 'quota';
   if (/rate[_ -]?limit|too many requests|requests per minute|tokens per minute/i.test(error))
     return 'rate_limit';
   if (/quota.*(?:exceeded|exhausted)|(?:exceeded|exhausted).*quota/i.test(error)) return 'quota';
