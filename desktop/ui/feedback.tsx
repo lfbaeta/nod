@@ -52,6 +52,22 @@ export function StartupFeedback({
     }
   }
 
+  async function reconcileAttempt(id: string) {
+    const value = (await desktop.startupFeedback('context')) as Context;
+    if (!active.current) return false;
+    setContext(value);
+    if (value.notSentSubmissionId === id) {
+      setReceipt(null);
+      setReview(undefined);
+      return true;
+    }
+    if (value.pending?.submissionId === id) {
+      setReceipt(value.pending);
+      return true;
+    }
+    return false;
+  }
+
   async function run(action: () => Promise<void>) {
     if (pending.current) return;
     pending.current = true;
@@ -209,8 +225,15 @@ export function StartupFeedback({
               disabled={busy}
               onClick={() =>
                 void run(async () => {
+                  const id = receipt.submissionId;
                   const value = (await desktop.startupFeedback('status')) as FeedbackReceipt;
-                  if (active.current) setReceipt(value);
+                  if (value?.submissionId === id) {
+                    if (active.current) setReceipt(value);
+                  } else if (!(await reconcileAttempt(id))) {
+                    throw new Error(
+                      'The saved status belongs to a different report. This report is still unknown.',
+                    );
+                  }
                 })
               }
             >
@@ -272,12 +295,7 @@ export function StartupFeedback({
                   } catch (cause) {
                     if (active.current) setReceipt({ submissionId: id, status: 'unknown' });
                     try {
-                      const value = (await desktop.startupFeedback('context')) as Context;
-                      if (active.current) {
-                        setContext(value);
-                        setReceipt(value.pending?.submissionId === id ? value.pending : null);
-                        setReview(undefined);
-                      }
+                      await reconcileAttempt(id);
                     } catch {}
                     throw cause;
                   }

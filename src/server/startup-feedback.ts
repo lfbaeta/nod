@@ -60,6 +60,8 @@ export function createStartupFeedback(options: {
   let restoredState = false;
   let restoreFailure: { message: string; canPreserve: boolean } | undefined;
   let recovering: Promise<void> | undefined;
+  let lastReviewId: string | undefined;
+  let notSentSubmissionId: string | undefined;
 
   async function readBytes(file: FileHandle, limit: number) {
     const bytes = Buffer.alloc(limit + 1);
@@ -254,6 +256,8 @@ export function createStartupFeedback(options: {
         pending = undefined;
         receipt = undefined;
         reviewed = undefined;
+        lastReviewId = undefined;
+        notSentSubmissionId = undefined;
         clearTimeout(reviewTimer);
         restoreFailure = undefined;
         restoredState = true;
@@ -285,6 +289,7 @@ export function createStartupFeedback(options: {
         ...context,
         enabled: options.delivery.configured,
         recipient: options.delivery.recipient,
+        ...(notSentSubmissionId && { notSentSubmissionId }),
       };
       try {
         await restore();
@@ -331,6 +336,8 @@ export function createStartupFeedback(options: {
       };
       clearTimeout(reviewTimer);
       const reviewId = canonical.submissionId;
+      lastReviewId = reviewId;
+      notSentSubmissionId = undefined;
       reviewTimer = setTimeout(() => {
         if (reviewed?.envelope.submissionId === reviewId) reviewed = undefined;
       }, 3_600_000);
@@ -346,8 +353,14 @@ export function createStartupFeedback(options: {
       await restore();
       const id = uuid.parse(input);
       if (pending?.submissionId === id) return (await status())!;
-      if (!reviewed || reviewed.envelope.submissionId !== id || reviewed.expiresAt <= Date.now())
+      if (!reviewed || reviewed.envelope.submissionId !== id || reviewed.expiresAt <= Date.now()) {
+        if (lastReviewId === id) {
+          notSentSubmissionId = id;
+          reviewed = undefined;
+          clearTimeout(reviewTimer);
+        }
         throw new StartupFeedbackError('review_required');
+      }
       if (sending || (pending && (!receipt || receipt.status === 'unknown')))
         throw new StartupFeedbackError('previous_send');
       const envelope = reviewed.envelope;
@@ -372,8 +385,12 @@ export function createStartupFeedback(options: {
           }
           pending = previousPending;
           receipt = previousReceipt;
+          notSentSubmissionId = id;
+          reviewed = undefined;
+          clearTimeout(reviewTimer);
           throw error;
         }
+        notSentSubmissionId = undefined;
         receipt = startupReceiptFacts(await options.delivery.submit(envelope), id);
         return present(receipt);
       })().finally(() => {

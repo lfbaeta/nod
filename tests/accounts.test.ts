@@ -7945,14 +7945,18 @@ test('startup reports omit unavailable event snapshots and refuse invalid input 
   await writeFile(dataRoot, 'Synthetic blocking file');
   await assert.rejects(service.send(reviewed.reviewId));
   assert.equal(sends, 0);
+  assert.equal((await service.context()).notSentSubmissionId, reviewed.reviewId);
   await unlink(dataRoot);
   await mkdir(dataRoot);
-  assert.equal((await service.send(reviewed.reviewId)).status, 'submitted');
-  assert.equal(
-    sends,
-    1,
-    'A known failure before dispatch must allow the reviewed report to be sent.',
-  );
+  await assert.rejects(service.send(reviewed.reviewId), /Review the report again/);
+  const recoveredReview = await service.review({
+    feedback: 'Synthetic recovery review.',
+    includeReport: true,
+  });
+  assert.notEqual(recoveredReview.reviewId, reviewed.reviewId);
+  assert.equal((await service.context()).notSentSubmissionId, undefined);
+  assert.equal((await service.send(recoveredReview.reviewId)).status, 'submitted');
+  assert.equal(sends, 1, 'A known failure before dispatch must allow a fresh review and send.');
   await writeFile(join(dataRoot, 'startup-feedback.json'), '{"submissionId":"bad"}');
   const corrupt = createStartupFeedback(options);
   assert.equal((await corrupt.context()).recovery?.canPreserve, true);
@@ -8692,6 +8696,62 @@ test('startup attachment repair keeps the original ID and bytes and never repeat
     Date.now = originalNow;
   }
   assert.equal(calls.filter((value) => !value.action).length, 2);
+});
+
+test('startup not-sent evidence binds an expired review and survives a clock change', async (t) => {
+  const { createStartupFeedback } = await import('../src/server/startup-feedback.ts');
+  const { writeFile } = await import('node:fs/promises');
+  const root = await mkdtemp(join(tmpdir(), 'nod-report-expiry-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const olderId = randomUUID();
+  await writeFile(
+    join(root, 'startup-feedback.json'),
+    JSON.stringify({ submissionId: olderId, payloadHash: 'a'.repeat(64) }),
+  );
+  let now = Date.now();
+  const originalNow = now;
+  t.mock.method(Date, 'now', () => now);
+  let submits = 0;
+  const service = createStartupFeedback({
+    dataRoot: root,
+    status: { phase: 'error' },
+    context: {
+      appVersion: '0.9.0',
+      appRelease: 'a'.repeat(40),
+      appModified: false,
+      development: false,
+      source: 'desktop',
+      platform: 'darwin-arm64',
+    },
+    delivery: {
+      configured: true,
+      recipient: 'n8n',
+      submit: async (value) => {
+        submits++;
+        return { submissionId: value.submissionId, status: 'submitted' };
+      },
+      status: async (id) => ({ submissionId: id, status: 'submitted' }),
+    },
+  });
+  assert.equal((await service.context()).pending?.submissionId, olderId);
+  const expired = await service.review({
+    feedback: 'Synthetic expired review.',
+    includeReport: false,
+  });
+  now += 3600001;
+  await assert.rejects(service.send(expired.reviewId), /Review the report again/);
+  const evidence = await service.context();
+  assert.equal(evidence.notSentSubmissionId, expired.reviewId);
+  assert.equal(evidence.pending?.submissionId, olderId);
+  now = originalNow;
+  await assert.rejects(service.send(expired.reviewId), /Review the report again/);
+  assert.equal(submits, 0);
+  const fresh = await service.review({ feedback: 'Synthetic fresh review.', includeReport: false });
+  assert.notEqual(fresh.reviewId, expired.reviewId);
+  assert.equal((await service.context()).notSentSubmissionId, undefined);
+  await service.send(fresh.reviewId);
+  assert.equal(submits, 1);
+  assert.equal((await service.context()).notSentSubmissionId, undefined);
 });
 
 test('startup facts omit every prose shape without pattern matching or code inference', () => {

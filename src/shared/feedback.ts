@@ -76,6 +76,7 @@ export interface FeedbackContext {
 
 export interface StartupFeedbackContext extends FeedbackContext {
   pending: FeedbackReceipt | null;
+  notSentSubmissionId?: string;
   recovery?: { message: string; canPreserve: boolean };
 }
 

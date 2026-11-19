@@ -10361,6 +10361,7 @@ test('the built startup report form requires exact review and keeps uncertain se
   let open;
   let send;
   let refuseSend;
+  let failContext = false;
   let repair;
   let failOpening = true;
   let allowRecovery = false;
@@ -10368,6 +10369,7 @@ test('the built startup report form requires exact review and keeps uncertain se
   let retries = 0;
   let closes = 0;
   const reportId = randomUUID();
+  let statusValue = { submissionId: reportId, status: 'submitted' };
   const opening = deferred();
   page.window.nodDesktop = {
     ready: async () => {},
@@ -10395,7 +10397,10 @@ test('the built startup report form requires exact review and keeps uncertain se
     },
     startupFeedback: async (action, input) => {
       requests.push([action, input]);
-      if (action === 'context') return contextValue;
+      if (action === 'context') {
+        if (failContext) throw new page.window.Error('Synthetic context transport failure.');
+        return contextValue;
+      }
       if (action === 'repair')
         return new Promise((resolve) => {
           repair = resolve;
@@ -10419,7 +10424,7 @@ test('the built startup report form requires exact review and keeps uncertain se
           send = resolve;
           refuseSend = reject;
         });
-      if (action === 'status') return { submissionId: reportId, status: 'submitted' };
+      if (action === 'status') return statusValue;
       assert.fail(action);
     },
   };
@@ -10572,6 +10577,7 @@ test('the built startup report form requires exact review and keeps uncertain se
   await settle(() => button('Send report'));
   assert.equal(requests.filter(([action]) => action === 'send').length, 3);
   send = undefined;
+  contextValue.notSentSubmissionId = reportId;
   button('Send report').click();
   await settle(() => send);
   refuseSend(new page.window.Error('Review the report again before sending it.'));
@@ -10581,12 +10587,32 @@ test('the built startup report form requires exact review and keeps uncertain se
   button('Review').click();
   await settle(() => button('Send report'));
   send = undefined;
-  contextValue.pending = { submissionId: reportId, status: 'unknown' };
+  const olderId = randomUUID();
+  contextValue.pending = { submissionId: olderId, status: 'submitted' };
+  delete contextValue.notSentSubmissionId;
+  failContext = true;
   button('Send report').click();
   await settle(() => send);
   refuseSend(new page.window.Error('Synthetic uncertain send transport failure.'));
   await settle(() => button('Check status') && !button('Check status').disabled);
   assert.equal(button('Review'), undefined);
+  assert.equal(button('Send report'), undefined);
+  statusValue = { submissionId: olderId, status: 'submitted' };
+  button('Check status').click();
+  await settle(() =>
+    page.window.document.body.textContent.includes('belongs to a different report'),
+  );
+  assert.ok(!page.window.document.body.textContent.includes('Your report was sent.'));
+  assert.equal(button('Review'), undefined);
+  assert.equal(button('New report'), undefined);
+  assert.equal(button('Send report'), undefined);
+  const beforeReconcile = requests.filter(([action]) => action === 'send').length;
+  failContext = false;
+  contextValue.notSentSubmissionId = reportId;
+  button('Check status').click();
+  await settle(() => button('Review') && !button('Review').disabled);
+  assert.ok(!page.window.document.body.textContent.includes('Your report was sent.'));
+  assert.equal(requests.filter(([action]) => action === 'send').length, beforeReconcile);
   assert.equal(button('Send report'), undefined);
   button('Close').click();
   await settle(() => closes === 2 && !page.window.document.querySelector('[role="dialog"]'));
