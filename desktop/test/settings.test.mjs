@@ -1012,6 +1012,7 @@ async function runningDesktop(
       replayOnboarding,
       showFeedback,
       writeDiagnostic,
+      bounded,
       engineRoot,
       knownSecrets,
       saveEngineDownload,
@@ -1705,7 +1706,12 @@ test('Windows onboarding waits for storage before unlocking credentials and expo
       (error) => error === installation,
     );
     assert.equal(f.status().error, installation.message);
-    assert.ok(f.status().details.includes(installation.stack));
+    assert.ok(f.status().details.includes(`Error: ${installation.message}`));
+    const frame = /settings\.test\.mjs:\d+:\d+/.exec(installation.stack)?.[0];
+    assert.ok(frame);
+    assert.ok(f.status().details.includes(frame));
+    assert.ok(!f.status().details.includes(f.engineRoot));
+    assert.ok(!f.status().details.includes(f.engineRoot.replaceAll('\\', '/')));
     assert.ok(f.status().details.includes(installation.code));
     assert.ok(f.status().details.includes(installation.details));
     assert.ok(!f.status().details.includes(cause));
@@ -10599,14 +10605,18 @@ test('startup report helper keeps its own environment secrets through initialize
 test('startup report events survive retry and disk failure with bounded memory and current secrets', async (t) => {
   const calls = [];
   let attempts = 0;
+  const resourcesPath = '/Applications/Synthetic Owner Name/Nod.app/Contents/Resources';
+  const customEngineRoot = join(resourcesPath, 'engine');
   const f = await runningDesktop(t, async () => assert.fail('The failed engine is not needed.'), {
     initialState: 'idle',
     packaged: true,
-    resourcesPath: '/Applications/Synthetic Owner Name/Nod.app/Contents/Resources',
+    resourcesPath,
     allowStart: true,
     prepareRuntime: async () => {
       attempts++;
-      throw new Error(`Synthetic startup attempt ${attempts}`);
+      throw new Error(
+        `Synthetic startup attempt ${attempts} `.padEnd(1980, 'x') + `${customEngineRoot}/startup`,
+      );
     },
     startupFeedbackAction: async (message) => {
       calls.push(message);
@@ -10620,10 +10630,22 @@ test('startup report events survive retry and disk failure with bounded memory a
   await f.prepare({ retry: true }).catch(() => {});
   assert.equal(attempts, 2);
   assert.equal(f.children.length, 0);
+  assert.ok(f.status().error.endsWith('<engine>/startup'));
+  for (const [root, marker] of [
+    [f.engineRoot, '<engine>'],
+    [f.profileRoot, '<profile>'],
+  ]) {
+    for (const variant of new Set([root, root.replaceAll('\\', '/')])) {
+      const clipped = f.bounded('Synthetic failure '.padEnd(1980, 'x') + variant + '/startup');
+      assert.ok(clipped.endsWith(marker + '/startup'));
+      assert.ok(!clipped.includes(variant.slice(0, 20)));
+    }
+  }
   for (let index = 0; index < 105; index++)
     await f.writeDiagnostic(`Synthetic retry event ${index}`);
   f.knownSecrets.add('synthetic-current-runtime-key');
   await f.writeDiagnostic(`Synthetic roots ${f.engineRoot}/startup ${f.profileRoot}/startup`);
+  f.status().details = `Synthetic status failure ${f.engineRoot}/helper ${f.profileRoot}/startup`;
   f.showFeedback();
   for (
     let attempt = 0;
@@ -10644,6 +10666,8 @@ test('startup report events survive retry and disk failure with bounded memory a
   assert.ok(!initial.startupLog.entries.some((entry) => entry.line === 'Synthetic retry event 0'));
   assert.ok(initial.startupLog.entries.some((entry) => entry.line === 'Synthetic retry event 104'));
   assert.ok(initial.secrets.includes('synthetic-current-runtime-key'));
+  assert.ok(initial.secrets.includes(f.engineRoot));
+  assert.ok(initial.secrets.includes(f.profileRoot));
   const roots = initial.startupLog.entries.find((entry) =>
     entry.line.startsWith('Synthetic roots'),
   );
@@ -10652,7 +10676,7 @@ test('startup report events survive retry and disk failure with bounded memory a
   assert.ok(!roots.line.includes(f.engineRoot));
   assert.ok(!roots.line.includes(f.profileRoot));
   const { createStartupFeedback } = await import('../../src/server/startup-feedback.ts');
-  const service = createStartupFeedback({
+  const reportOptions = {
     ...initial,
     names: [],
     delivery: {
@@ -10661,9 +10685,12 @@ test('startup report events survive retry and disk failure with bounded memory a
       submit: () => assert.fail('A review must not send the report.'),
       status: () => assert.fail('An unsent report has no receipt.'),
     },
-  });
+  };
+  const service = createStartupFeedback(reportOptions);
   const exported = await service.review({ feedback: 'Synthetic roots.', includeReport: true });
   assert.ok(!exported.content.includes(f.engineRoot));
+  assert.ok(!exported.content.includes('Synthetic Owner Name'));
+  assert.ok(!JSON.parse(exported.content).startup.error.includes(f.engineRoot.slice(0, 20)));
   assert.ok(!exported.content.includes(f.profileRoot));
   await f.writeDiagnostic('Synthetic oversized event ' + 'x'.repeat(48_000));
   for (let index = 0; index < 3; index++)
@@ -10672,6 +10699,7 @@ test('startup report events survive retry and disk failure with bounded memory a
   await rm(path);
   await mkdir(path);
   await assert.rejects(f.writeDiagnostic('Synthetic event kept after disk failure'));
+  await assert.rejects(f.writeDiagnostic('Synthetic rotated key synthetic-new-runtime-key'));
   f.knownSecrets.add('synthetic-new-runtime-key');
   await action(event, 'review', { feedback: 'Synthetic failure.', includeReport: true });
   const snapshot = calls.findLast((call) => call.action === 'snapshot').input;
@@ -10692,7 +10720,18 @@ test('startup report events survive retry and disk failure with bounded memory a
     ),
   );
   assert.ok(snapshot.secrets.includes('synthetic-new-runtime-key'));
+  assert.ok(snapshot.secrets.includes(f.engineRoot));
+  assert.ok(snapshot.secrets.includes(f.profileRoot));
   assert.ok(snapshot.secrets.includes('synthetic-current-runtime-key'));
+  Object.assign(reportOptions, snapshot);
+  const updated = await service.review({
+    feedback: 'Synthetic updated roots.',
+    includeReport: true,
+  });
+  assert.ok(!updated.content.includes('synthetic-new-runtime-key'));
+  assert.ok(!updated.content.includes(f.engineRoot));
+  assert.ok(!updated.content.includes('Synthetic Owner Name'));
+  assert.ok(!updated.content.includes(f.profileRoot));
 });
 
 test('startup reports do not wait for a stalled disk log write', async (t) => {

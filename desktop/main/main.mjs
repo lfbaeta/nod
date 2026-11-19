@@ -274,7 +274,7 @@ const startupFeedback = createStartupFeedbackClient({
       dataRoot: profileRoot,
       context: await feedbackContext(),
       status,
-      secrets: [...knownSecrets],
+      secrets: [...knownSecrets, engineRoot, profileRoot],
       startupLog: startupLogSnapshot(),
     };
   },
@@ -428,7 +428,13 @@ function bounded(value, limit = 2000) {
   let message = String(value || 'The operation could not be completed.');
   for (const secret of knownSecrets)
     if (secret.length > 7) message = message.replaceAll(secret, '[redacted]');
-  return message.replace(/\bsk-[A-Za-z0-9_-]+/g, '[redacted]').slice(0, limit);
+  return message
+    .replaceAll(profileRoot, '<profile>')
+    .replaceAll(profileRoot.replaceAll('\\', '/'), '<profile>')
+    .replaceAll(engineRoot, '<engine>')
+    .replaceAll(engineRoot.replaceAll('\\', '/'), '<engine>')
+    .replace(/\bsk-[A-Za-z0-9_-]+/g, '[redacted]')
+    .slice(0, limit);
 }
 
 function update(value) {
@@ -726,9 +732,7 @@ function startupLogSnapshot() {
 }
 
 function writeDiagnostic(value) {
-  const raw = bounded(value, Infinity)
-    .replaceAll(profileRoot, '<profile>')
-    .replaceAll(engineRoot, '<engine>');
+  const raw = bounded(value, Infinity);
   const bytes = Buffer.byteLength(raw);
   if (bytes <= 48_000) {
     startupEvents.push({ at: Date.now(), line: raw });
@@ -748,8 +752,6 @@ function writeDiagnostic(value) {
     }
     const home = homedir() || '<home>';
     const line = bounded(value, 256 * 1024)
-      .replaceAll(engineRoot, '<engine>')
-      .replaceAll(profileRoot, '<profile>')
       .replaceAll(home, '<home>')
       .replaceAll(home.replaceAll('\\', '/'), '<home>')
       .replace(/https?:\/\/\S+/g, '<url>')
@@ -3300,7 +3302,7 @@ else {
           if (action === 'review') {
             await startupFeedback.request('snapshot', {
               status,
-              secrets: [...knownSecrets],
+              secrets: [...knownSecrets, engineRoot, profileRoot],
               startupLog: startupLogSnapshot(),
             });
           }
