@@ -268,7 +268,7 @@ export function createTrust(options: {
       ? { run: false }
       : await review(instructions, input, signal).catch((error: unknown) => {
           failed = true;
-          logFailure('trust_check_failed', error);
+          if (!signal?.aborted) logFailure('trust_check_failed', error);
           if (action === 'NOD_workspace_command') throw error;
           return undefined;
         });
