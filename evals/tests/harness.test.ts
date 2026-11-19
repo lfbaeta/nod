@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import Fastify from 'fastify';
 import { Agent as Connections, Dispatcher1Wrapper } from 'undici';
+import { createPiMemoryCurator } from '../../src/providers/pi/memory-curator.ts';
 import { createAgentRuntime } from '../../src/runtime/index.ts';
 import { runProcess } from '../../src/providers/process.ts';
 import { accessCookie, registerLocalAccess } from '../../src/server/access.ts';
@@ -48,7 +49,7 @@ import {
 import tidyDownloads from '../src/scenarios/local-file-tidy-downloads.ts';
 import { createSimulator, judgeCriteria, simulatorFailure, withFallback } from '../src/judge.ts';
 import { createCapture, proactiveBaselineInstructions } from '../src/capture.ts';
-import { createSpend, mergeAttemptCosts } from '../src/spend.ts';
+import { createSpend, estimateAnthropicRequestUsd, mergeAttemptCosts } from '../src/spend.ts';
 import { files } from '../src/whisperbench-attempt.ts';
 import { judge, summarizeWhisper } from '../src/whisperbench.ts';
 import type { WhisperCase, WhisperRun } from '../src/whisperbench-data.ts';
@@ -4104,7 +4105,7 @@ test('eval spend stops on unknown prices and retains discarded retry costs', () 
   unknown.add({ modelCalls: 1, judgeTokens: 0, costUsd: null, judgeCostUsd: null });
   assert.equal(unknown.blocked(10), true);
   assert.equal(unknown.unpriced(), true);
-  assert.equal(unknown.knownCostUsd(), 0);
+  assert.equal(unknown.countedCostUsd(), 0);
   const attempts = [
     {
       costUsd: 0.2,
@@ -4123,7 +4124,7 @@ test('eval spend stops on unknown prices and retains discarded retry costs', () 
   ];
   const priced = createSpend();
   for (const attempt of attempts) priced.add(attempt);
-  assert.equal(priced.knownCostUsd(), 0.53);
+  assert.equal(priced.countedCostUsd(), 0.53);
   assert.equal(priced.blocked(0.53), true);
   assert.deepEqual(mergeAttemptCosts(attempts), {
     costUsd: 0.5,
@@ -4149,6 +4150,144 @@ test('eval spend stops on unknown prices and retains discarded retry costs', () 
       judgeTokens: 1,
     },
   );
+});
+
+test('memory cancellation estimates distinguish dispatch and use the wire request limits', async (t) => {
+  for (const beforeDispatch of [true, false]) {
+    await t.test(beforeDispatch ? 'before transport' : 'after transport', async (t) => {
+      let sent!: () => void;
+      const requestSent = new Promise<void>((resolve) => (sent = resolve));
+      const stop = new AbortController();
+      let sentOutputLimit = 0;
+      let sends = 0;
+      t.mock.method(globalThis, 'fetch', async (_url: RequestInfo | URL, init?: RequestInit) => {
+        sends++;
+        const signal = init?.signal;
+        assert.ok(signal);
+        assert.equal(typeof init.body, 'string');
+        sentOutputLimit = JSON.parse(init.body as string).max_tokens;
+        return new Promise<Response>((_, reject) => {
+          signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+          sent();
+        });
+      });
+      const curator = createPiMemoryCurator({
+        provider: 'anthropic',
+        estimateAnthropicRequestUsd,
+        configured: () => true,
+        resolve: async () => ({
+          provider: 'anthropic',
+          method: 'api_key',
+          effort: 'off',
+          read: async () => ({ type: 'api_key', key: 'fixture-key' }),
+          reserve: async () => {
+            if (beforeDispatch) stop.abort();
+            return async () => {};
+          },
+          definition: {
+            choice: {
+              id: 'fixture-memory-model',
+              name: 'Fixture memory model',
+              efforts: ['off'],
+              images: false,
+              contextWindow: 128_000,
+            },
+            spec: {
+              provider: 'anthropic',
+              api: 'anthropic-messages',
+              id: 'fixture-memory-model',
+              name: 'Fixture memory model',
+              baseUrl: 'https://fixture.invalid',
+              reasoning: false,
+              input: ['text'],
+              contextWindow: 128_000,
+              maxTokens: 4096,
+              cost: {
+                input: 3,
+                output: 12,
+                cacheRead: 0.3,
+                cacheWrite: 6,
+                tiers: [
+                  { inputTokensAbove: 100, input: 10, output: 30, cacheRead: 1, cacheWrite: 20 },
+                ],
+              },
+            },
+          },
+        }),
+      });
+
+      const rows: { cost_usd: number | null; details: object }[] = [];
+      const result = assert.rejects(
+        curator.curate(
+          { task: 'recall', instructions: 'Select synthetic notes.', input: {} },
+          stop.signal,
+          (usage) => rows.push({ cost_usd: usage.costUsd, details: usage }),
+        ),
+      );
+      if (!beforeDispatch) {
+        await Promise.race([
+          requestSent,
+          result.then(() => assert.fail('Recall ended before the request was sent')),
+        ]);
+        stop.abort();
+      }
+      await result;
+
+      const usage = await collectUsage({
+        query: async () => ({ rows }),
+      } as unknown as Stack['pool']);
+      assert.equal(usage.modelCalls, 1);
+      assert.equal(usage.costUsd, null);
+      assert.equal(sends, beforeDispatch ? 0 : 1);
+      if (beforeDispatch) assert.equal(usage.budgetCostUsd, 0);
+      else {
+        assert.ok(sentOutputLimit > 0);
+        assert.ok((usage.budgetCostUsd ?? 0) > (sentOutputLimit * 30) / 1_000_000);
+      }
+      const budget = createSpend();
+      budget.add(usage);
+      assert.equal(budget.blocked(1), false);
+    });
+  }
+});
+
+test('eval budgets count cancelled request estimates and retain unknown spend', async () => {
+  const priced = { cost_usd: 0.125, details: { inputTokens: 20 } };
+  const cancelled = {
+    cost_usd: null,
+    details: { status: 'cancelled', inputTokens: 0, budgetEstimateUsd: 0.25 },
+  };
+  const read = (...rows: { cost_usd: number | null; details: object }[]) =>
+    collectUsage({ query: async () => ({ rows }) } as unknown as Stack['pool']);
+
+  const usage = await read(priced, cancelled);
+  const budget = createSpend();
+  budget.add(usage);
+  assert.equal(budget.blocked(0.5), false);
+  assert.equal(budget.blocked(0.375), true);
+  assert.equal(usage.costUsd, null);
+  assert.equal(usage.modelCalls, 2);
+
+  const meteredRetry = await read({
+    cost_usd: 0.01,
+    details: { ...cancelled.details, inputTokens: 20, budgetEstimateUsd: 0.5 },
+  });
+  assert.equal(meteredRetry.costUsd, null);
+  const resumed = createSpend();
+  resumed.add(mergeAttemptCosts([usage, meteredRetry]));
+  assert.equal(resumed.blocked(0.875), true);
+  assert.equal(resumed.blocked(1), false);
+
+  for (const unknown of [
+    { ...cancelled, details: { ...cancelled.details, status: 'succeeded' } },
+    { cost_usd: 0.01, details: { ...cancelled.details, budgetEstimateUsd: null } },
+    { cost_usd: null, details: { status: 'cancelled', inputTokens: 0 } },
+  ]) {
+    const failClosed = createSpend();
+    failClosed.add(mergeAttemptCosts([await read(unknown), usage]));
+    assert.equal(failClosed.unpriced(), true);
+    assert.equal(failClosed.blocked(10), true);
+  }
 });
 
 test('LongMemEval reports saved failures when the budget prevents a retry', async (t) => {

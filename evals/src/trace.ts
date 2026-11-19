@@ -8,6 +8,7 @@ import type { Visit } from './world/sites.ts';
 import { browserSessionId } from '../../src/providers/agent-browser/index.ts';
 import type { UsageDetails } from '../../src/shared/execution.ts';
 import { redactedInput } from './capture.ts';
+import { validCost } from './spend.ts';
 
 export interface ToolCall {
   id?: string;
@@ -84,7 +85,8 @@ export interface Run {
     tokens: number;
     modelCalls: number;
     costUsd: number | null;
-    requests?: UsageDetails[];
+    budgetCostUsd?: number;
+    requests?: (UsageDetails & { budgetEstimateUsd?: number | null })[];
   };
   compactions?: number;
   firstReplySeconds: number | null;
@@ -259,12 +261,26 @@ export async function collectUsage(pool: Stack['pool']): Promise<Run['usage']> {
       ),
     0,
   );
-  const cost = usage.reduce((total, row) => total + (row.cost_usd ?? 0), 0);
-  const costKnown = usage.length > 0 && usage.every((row) => row.cost_usd !== null);
+  const costs = usage.map(({ cost_usd, details }) => {
+    const estimate = details.status === 'cancelled' ? details.budgetEstimateUsd : undefined;
+    return estimate === undefined
+      ? { recorded: cost_usd, budget: cost_usd }
+      : {
+          recorded: null,
+          budget: validCost(estimate) ? Math.max(estimate, cost_usd ?? 0) : null,
+        };
+  });
+  const totalCost = (prices: (number | null)[]) =>
+    prices.length && prices.every(validCost)
+      ? prices.reduce((total, price) => total + price, 0)
+      : null;
+  const costUsd = totalCost(costs.map((row) => row.recorded));
+  const budgetCostUsd = costUsd === null ? totalCost(costs.map((row) => row.budget)) : null;
   return {
     tokens,
     modelCalls: usage.length,
-    costUsd: costKnown ? cost : null,
+    costUsd,
+    ...(budgetCostUsd !== null ? { budgetCostUsd } : {}),
     requests: usage.map((row) => ({
       ...row.details,
       costUsd: row.cost_usd,
