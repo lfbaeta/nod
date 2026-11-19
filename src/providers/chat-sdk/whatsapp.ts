@@ -14,7 +14,6 @@ import makeWASocket, {
 } from '@whiskeysockets/baileys';
 import { randomUUID } from 'node:crypto';
 import { splitMessage } from '@chat-adapter/whatsapp';
-import { convertEmojiPlaceholders } from 'chat';
 import type { ChannelSession, ChannelSessionStore } from '../../ports/channel-session.ts';
 import { MessagingAttachmentError } from '../../ports/messaging.ts';
 import type {
@@ -26,7 +25,7 @@ import type {
 } from '../../ports/messaging.ts';
 import type { ChannelLinkStatus } from '../../shared/contracts.ts';
 import { contactAttachment, locationAttachment } from './content.ts';
-import { hasLiteralBlock, whatsappText } from './format.ts';
+import { canDeliverWhatsAppLiteral, whatsappText } from './format.ts';
 import { contactCards, sharedLocation } from '../../shared/channel-content.ts';
 
 const silent: SocketConfig['logger'] = {
@@ -667,14 +666,7 @@ export function createWhatsAppLinkedTransport(options: {
   };
   return {
     canDeliverLiteral({ channelId, text, literal }) {
-      const formatted = whatsappText(text);
-      return (
-        channelId === 'whatsapp' &&
-        hasLiteralBlock(text, literal) &&
-        formatted.split('```').length === 3 &&
-        splitMessage(formatted).length === 1 &&
-        convertEmojiPlaceholders(formatted, 'whatsapp') === formatted
-      );
+      return channelId === 'whatsapp' && canDeliverWhatsAppLiteral(text, literal);
     },
     get channels() {
       return [channel];

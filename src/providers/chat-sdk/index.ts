@@ -16,7 +16,12 @@ import { telegramSecret, telegramUserId } from '../../ports/channel-settings.ts'
 import { logRepeatedFailure } from '../../ports/failure-log.ts';
 import { MessagingConnectionError } from '../../ports/messaging.ts';
 import { telegramMessage, telegramPairing, telegramAttachments } from './telegram.ts';
-import { hasLiteralBlock, telegramText, whatsappText } from './format.ts';
+import {
+  canDeliverWhatsAppLiteral,
+  hasLiteralBlock,
+  telegramText,
+  whatsappText,
+} from './format.ts';
 import { contactCards, sharedLocation } from '../../shared/channel-content.ts';
 
 type Environment = Record<string, string | undefined>;
@@ -366,17 +371,11 @@ export function createChatSdkTransport(
   const transport: MessagingTransport = {
     channels,
     canDeliverLiteral({ channelId, text, literal }) {
-      if (!hasLiteralBlock(text, literal)) return false;
       if (channelId === 'telegram' && telegram) {
-        return telegram.canDeliverLiteral(text);
+        return hasLiteralBlock(text, literal) && telegram.canDeliverLiteral(text);
       }
       if (channelId === 'whatsapp' && whatsapp) {
-        const formatted = whatsappText(text);
-        return (
-          formatted.split('```').length === 3 &&
-          whatsapp.chunks(text).length === 1 &&
-          convertEmojiPlaceholders(formatted, 'whatsapp') === formatted
-        );
+        return canDeliverWhatsAppLiteral(text, literal);
       }
       return false;
     },

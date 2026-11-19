@@ -552,6 +552,131 @@ test('person properties use an awaited PostHog update independent of event captu
 });
 
 test(
+  'queued channel schedule requests wait until channel initialization finishes',
+  { skip: !process.env.TEST_DATABASE_URL, timeout: 30_000 },
+  async (t) => {
+    const suffix = randomUUID().replaceAll('-', '').slice(0, 16);
+    const schema = 'test_channel_startup_' + suffix;
+    const bossSchema = 'test_channel_startup_boss_' + suffix;
+    const data = await mkdtemp(join(tmpdir(), 'nod-channel-startup-'));
+    const admin = new pg.Pool({ connectionString: process.env.TEST_DATABASE_URL });
+    t.after(async () => {
+      await admin.query(
+        `DROP SCHEMA IF EXISTS ${bossSchema} CASCADE; DROP SCHEMA IF EXISTS ${schema} CASCADE`,
+      );
+      await admin.end();
+      await rm(data, { recursive: true, force: true });
+    });
+    await admin.query('CREATE SCHEMA ' + schema);
+    const result = await runProcess(process.execPath, ['--import', 'tsx', '--input-type=module'], {
+      timeoutMs: 25_000,
+      env: {
+        ...serviceEnvironment(),
+        DOTENV_CONFIG_PATH: '/dev/null',
+        TEST_DATABASE_URL: process.env.TEST_DATABASE_URL,
+        NOD_TEST_STARTUP_SCHEMA: schema,
+        NOD_TEST_STARTUP_BOSS: bossSchema,
+        NOD_TEST_STARTUP_ROOT: data,
+      },
+      input: String.raw`
+        import assert from 'node:assert/strict';
+        import { randomUUID } from 'node:crypto';
+        import { setTimeout as delay } from 'node:timers/promises';
+        const repo = process.cwd();
+        const schema = process.env.NOD_TEST_STARTUP_SCHEMA;
+        const bossSchema = process.env.NOD_TEST_STARTUP_BOSS;
+        const url = new URL(process.env.TEST_DATABASE_URL);
+        url.searchParams.set('options', '-c search_path=' + schema);
+        process.env.DATABASE_URL = url.href;
+        process.env.PGBOSS_SCHEMA = bossSchema;
+        const data = process.env.NOD_TEST_STARTUP_ROOT;
+        process.env.NOD_DATA_ROOT = data;
+        globalThis.fetch = async () => { throw new Error('This check must not call an outside service.'); };
+        const { createApplication } = await import(repo + '/src/server/composition.ts');
+        const { pool, initializeDatabase } = await import(repo + '/src/server/db.ts');
+        const { ownerId } = await import(repo + '/src/server/config.ts');
+        const thread = await import(repo + '/src/server/thread.ts');
+        const { fakeComputer, fakeWorkspace } = await import(repo + '/tests/runtime-fixtures.ts');
+        const { createIntegrationFixture } = await import(repo + '/scripts/e2e-fixtures.ts');
+        const { createChatSdkTransport } = await import(repo + '/src/providers/chat-sdk/index.ts');
+        const { createChatSdkSetupVerifier } = await import(repo + '/src/providers/chat-sdk/settings.ts');
+        await initializeDatabase();
+        await thread.initializeThreads();
+        const submitted = await thread.submitUserMessage('Create the synthetic queued channel schedule.', [], { channel: 'telegram:synthetic-startup', clientMessageId: randomUUID() });
+        const prompt = 'Review inbox@example.test. Never send email.';
+        let calls = 0;
+        let release;
+        let entered;
+        const held = new Promise(resolve => { release = resolve; });
+        const initializing = new Promise(resolve => { entered = resolve; });
+        const query = pool.query.bind(pool);
+        pool.query = async (...args) => {
+          if (typeof args[0] === 'string' && args[0].startsWith('CREATE TABLE IF NOT EXISTS channel_settings(')) {
+            await query('INSERT INTO account_settings(owner_id,onboarding_completed,usage_data,traces) VALUES($1,true,false,false) ON CONFLICT(owner_id) DO UPDATE SET onboarding_completed=true', [ownerId]);
+            entered();
+            await held;
+          }
+          return query(...args);
+        };
+        const curator = {
+          id: 'fixture', configured: true,
+          curate: async ({ input }) => input.purpose === 'confirmation'
+            ? { text: 'Create this schedule?', action: 'Create schedule' }
+            : input.purpose === 'confirmation_review' ? { valid: true } : { run: false },
+        };
+        const transport = createChatSdkTransport(pool, { TELEGRAM_ENABLED: 'true', TELEGRAM_BOT_TOKEN: '987:fixture-not-live', TELEGRAM_ALLOWED_USER_ID: '123456', TELEGRAM_WEBHOOK_SECRET_TOKEN: 'fixture-webhook-secret-32-characters' });
+        let application;
+        const opening = createApplication({
+          agent: { open: async (options) => ({ resumed: false, abort() {}, dispose() {}, prompt: async () => {
+            calls++;
+            const tool = options.tools.find(tool => tool.name === 'manage_personal_context');
+            assert.ok(tool);
+            await tool.execute({ action: 'schedule_create', args: { title: 'Synthetic startup review', prompt, kind: 'recurring', cron: '0 15 * * *', timeZone: 'UTC' } });
+            options.onEvent({ type: 'final', text: '' });
+          } }), dispose() {} },
+          computer: fakeComputer(), workspace: fakeWorkspace(),
+          integrations: createIntegrationFixture('http://localhost:4320').provider,
+          memoryCurator: { id: 'fixture', configured: false, curate: async () => undefined },
+          onboardingCurator: curator, trustCurator: curator, trustModel: 'llm',
+          speech: { id: 'fixture', configured: false, synthesize: async () => { throw new Error('Synthetic speech is unused.'); } },
+          keyStore: { id: 'fixture', configured: true, getKey: async () => Buffer.alloc(32, 7) },
+          model: { provider: 'fixture', name: 'fixture', configured: true },
+          messagingSetup: { verifier: createChatSdkSetupVerifier(), create: () => transport },
+        }, { heartbeat: false });
+        try {
+          await initializing;
+          await delay(1200);
+          assert.equal(calls, 0, 'A queued owner turn ran before channels were ready.');
+          assert.equal((await query('SELECT status FROM turns WHERE id=$1', [submitted.turnId])).rows[0].status, 'queued');
+          release();
+          application = await opening;
+          let card;
+          for (let attempt = 0; attempt < 250; attempt++) {
+            card = (await query('SELECT a.status,m.text FROM approvals a JOIN messages m ON m.id=a.confirmation_message_id WHERE a.turn_id=$1', [submitted.turnId])).rows[0];
+            if (card) break;
+            const turn = (await query('SELECT status,error FROM turns WHERE id=$1', [submitted.turnId])).rows[0];
+            assert.notEqual(turn.status, 'failed', turn.error);
+            await delay(20);
+          }
+          assert.ok(card, 'The queued request did not produce its complete approval after startup.');
+          assert.equal(card.status, 'pending');
+          assert.ok(card.text.includes(prompt));
+          assert.ok(card.text.includes('Synthetic startup review'));
+          assert.equal(calls, 1);
+          assert.equal((await query('SELECT count(*)::int AS count FROM schedules')).rows[0].count, 0);
+        } finally {
+          release();
+          application ??= await opening;
+          await application.app.close();
+          await pool.end();
+        }
+      `,
+    });
+    assert.equal(result.exitCode, 0, result.stdout + result.stderr);
+  },
+);
+
+test(
   'saved voice changes reach the next explicit and automatic audio delivery',
   { skip: !process.env.TEST_DATABASE_URL, timeout: 30_000 },
   async () => {

@@ -152,6 +152,8 @@ function scheduleConfirmation(data: unknown) {
     typeof definition.enabled !== 'boolean'
   )
     throw new Error('The schedule confirmation has no complete checked instruction.');
+  if (/[\r\n\u2028\u2029]/u.test(definition.title))
+    throw new Error('The schedule name has a line break, so Nod cannot show its confirmation.');
   let timing: string;
   if (definition.kind === 'recurring' && typeof definition.cron === 'string') {
     const label = scheduleLabel(definition.cron);
@@ -168,7 +170,7 @@ function scheduleConfirmation(data: unknown) {
     `Schedule: ${definition.title}`,
     `Timing: ${timing}`,
     `Time zone: ${definition.timeZone}`,
-    `Status: ${definition.enabled ? 'Enabled' : 'Paused'}`,
+    `Enabled: ${definition.enabled ? 'Yes' : 'No'}`,
   ].join('\n');
   const instruction = confirmationText(definition.prompt);
   const fence = '`'.repeat(

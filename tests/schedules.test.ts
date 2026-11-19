@@ -697,6 +697,11 @@ test(
             assert.equal(job.startAfter.toISOString(), expected);
             await deliver([job]);
             assert.equal((await runs(schedule.id))[0].scheduledFor, expected);
+            if (frequency === 'monthly')
+              assert.equal(
+                (await personal.getSchedule(schedule.id)).nextRun,
+                '2035-12-31T10:30:00.000Z',
+              );
             await request('DELETE', `/api/schedules/${schedule.id}`);
           }
           const customCron = '15 8 1,15 * 1-5';

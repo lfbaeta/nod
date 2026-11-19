@@ -2160,6 +2160,7 @@ async function initializeApplication(
     wake = adapters.model.configured,
     replyChannel?: string,
   ) => reactToAssistantMessage(messageId, reaction, wake, userMessages, replyChannel);
+  let startThreadConsumers: (() => Promise<void>) | undefined;
   if (options.workers !== false) {
     if (options.heartbeat !== false) await triage.initializeHeartbeat();
     await initializeMemoryLearning({
@@ -2167,7 +2168,7 @@ async function initializeApplication(
       consumers,
       run: () => analytics.withSystemWork(ownerId, 'memory_learning', learning.run),
     });
-    await startThreadWorkers({
+    startThreadConsumers = startThreadWorkers.bind(undefined, {
       present: communication.present,
       taskChecks: tasks.resumeDue,
       analytics: captureAnalytics,
@@ -3257,6 +3258,7 @@ async function initializeApplication(
       void observeChannels();
     }
   }
+  await startThreadConsumers?.();
   await onboardingSuggestions.initialize();
   if (adapters.model.configured)
     void admission.run(integrations.resumeWritingStyle)?.catch(() => {});

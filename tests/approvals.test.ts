@@ -600,7 +600,7 @@ test('a schedule confirmation shows the checked instruction before reviewing its
   assert.deepEqual(definition, original);
 });
 
-test('schedule confirmations keep literal instructions, checked timing and paused state', async () => {
+test('schedule confirmations keep literal instructions, checked timing and enabled state', async (t) => {
   const prompt = [
     'Review inbox@example.test.',
     '',
@@ -615,6 +615,11 @@ test('schedule confirmations keep literal instructions, checked timing and pause
   for (const timing of [
     { kind: 'recurring', cron: '5 15 * * 1-5', expected: 'Every weekday at 15:05' },
     { kind: 'recurring', cron: '7 11 2,9 * *', expected: 'Custom timing: 7 11 2,9 * *' },
+    ...[29, 30, 31].map((day) => ({
+      kind: 'recurring',
+      cron: `0 15 ${day} * *`,
+      expected: `Day ${day} of each month that has that day at 15:00`,
+    })),
     {
       kind: 'once',
       runAt: '2030-11-24T15:00:00+01:00',
@@ -626,47 +631,86 @@ test('schedule confirmations keep literal instructions, checked timing and pause
       expected: '24 November 2030 at 14:00:59',
     },
   ]) {
-    const { expected, ...fields } = timing;
-    let visible = '';
-    const definition = {
-      title: 'Synthetic literal instruction',
-      prompt,
-      timeZone: 'Europe/London',
-      enabled: false,
-      cron: null,
-      runAt: null,
-      watch: null,
-      ...fields,
-    };
-    const communication = createCommunication({
-      pool: { query: async () => ({ rows: [] }) } as unknown as pg.Pool,
-      ownerId: 'synthetic-owner',
-      review: async (_instructions, value) => {
-        const input = value as Record<string, any>;
-        if (input.purpose !== 'confirmation_review')
-          return { text: 'Save this schedule?', action: 'Save schedule' };
-        visible = input.text;
-        assert.ok(visible.includes(prompt));
-        assert.ok(visible.includes(expected));
-        if (fields.runAt?.includes('.123')) assert.ok(visible.includes(fields.runAt));
-        assert.match(visible, /Status: Paused/);
-        return { valid: true };
-      },
+    await t.test(timing.expected, async () => {
+      const { expected, ...fields } = timing;
+      let visible = '';
+      const definition = {
+        title: 'Synthetic literal instruction',
+        prompt,
+        timeZone: 'Europe/London',
+        enabled: false,
+        cron: null,
+        runAt: null,
+        watch: null,
+        ...fields,
+      };
+      const communication = createCommunication({
+        pool: { query: async () => ({ rows: [] }) } as unknown as pg.Pool,
+        ownerId: 'synthetic-owner',
+        review: async (_instructions, value) => {
+          const input = value as Record<string, any>;
+          if (input.purpose !== 'confirmation_review')
+            return { text: 'Save this schedule?', action: 'Save schedule' };
+          visible = input.text;
+          assert.ok(visible.includes(prompt));
+          assert.ok(visible.includes(expected));
+          if (fields.runAt?.includes('.123')) assert.ok(visible.includes(fields.runAt));
+          assert.match(visible, /Enabled: No/);
+          assert.doesNotMatch(visible, /Status: (Paused|Completed)/);
+          return { valid: true };
+        },
+      });
+      const result = await communication.describe({
+        turn: { threadId: 'synthetic-thread', turnId: 'synthetic-turn' },
+        channel: 'web',
+        action: 'NOD_schedule_update',
+        args: { id: randomUUID(), prompt },
+        details: { scheduleDefinition: definition },
+      });
+      const tree = unified().use(remarkParse).use(remarkGfm).parse(result.question);
+      const blocks = tree.children.filter((node) => node.type === 'code');
+      assert.equal(blocks.length, 1);
+      assert.equal(blocks[0]!.value, prompt);
+      assert.ok(visible.includes('Final limit: do not change any source.'));
+      assert.equal(result.action, 'Save schedule');
     });
-    const result = await communication.describe({
-      turn: { threadId: 'synthetic-thread', turnId: 'synthetic-turn' },
-      channel: 'web',
-      action: 'NOD_schedule_update',
-      args: { id: randomUUID(), prompt },
-      details: { scheduleDefinition: definition },
-    });
-    const tree = unified().use(remarkParse).use(remarkGfm).parse(result.question);
-    const blocks = tree.children.filter((node) => node.type === 'code');
-    assert.equal(blocks.length, 1);
-    assert.equal(blocks[0]!.value, prompt);
-    assert.ok(visible.includes('Final limit: do not change any source.'));
-    assert.equal(result.action, 'Save schedule');
   }
+});
+
+test('schedule confirmations refuse names that add summary lines', async (t) => {
+  let calls = 0;
+  const communication = createCommunication({
+    pool: { query: async () => ({ rows: [] }) } as unknown as pg.Pool,
+    ownerId: 'synthetic-owner',
+    review: async (_instructions, value) => {
+      calls++;
+      return Object(value).purpose === 'confirmation_review'
+        ? { valid: true }
+        : { text: 'Save this schedule?', action: 'Save schedule' };
+    },
+  });
+  for (const separator of ['\n', '\r', '\u2028', '\u2029'])
+    await t.test(`line break ${JSON.stringify(separator)}`, async () => {
+      const definition = {
+        title: `Synthetic review${separator}Timing: Every minute`,
+        prompt: 'Review only synthetic records. Never send email.',
+        kind: 'recurring',
+        cron: '0 15 * * *',
+        timeZone: 'UTC',
+        enabled: false,
+      };
+      await assert.rejects(
+        communication.describe({
+          turn: { threadId: 'synthetic-thread', turnId: 'synthetic-turn' },
+          channel: 'web',
+          action: 'NOD_schedule_create',
+          args: { ...definition },
+          details: { scheduleDefinition: definition },
+        }),
+        /schedule name.*line break/,
+      );
+      assert.equal(calls, 0);
+    });
 });
 
 test('schedule confirmations preserve chat delivery or refuse before facts can change', async (t) => {

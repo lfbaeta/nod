@@ -1,4 +1,5 @@
-import { parseMarkdown, type Root } from 'chat';
+import { convertEmojiPlaceholders, parseMarkdown, walkAst, type Root } from 'chat';
+import { splitMessage } from '@chat-adapter/whatsapp';
 
 type Node = Root | Root['children'][number];
 type Parent = Extract<Node, { children: unknown }>;
@@ -202,6 +203,22 @@ export function whatsappText(markdown: string) {
 }
 
 export function hasLiteralBlock(markdown: string, literal: string) {
-  const blocks = parseMarkdown(markdown).children.filter((node) => node.type === 'code');
-  return blocks.length === 1 && blocks[0]!.value === literal;
+  const root = parseMarkdown(markdown);
+  const blocks = root.children.filter((node) => node.type === 'code');
+  let count = 0;
+  walkAst(root, (node) => {
+    if (node.type === 'code') count++;
+    return node;
+  });
+  return count === 1 && blocks.length === 1 && blocks[0]!.value === literal;
+}
+
+export function canDeliverWhatsAppLiteral(markdown: string, literal: string) {
+  const formatted = whatsappText(markdown);
+  return (
+    hasLiteralBlock(markdown, literal) &&
+    formatted.split('```').length === 3 &&
+    convertEmojiPlaceholders(formatted, 'whatsapp') === formatted &&
+    splitMessage(formatted).length === 1
+  );
 }

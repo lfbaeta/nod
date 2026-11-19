@@ -758,6 +758,18 @@ test('channel transports check literal instructions against their actual formatt
       }
     });
   }
+  const block = `\`\`\`\n${literal}\n\`\`\``;
+  for (const text of [
+    `${block}\n\n> \`\`\`\n> Extra instruction\n> \`\`\``,
+    `${block}\n\n- Nested instruction:\n\n  \`\`\`\n  Extra instruction\n  \`\`\``,
+    `> \`\`\`\n> ${literal}\n> \`\`\``,
+  ]) {
+    await t.test('the sole literal block must be at the root with no nested extra block', () => {
+      for (const channelId of ['telegram', 'whatsapp'])
+        assert.equal(sdk.canDeliverLiteral!({ channelId, text, literal }), false);
+      assert.equal(linked.canDeliverLiteral!({ channelId: 'whatsapp', text, literal }), false);
+    });
+  }
 });
 
 test(

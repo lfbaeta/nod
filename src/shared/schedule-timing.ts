@@ -54,7 +54,7 @@ export function scheduleLabel(
           : value.frequency === 'weekends'
             ? 'Every Saturday and Sunday'
             : value.frequency === 'monthly'
-              ? `Day ${value.day} of every month`
+              ? `Day ${value.day} of ${Number(value.day) > 28 ? 'each month that has that day' : 'every month'}`
               : `Every ${scheduleWeekDays[Number(value.day)]}`;
     return `${frequency} at ${formatClock(value.time)}`;
   }
