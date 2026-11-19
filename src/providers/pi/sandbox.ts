@@ -370,7 +370,7 @@ export function createSandbox(workspace: WorkspaceSession, timeZone?: string) {
     ...definition,
     ...(definition.name === 'bash'
       ? {
-          description: `${definition.description}\nSupported simple commands automatically use RTK for compact output. Prefer bash with rtk ls, rtk read and rtk grep for exploration; use native read for exact edit context. Use rtk test or rtk err around scripts to compact their output, and rtk proxy for unfiltered output. Shell data flows and explicit machine-output formats stay raw.`,
+          description: `${definition.description}\nSupported simple commands automatically use RTK for compact output. Prefer bash with rtk ls, rtk read and rtk grep for exploration; use native read for exact edit context. Use rtk test or rtk err around scripts to compact their output, and rtk proxy for unfiltered output. Shell data flows and explicit machine-output formats stay raw.\nTrust sees the command text, folder and time limit. It does not read named script files. If a Trust refusal confirms that a filename-only command did not run, inspect the full program. Put that program text in a new checked command, such as a quoted here-document. Use the text itself, without command substitution, and keep the same inputs, outputs and effects. All permission checks still apply.`,
         }
       : {}),
     execute: async (id, params, signal, onUpdate, context) => {
