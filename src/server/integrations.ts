@@ -470,7 +470,9 @@ export async function createIntegrations(pool: Pool, options: IntegrationOptions
           latest.watch_revision !== row.watch_revision ||
           latest.account_id !== row.account_id
         )
-          throw new IntegrationError('This connected account is unavailable.', 404);
+          throw Object.assign(new IntegrationError('This connected account is unavailable.', 404), {
+            notRun: true,
+          });
       }
       return await operation(session);
     } finally {
@@ -1618,6 +1620,7 @@ export async function createIntegrations(pool: Pool, options: IntegrationOptions
     turn?: TurnRef,
     signal?: AbortSignal,
     expectedBinding?: string,
+    beforeDispatch?: () => Promise<void>,
   ) {
     if (isLocalFilesAction(action)) {
       assertOwner(ownerId);
@@ -1670,6 +1673,7 @@ export async function createIntegrations(pool: Pool, options: IntegrationOptions
               throw Object.assign(new IntegrationError('The selected account changed.', 409), {
                 notRun: true,
               });
+            if (beforeDispatch) await beforeDispatch();
             signal?.throwIfAborted();
             return session.execute(action, providerArgs, row.account_id!, signal);
           });

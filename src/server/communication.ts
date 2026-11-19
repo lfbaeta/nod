@@ -321,6 +321,8 @@ export function createCommunication(options: {
     }
     delete details.verifiedBinding;
     delete details.verifiedDraftMessageId;
+    delete details.verifiedCalendarRevision;
+    delete details.verifiedInstructionRevision;
     delete details.reason;
     const permanentDeletion =
       proposal.action === 'GMAIL_DELETE_DRAFT' || proposal.action === 'GMAIL_DELETE_MESSAGE';

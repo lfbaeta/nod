@@ -143,7 +143,11 @@ import { lockProactivity } from './locks.ts';
 import { createObservationSources } from './observation-sources.ts';
 import { createTaskObservations } from './task-observations.ts';
 import type { TrustBasis } from './trust-basis.ts';
-import { validateScheduledInstructions } from './owner-instructions.ts';
+import {
+  validateInstructionRevision,
+  validateScheduledInstructions,
+  type InstructionRevision,
+} from './owner-instructions.ts';
 import { localArtifacts } from './artifacts.ts';
 import { memoryFileName, memoryMarkdown } from '../shared/memory-export.ts';
 import { createChannels } from './channels.ts';
@@ -162,7 +166,12 @@ import { createDocumentation } from './documentation.ts';
 import { initializeDatabase, pool } from './db.ts';
 import { events, refresh } from './events.ts';
 import { createIntegrations } from './integrations.ts';
-import { gmailDraftTarget, gmailMessageTarget } from './action-presentation.ts';
+import {
+  calendarEventTarget,
+  gmailDraftTarget,
+  gmailMessageTarget,
+  isCalendarEventChange,
+} from './action-presentation.ts';
 import {
   createErrorRedactor,
   createCommandRedactor,
@@ -853,8 +862,17 @@ async function initializeApplication(
       typeof status === 'number' && Number.isInteger(status) && status >= 400 && status <= 599
         ? `HTTP ${status}: `
         : '';
+    const upstream = (error as { upstreamStatus?: unknown } | null)?.upstreamStatus;
+    const upstreamCode =
+      typeof upstream === 'number' &&
+      Number.isInteger(upstream) &&
+      upstream >= 400 &&
+      upstream <= 599 &&
+      upstream !== status
+        ? `upstream HTTP ${upstream}: `
+        : '';
     const message = error instanceof Error ? error.message : String(error);
-    return `${code}${publicText(redactIntegrationFailure(message)).slice(0, 600)}`;
+    return `${code}${upstreamCode}${publicText(redactIntegrationFailure(message)).slice(0, 600)}`;
   };
   adapters.models?.onSecrets((values) => {
     for (const value of values) if (!secrets.includes(value)) secrets.push(value);
@@ -1696,6 +1714,100 @@ async function initializeApplication(
                           }
                         }
                         const turn = { threadId: provenance.threadId, turnId: provenance.turnId };
+                        let validateCalendar: (() => Promise<void>) | undefined;
+                        if (isCalendarEventChange(action)) {
+                          const saved = provenance.details?.target;
+                          const revision = provenance.details?.verifiedCalendarRevision;
+                          const instruction = z
+                            .object({
+                              rules: z.string(),
+                              chat: z
+                                .object({ threadId: z.uuid(), id: z.uuid() })
+                                .strict()
+                                .optional(),
+                              task: z
+                                .object({ id: z.uuid(), revision: z.number().int().nonnegative() })
+                                .strict()
+                                .optional(),
+                            })
+                            .strict()
+                            .safeParse(provenance.details?.verifiedInstructionRevision);
+                          if (
+                            !verifiedBinding ||
+                            typeof revision !== 'string' ||
+                            !/^[a-f0-9]{64}$/.test(revision) ||
+                            !instruction.success ||
+                            !saved ||
+                            typeof saved !== 'object' ||
+                            Array.isArray(saved) ||
+                            (saved as Record<string, unknown>).eventId !== args.event_id
+                          )
+                            throw Object.assign(
+                              new Error(
+                                'This Calendar confirmation has no verified event. Ask again before changing it.',
+                              ),
+                              { notRun: true },
+                            );
+                          try {
+                            validateCalendar = () =>
+                              transaction(
+                                async (client) => {
+                                  if ((await lockThread(client)).id !== provenance.threadId)
+                                    throw Object.assign(
+                                      new Error('This Calendar conversation is no longer active.'),
+                                      { notRun: true },
+                                    );
+                                  await withTurnLock(
+                                    turnLock,
+                                    async () => {
+                                      await validateInstructionRevision(
+                                        client,
+                                        ownerId,
+                                        instruction.data,
+                                      );
+                                      if (
+                                        (await integrations.binding(
+                                          String(args.connectionId),
+                                          client,
+                                        )) !== verifiedBinding
+                                      )
+                                        throw Object.assign(
+                                          new Error(
+                                            'The selected Calendar account changed after confirmation.',
+                                          ),
+                                          { notRun: true },
+                                        );
+                                    },
+                                    client,
+                                  );
+                                },
+                                pool,
+                                provenance.signal,
+                              );
+                            await validateCalendar();
+                            const current = await readCalendarTarget(
+                              turn,
+                              args,
+                              verifiedBinding,
+                              provenance.signal,
+                              'read',
+                            );
+                            if (
+                              current.revision !== revision ||
+                              !isDeepStrictEqual(current.target, saved)
+                            )
+                              throw new Error(
+                                'The Calendar event changed after confirmation. Ask again before changing it.',
+                              );
+                            await validateCalendar();
+                          } catch (error) {
+                            provenance.signal?.throwIfAborted();
+                            throw Object.assign(
+                              error instanceof Error ? error : new Error(String(error)),
+                              { notRun: true },
+                            );
+                          }
+                        }
                         const ready = hasWorkspaceFiles(args)
                           ? await integrations
                               .prepare(ownerId, action, args, turn, provenance.signal)
@@ -1715,9 +1827,11 @@ async function initializeApplication(
                           action === 'GMAIL_DELETE_MESSAGE' ||
                             action === 'GMAIL_DELETE_DRAFT' ||
                             action === 'CONNECTED_MCP_CALL' ||
-                            action === 'CONNECTED_HTTP'
+                            action === 'CONNECTED_HTTP' ||
+                            isCalendarEventChange(action)
                             ? verifiedBinding
                             : undefined,
+                          validateCalendar,
                         );
                         await ledger.action(
                           provenance.turnId,
@@ -2037,6 +2151,65 @@ async function initializeApplication(
       ? { decisions: ledger.decisions(adapters.trustDecisions) }
       : {}),
   });
+  async function readCalendarTarget(
+    turn: TurnRef,
+    args: Record<string, unknown>,
+    binding: string,
+    signal: AbortSignal | undefined,
+    work: 'read' | 'background',
+  ) {
+    const eventId = args.event_id;
+    const calendarId = args.calendar_id ?? 'primary';
+    if (
+      typeof eventId !== 'string' ||
+      !eventId.trim() ||
+      typeof calendarId !== 'string' ||
+      !calendarId.trim()
+    )
+      throw new Error('Nod cannot identify the Calendar event proposed for change.');
+    const readAction = 'GOOGLECALENDAR_EVENTS_GET';
+    const readArgs = {
+      connectionId: args.connectionId,
+      calendar_id: calendarId,
+      event_id: eventId,
+      max_attendees: 1,
+    };
+    await integrations.assertOffered(ownerId, readAction, signal);
+    const verdict = await trust.check(turn, readAction, readArgs, signal);
+    if (verdict.confirm)
+      throw new Error(
+        verdict.reason === 'rule'
+          ? 'Your rules require confirmation before reading this Calendar event, so Nod did not identify it or propose a change.'
+          : 'Nod could not authorize the Calendar read needed to identify this event, so it did not propose a change.',
+      );
+    let observed: unknown;
+    try {
+      observed = await integrations.execute(
+        ownerId,
+        readAction,
+        readArgs,
+        turn,
+        signal,
+        binding,
+        work,
+      );
+    } catch (error) {
+      signal?.throwIfAborted();
+      throw new Error(
+        `The Calendar event read failed: ${safeIntegrationFailure(error)} Nod did not change the event.`,
+      );
+    }
+    if ((await integrations.binding(String(args.connectionId ?? ''))) !== binding)
+      throw new Error('The selected Calendar account changed while Nod read the event.');
+    const target = calendarEventTarget(observed, eventId);
+    if (!target)
+      throw new Error(
+        'Nod cannot verify the Calendar event and its dates, so it did not propose or make a change.',
+      );
+    await ledger.action(turn.turnId, readAction, verdict.basis);
+    signal?.throwIfAborted();
+    return target;
+  }
   const observations = createObservationSources(
     [
       createConnectionSources({
@@ -2824,7 +2997,9 @@ async function initializeApplication(
         const verdict = await trust.check(turn, action, resolved ?? args, options.signal);
         const prepared = resolved ?? (await prepare());
         let connected = http;
-        let deleteBinding: string | undefined;
+        let targetBinding: string | undefined;
+        let verifiedCalendarRevision: string | undefined;
+        let verifiedInstructionRevision: InstructionRevision | undefined;
         const prepareConfirmation = async () => {
           connected ??=
             action === 'CONNECTED_MCP_CALL'
@@ -2839,6 +3014,7 @@ async function initializeApplication(
           const path = account?.accessPaths?.find((item) => item.id === prepared.pathId);
           let target:
             | ReturnType<typeof gmailMessageTarget>
+            | NonNullable<ReturnType<typeof calendarEventTarget>>['target']
             | {
                 draftId: string;
                 subject?: string;
@@ -2855,12 +3031,12 @@ async function initializeApplication(
             const connectionId = prepared.connectionId;
             if (typeof itemId !== 'string' || !itemId.trim() || typeof connectionId !== 'string')
               throw new Error(`Nod cannot identify the Gmail ${item} proposed for deletion.`);
-            deleteBinding = await integrations.binding(connectionId);
-            if (!deleteBinding)
+            targetBinding = await integrations.binding(connectionId);
+            if (!targetBinding)
               throw new Error('The selected Gmail account is no longer available for deletion.');
             let boundAccountId: unknown;
             try {
-              boundAccountId = JSON.parse(deleteBinding)[0];
+              boundAccountId = JSON.parse(targetBinding)[0];
             } catch {}
             if (!account?.accountId || account.accountId !== boundAccountId)
               throw new Error('The selected Gmail account changed before deletion was proposed.');
@@ -2890,7 +3066,7 @@ async function initializeApplication(
                 metadataArgs,
                 turn,
                 options.signal,
-                deleteBinding,
+                targetBinding,
                 readWork,
               );
             } catch (error) {
@@ -2913,6 +3089,30 @@ async function initializeApplication(
                 `Nod cannot verify which Gmail ${item} this would delete, so it did not ask for approval or delete it.`,
               );
           }
+          if (isCalendarEventChange(action)) {
+            const connectionId = prepared.connectionId;
+            if (typeof connectionId !== 'string')
+              throw new Error('Nod cannot identify the Calendar account proposed for change.');
+            targetBinding = await integrations.binding(connectionId);
+            let boundAccountId: unknown;
+            try {
+              boundAccountId = targetBinding && JSON.parse(targetBinding)[0];
+            } catch {}
+            if (!targetBinding || !account?.accountId || account.accountId !== boundAccountId)
+              throw new Error(
+                'The selected Calendar account changed before the change was proposed.',
+              );
+            const current = await readCalendarTarget(
+              turn,
+              prepared,
+              targetBinding,
+              options.signal,
+              readWork,
+            );
+            target = current.target;
+            verifiedCalendarRevision = current.revision;
+            verifiedInstructionRevision = verdict.instructionRevision;
+          }
           return {
             ...(verdict.confirm ? { reason: verdict.reason } : {}),
             ...(account
@@ -2926,7 +3126,9 @@ async function initializeApplication(
               : {}),
             ...(connected ?? {}),
             ...(target ? { target } : {}),
-            ...(deleteBinding ? { verifiedBinding: deleteBinding } : {}),
+            ...(targetBinding ? { verifiedBinding: targetBinding } : {}),
+            ...(verifiedCalendarRevision ? { verifiedCalendarRevision } : {}),
+            ...(verifiedInstructionRevision ? { verifiedInstructionRevision } : {}),
             ...(verifiedDraftMessageId ? { verifiedDraftMessageId } : {}),
           };
         };
@@ -2937,6 +3139,8 @@ async function initializeApplication(
             verdict.confirm || verdict.basis.kind !== 'read' ? verdict.chatRevision : undefined,
           signal: options.signal,
           validate: async (client) => {
+            if (verifiedInstructionRevision)
+              await validateInstructionRevision(client, ownerId, verifiedInstructionRevision);
             if (
               connected &&
               (await discovered.binding(String(prepared.connectionId), client)) !==
@@ -2956,7 +3160,7 @@ async function initializeApplication(
               prepared,
               turn,
               options.signal,
-              connected?.verifiedBinding ?? deleteBinding,
+              connected?.verifiedBinding ?? targetBinding,
               !verdict.confirm && verdict.basis.kind === 'read' ? readWork : 'action',
             );
             await ledger.action(

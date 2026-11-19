@@ -44,6 +44,7 @@ import { createErrorRedactor } from '../src/server/redaction.ts';
 import {
   approvalContent,
   approvalTitle,
+  calendarEventTarget,
   gmailDraftTarget,
   gmailMessageTarget,
 } from '../src/server/action-presentation.ts';
@@ -988,6 +989,81 @@ test('payment presentation repairs a missing action label', async () => {
   assert.equal(calls, 2);
 });
 
+test('Calendar local times use the event zones instead of the host zone', () => {
+  const event = {
+    id: 'synthetic-event',
+    summary: 'Synthetic travel plan',
+    start: { dateTime: '2030-11-24T10:00:00', timeZone: 'Europe/Paris' },
+    end: { dateTime: '2030-11-24T05:00:00', timeZone: 'America/New_York' },
+    recurringEventId: 'synthetic-series',
+    originalStartTime: { dateTime: '2030-11-24T11:00:00', timeZone: 'Europe/Helsinki' },
+  };
+  const target = calendarEventTarget({ data: event }, event.id)?.target;
+  assert.ok(target);
+  assert.equal(Date.parse(target.startsAt), Date.parse('2030-11-24T09:00:00Z'));
+  assert.equal(Date.parse(target.endsAt), Date.parse('2030-11-24T10:00:00Z'));
+  assert.equal(Date.parse(target.originalStartsAt!), Date.parse('2030-11-24T09:00:00Z'));
+  assert.equal(target.timeZone, 'Europe/Paris');
+  assert.equal(target.endTimeZone, 'America/New_York');
+  assert.equal(target.originalTimeZone, 'Europe/Helsinki');
+  assert.equal(target.scope, 'occurrence');
+  assert.equal(
+    calendarEventTarget(
+      { data: { ...event, end: { ...event.end, dateTime: '2030-11-24T03:00:00' } } },
+      event.id,
+    ),
+    undefined,
+  );
+});
+
+test('Calendar local times refuse missing zones, clock gaps and repeated clock times', () => {
+  for (const start of [
+    { dateTime: '2030-11-24T10:00:00' },
+    { dateTime: '2030-03-31T02:30:00', timeZone: 'Europe/Paris' },
+    { dateTime: '2030-10-27T02:30:00', timeZone: 'Europe/Paris' },
+  ]) {
+    assert.equal(
+      calendarEventTarget(
+        { id: 'synthetic-event', start, end: { dateTime: '2030-11-25T10:00:00Z' } },
+        'synthetic-event',
+      ),
+      undefined,
+    );
+  }
+  const target = calendarEventTarget(
+    {
+      id: 'synthetic-event',
+      start: { dateTime: '2030-10-27T02:30:00+02:00', timeZone: 'Europe/Paris' },
+      end: { dateTime: '2030-10-27T02:30:00+01:00', timeZone: 'Europe/Paris' },
+    },
+    'synthetic-event',
+  )?.target;
+  assert.ok(target);
+  assert.equal(Date.parse(target.endsAt) - Date.parse(target.startsAt), 3_600_000);
+});
+
+test('Calendar approval keeps the end and occurrence zones when offsets are present', () => {
+  const event = {
+    id: 'synthetic-event',
+    start: { dateTime: '2030-11-24T10:00:00+01:00', timeZone: 'Europe/Paris' },
+    end: { dateTime: '2030-11-24T05:00:00-05:00', timeZone: 'America/New_York' },
+    recurringEventId: 'synthetic-series',
+    originalStartTime: { dateTime: '2030-11-24T11:00:00+02:00', timeZone: 'Europe/Helsinki' },
+  };
+  const target = calendarEventTarget(event, event.id)?.target;
+  assert.ok(target);
+  assert.equal(target.endTimeZone, 'America/New_York');
+  assert.equal(target.originalTimeZone, 'Europe/Helsinki');
+  for (const part of ['end', 'originalStartTime'] as const)
+    assert.equal(
+      calendarEventTarget(
+        { ...event, [part]: { ...event[part], timeZone: 'Invalid/Synthetic' } },
+        event.id,
+      ),
+      undefined,
+    );
+});
+
 test('Gmail delete target metadata must match the bound message ID', () => {
   const target = gmailMessageTarget(
     {
@@ -1923,7 +1999,7 @@ test(
         verdict: Awaited<ReturnType<typeof trust.check>>,
         expected: Record<string, unknown>,
       ) => {
-        const { chatRevision, ...result } = verdict;
+        const { chatRevision, instructionRevision, ...result } = verdict;
         assert.deepEqual(result, expected);
       };
       const email = (to: string) => ({
