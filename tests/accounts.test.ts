@@ -3603,15 +3603,48 @@ describe('model connections', { skip: !process.env.TEST_DATABASE_URL }, () => {
     await fallback.addKey('deepseek', 'fixture-fallback-key');
     assert.equal(fallback.view().selection?.modelId, 'fixture-small');
     assert.equal(fallback.view().selection?.effort, 'off');
-    const subscription = await f.create('fixture-subscription-default', {
-      ...backend,
+    const { createPiModelBackend } = await import('../src/providers/pi/models.ts');
+    let offered = ['gpt-6-sol', 'gpt-6.1-sol', 'gpt-6.2-sol'];
+    const openaiBackend = {
+      ...createPiModelBackend({
+        fetch: async () =>
+          Response.json({
+            data: offered.map((id) => ({ id })),
+            models: offered.map((slug) => ({ slug, visibility: 'list' })),
+          }),
+      }),
       signIn: stubSignIn(async () => subscriptionCredential()),
-    });
-    const signIn = await subscription.start('openai');
-    await subscription.complete(
-      new URL(`http://127.0.0.1:1455/auth/callback?state=${signIn.attempt}&code=fixture`),
-    );
-    assert.equal(subscription.view().selection?.modelId, 'gpt-6-sol');
+    };
+    for (const method of ['api_key', 'subscription'] as const) {
+      const connect = async (owner: Awaited<ReturnType<typeof f.create>>) => {
+        if (method === 'api_key') await owner.addKey('openai', 'fixture-openai-default-key');
+        else {
+          const signIn = await owner.start('openai');
+          await owner.complete(
+            new URL(`http://127.0.0.1:1455/auth/callback?state=${signIn.attempt}&code=fixture`),
+          );
+        }
+      };
+      offered = ['gpt-6-sol', 'gpt-6.1-sol', 'gpt-6.2-sol'];
+      const ownerId = `fixture-openai-default-${method}`;
+      const openai = await f.create(ownerId, openaiBackend);
+      await connect(openai);
+      assert.equal(openai.view().selection?.modelId, 'gpt-6.2-sol');
+      assert.equal(openai.view().selection?.effort, 'high');
+      const selected = { ...openai.view().selection!, modelId: 'gpt-6.1-sol' };
+      await openai.select(selected);
+      await openai.refreshCatalog(selected.connectionId);
+      assert.deepEqual(openai.view().selection, selected);
+      const restarted = await f.create(ownerId, openaiBackend);
+      assert.deepEqual(restarted.view().selection, selected);
+      offered = ['gpt-6-sol', 'gpt-6.1-sol'];
+      const legacy = await f.create(`${ownerId}-legacy`, openaiBackend);
+      await connect(legacy);
+      assert.equal(
+        legacy.view().selection?.modelId,
+        method === 'subscription' ? 'gpt-6-sol' : 'gpt-6.1-sol',
+      );
+    }
     const count = google.view().connections.length;
     for (const settings of [
       {},

@@ -49,6 +49,7 @@ import { modelServiceError } from '../model-error.ts';
 import {
   antLingModel,
   nativeAudioModel,
+  openAIModels,
   assistantModelId,
   assistantModels,
   cloudflareCredential,
@@ -831,6 +832,12 @@ export function createPiModelBackend(options: { fetch?: typeof fetch } = {}): Mo
         const ids = new Set(
           list.filter((m) => !m.visibility || m.visibility === 'list').map((m) => m.slug ?? m.id),
         );
+        if (provider === 'openai')
+          local.push(
+            ...openAIModels(credential.type === 'api_key' ? credential.region : undefined).filter(
+              (model) => !local.some(({ id }) => id === model.id),
+            ),
+          );
         return local.filter((m) => ids.has(m.id)).map(definition);
       }
       const list = entries(

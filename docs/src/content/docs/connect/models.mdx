@@ -20,7 +20,7 @@ Select **Add connection** (or **Add** when you already have a connection), then 
 | Connection                         | Setup                                                     | Initial choice                           |
 | ---------------------------------- | --------------------------------------------------------- | ---------------------------------------- |
 | Google Gemini                      | [AI Studio API key](https://aistudio.google.com/api-keys) | Gemini 4 Argon, medium effort            |
-| OpenAI / ChatGPT                   | API key or existing ChatGPT sign-in                       | GPT-6.1 Sol / GPT-6 Sol, high effort     |
+| OpenAI / ChatGPT                   | API key or existing ChatGPT sign-in                       | GPT-6.2 Sol, high effort                 |
 | Anthropic                          | API key                                                   | Claude Opus 5.5, high effort             |
 | OpenRouter                         | API key or browser sign-in                                | GPT-6.1 Sol, high effort                 |
 | Google Vertex AI                   | Vertex API key                                            | Gemini 4 Argon, medium effort            |
@@ -35,6 +35,8 @@ Other providers include Ant Ling, Baseten, Cerebras, DeepSeek, Fireworks AI, Gro
 When an account model list is available, Nod loads it. For services with only a bundled catalog, Nod saves the key and checks access on first use. Neither a catalog nor a saved key proves that your account has credit or permission to run every listed model.
 
 You can change the initial choice. Nod preserves a working choice when you add another connection. It uses the recommended model when available, otherwise the first supported model in that connection's catalog. For Google Gemini, you must choose a model if Gemini 4 Argon is unavailable. When Bedrock offers several models or profiles, you must also choose because profiles can change where requests are processed.
+
+New OpenAI and ChatGPT connections prefer GPT-6.2 Sol when OpenAI lists it for your account. Otherwise, OpenAI API connections prefer GPT-6.1 Sol, and ChatGPT connections prefer GPT-6 Sol. Other supported models remain available in the picker.
 
 :::note[Google API access]
 Create a Gemini API key with your Google account in AI Studio. Nod recommends Gemini 4 Argon, which requires paid API access. Gemini 3.8 Flash is a lower-cost option with a [free tier](https://ai.google.dev/gemini-api/docs/pricing), subject to project quotas and availability. The model picker shows these access limits. The free tier has different data-use terms, so review Google's terms before sending private material.
@@ -55,6 +57,8 @@ Select **Manage** beside a provider to see its accounts, add another connection 
 The selected connection shows its current model name, or its model ID if the name is unavailable. Select **Change model** to open the model picker.
 
 Select **Reload models** beside a connected account to load its current model list and controls. If the saved effort is no longer supported, Nod uses a supported effort for the same model. This also applies when you save the connection again. Reload an existing Ollama connection after an update to use its current thinking controls.
+
+After updating Nod, reload an existing OpenAI or ChatGPT connection to load newly supported models, including GPT-6.2 Sol and GPT-6.2 Astra. They appear only when OpenAI lists them for your account. Reloading keeps your saved model choice.
 
 NVIDIA reloads its hosted model list. A listed model can still require account access or an available route. A failed reload keeps the saved list and selection. If a successful reload removes your selected model, choose another model yourself.
 
@@ -80,6 +84,8 @@ To change to an available model, you can also tell Nod which model and service t
 For a project with EU data residency, choose **Europe (EEA + Switzerland)**. Nod uses `eu.api.openai.com` for that connection's model requests, speech, and OpenAI decision checks. It keeps the native OpenAI models and their settings.
 
 Each connection keeps its own region. Nod does not switch regions after a failed request. Regional model and feature availability depends on your OpenAI project. See [OpenAI data residency](https://developers.openai.com/api/docs/guides/your-data#data-residency-controls).
+
+For GPT-6.2 Sol and Astra, Nod's estimates include OpenAI's [10% surcharge for regional API processing](https://developers.openai.com/api/docs/pricing).
 
 </TabItem>
 <TabItem label="ChatGPT">
