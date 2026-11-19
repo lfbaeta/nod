@@ -56,6 +56,7 @@ import {
 import { clearInstalledWindowsUpdates, startWindowsInstall } from './windows-update.mjs';
 import { appOpenPath } from './app-links.mjs';
 import { trustSystemCertificates } from './system-certificates.mjs';
+import { systemProxyEnvironment } from './system-proxy.mjs';
 import { opensAtLogin, setOpenAtLogin } from './login-item.mjs';
 
 trustSystemCertificates();
@@ -2460,10 +2461,14 @@ async function startEngine({ runtime, signal, pending = false }) {
   const analytics = await analyticsConfiguration().catch(() => ({ enabled: false }));
   const build = buildIdentity(nodBuild);
   const started = Date.now();
+  const systemProxy = systemProxyEnvironment(
+    await session.defaultSession.resolveProxy('https://api.openai.com').catch(() => ''),
+  );
   const environment = {
     ...baseEnvironment(),
     ...runtime.env,
     ...providerEnvironment,
+    ...systemProxy,
     NODE_ENV: 'production',
     PORT: String(port),
     NOD_DESKTOP: 'true',

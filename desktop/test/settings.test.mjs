@@ -9063,3 +9063,109 @@ test('background checks cap the retry wait and retry on wake after a failure', a
   await settle();
   assert.equal(calls, before + 1);
 });
+
+test('system proxy detection maps Electron resolve results to engine environment', async () => {
+  const { systemProxyEnvironment } = await import('../main/system-proxy.mjs');
+  const loopback = 'localhost,127.0.0.1,::1';
+  assert.deepEqual(systemProxyEnvironment('PROXY 127.0.0.1:10809'), {
+    HTTP_PROXY: 'http://127.0.0.1:10809',
+    HTTPS_PROXY: 'http://127.0.0.1:10809',
+    NO_PROXY: loopback,
+  });
+  assert.deepEqual(systemProxyEnvironment('HTTPS proxy.internal:8443'), {
+    HTTP_PROXY: 'https://proxy.internal:8443',
+    HTTPS_PROXY: 'https://proxy.internal:8443',
+    NO_PROXY: loopback,
+  });
+  assert.deepEqual(systemProxyEnvironment('PROXY 10.0.0.1:3128;PROXY 10.0.0.2:3128;DIRECT'), {
+    HTTP_PROXY: 'http://10.0.0.1:3128',
+    HTTPS_PROXY: 'http://10.0.0.1:3128',
+    NO_PROXY: loopback,
+  });
+  for (const resolved of ['DIRECT', 'SOCKS5 127.0.0.1:1080', 'SOCKS 127.0.0.1:1080', '', undefined])
+    assert.deepEqual(systemProxyEnvironment(resolved), {}, String(resolved));
+});
+
+test('engine proxy activation honors proxy variables and keeps loopback direct', async (t) => {
+  const { useEnvironmentProxy } = await import('../main/system-proxy.mjs');
+  const { createServer: createHttpServer, get } = await import('node:http');
+  let activations = 0;
+  const load = async () => ({
+    EnvHttpProxyAgent: class {
+      marker = true;
+    },
+    setGlobalDispatcher: (value) => {
+      assert.equal(value.marker, true);
+      activations++;
+    },
+  });
+  for (const env of [
+    { HTTPS_PROXY: 'http://127.0.0.1:10809' },
+    { https_proxy: 'http://127.0.0.1:10809' },
+    { HTTP_PROXY: 'http://127.0.0.1:10809' },
+    { http_proxy: 'http://127.0.0.1:10809' },
+  ])
+    await useEnvironmentProxy(env, load);
+  assert.equal(activations, 4);
+  await useEnvironmentProxy({ NO_PROXY: 'localhost' }, load);
+  assert.equal(activations, 4);
+  const { EnvHttpProxyAgent, getGlobalDispatcher, setGlobalDispatcher } = await import('undici');
+  const { connect, createServer: createTunnel } = await import('node:net');
+  const target = createHttpServer((request, response) => {
+    response.end(`served ${request.url}`);
+  });
+  const tunnels = [];
+  const sockets = new Set();
+  const proxy = createTunnel((client) => {
+    sockets.add(client);
+    client.once('close', () => sockets.delete(client));
+    client.once('data', (head) => {
+      const line = head.toString('latin1').split('\r\n')[0];
+      const [method, authority] = line.split(' ');
+      if (method !== 'CONNECT') return client.destroy();
+      const [host, port] = authority.split(':');
+      const upstream = connect(Number(port), host, () => {
+        tunnels.push(authority);
+        sockets.add(upstream);
+        client.write('HTTP/1.1 200 Connection Established\r\n\r\n');
+        upstream.pipe(client).pipe(upstream);
+      });
+      upstream.once('close', () => sockets.delete(upstream));
+      client.on('error', () => upstream.destroy());
+      upstream.on('error', () => client.destroy());
+    });
+  });
+  t.after(() => {
+    target.closeAllConnections();
+    target.close();
+    proxy.close();
+    for (const socket of sockets) socket.destroy();
+  });
+  await new Promise((accept) => target.listen(0, '127.0.0.1', accept));
+  await new Promise((accept) => proxy.listen(0, '127.0.0.1', accept));
+  const before = getGlobalDispatcher();
+  const envAgent = new EnvHttpProxyAgent({
+    httpProxy: `http://127.0.0.1:${proxy.address().port}`,
+    noProxy: 'localhost',
+  });
+  t.after(async () => {
+    setGlobalDispatcher(before);
+    await envAgent.close();
+  });
+  setGlobalDispatcher(envAgent);
+  const targetPort = target.address().port;
+  assert.equal(
+    await (
+      await fetch(`http://127.0.0.1:${targetPort}/via-proxy`, { headers: { connection: 'close' } })
+    ).text(),
+    'served /via-proxy',
+  );
+  assert.deepEqual(tunnels, [`127.0.0.1:${targetPort}`]);
+  assert.equal(
+    await (
+      await fetch(`http://localhost:${targetPort}/direct`, { headers: { connection: 'close' } })
+    ).text(),
+    'served /direct',
+  );
+  assert.equal(tunnels.length, 1);
+});

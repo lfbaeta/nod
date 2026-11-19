@@ -237,7 +237,16 @@ export function createPiModelBackend(options: { fetch?: typeof fetch } = {}): Mo
     });
     if (!response.ok) {
       const code = z
-        .object({ error: z.string().regex(/^[a-z_]{1,64}$/) })
+        .object({
+          error: z
+            .string()
+            .regex(/^[a-z_]{1,64}$/)
+            .or(
+              z
+                .object({ code: z.string().regex(/^[a-z_]{1,64}$/) })
+                .transform((error) => error.code),
+            ),
+        })
         .safeParse(await response.json().catch(() => undefined)).data?.error;
       throw new TokenRejected(response.status, code);
     }
@@ -628,7 +637,10 @@ export function createPiModelBackend(options: { fetch?: typeof fetch } = {}): Mo
               ? 'ChatGPT sign-in was canceled.'
               : error instanceof TokenRejected && error.code === 'invalid_grant'
                 ? 'OpenAI didn’t approve this connection. Use a ChatGPT Plus or Pro plan, or add an API key.'
-                : 'ChatGPT sign-in didn’t finish. Try again.',
+                : error instanceof TokenRejected &&
+                    error.code === 'unsupported_country_region_territory'
+                  ? 'OpenAI is not available in this country or region.'
+                  : 'ChatGPT sign-in didn’t finish. Try again.',
             false,
             { cause: error },
           );
