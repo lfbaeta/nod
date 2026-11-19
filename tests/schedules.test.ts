@@ -358,8 +358,25 @@ test(
             [randomUUID(), randomUUID(), ownerId, secondTurn],
           );
           pricing = { input: 0, output: 0 };
-          const free = (await modelled.getSchedule(schedule.id)).monthlyUsd!;
-          assert.ok(Math.abs(free / old - 0.01 / 1.88) < 1e-9);
+          const expectMonthly = async (perRun: number) => {
+            const monthly = (await modelled.getSchedule(schedule.id)).monthlyUsd!;
+            assert.ok(Math.abs(monthly / old - perRun / 1.88) < 1e-9);
+          };
+          await expectMonthly(0.01);
+
+          await db.pool.query(
+            "UPDATE model_usage SET cost_usd=0 WHERE turn_id=$1 AND details->>'category'='agent'",
+            [turnId],
+          );
+          await expectMonthly(0.01);
+
+          await db.pool.query(
+            "UPDATE model_usage SET details=details || jsonb_build_object('estimateUsd',cost_usd),cost_usd=NULL WHERE turn_id=$1",
+            [secondTurn],
+          );
+          await expectMonthly(0.01);
+          pricing = { ...original, input: 2.2 };
+          await expectMonthly((1.94 + 0.24) / 2);
         } finally {
           await request('DELETE', `/api/schedules/${schedule.id}`);
           await db.pool.query('DELETE FROM model_usage WHERE turn_id=ANY($1::uuid[])', [

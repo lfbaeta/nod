@@ -4916,7 +4916,10 @@ describe('model connections', { skip: !process.env.TEST_DATABASE_URL }, () => {
     );
     const access = await owner.resolve();
     assert.equal(access.definition.spec.baseUrl, `${address}/v1`);
-    assert.equal(owner.priceOf(owner.view().selection)?.pricing, undefined);
+    const endpointPrice = owner.priceOf(owner.view().selection);
+    assert.ok(endpointPrice);
+    assert.equal(endpointPrice.modelId, 'fixture-local');
+    assert.equal(endpointPrice.pricing, undefined);
     assert.equal(owner.hasApiKey('openai'), false);
     assert.equal(await owner.apiKey('openai'), undefined);
     assert.deepEqual(await access.read(), {

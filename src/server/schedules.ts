@@ -115,7 +115,10 @@ export interface ScheduleDependencies {
   watchable?(connectionIds: string[]): Promise<boolean>;
   watchState?(connectionIds: string[]): Promise<string | null>;
   modelPaused?(model: ModelSelection | null): boolean;
-  recentTurnUsage?(turnId?: string): Promise<Array<WorkUsage & { recordedUsd: number }>>;
+  recentTurnUsage?(
+    turnId?: string,
+    projectAtApiRates?: boolean,
+  ): Promise<Array<WorkUsage & { recordedUsd: number }>>;
   validateModel?(choice: ModelSelection): ModelSelection;
   sessionUsage?(
     sessionIds: string[],
@@ -812,7 +815,8 @@ export function createSchedules(dependencies: ScheduleDependencies) {
     let fallback: Promise<Array<WorkUsage & { recordedUsd: number }>> | undefined;
     const recentTurnMedian = async (target: WorkPrice | undefined) => {
       const samples = (
-        await (fallback ??= dependencies.recentTurnUsage?.(turnId) ?? Promise.resolve([]))
+        await (fallback ??=
+          dependencies.recentTurnUsage?.(turnId, target !== undefined) ?? Promise.resolve([]))
       )
         .map((sample) => forecast(sample, sample.recordedUsd, target))
         .filter(hasPrice)

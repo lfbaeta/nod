@@ -841,29 +841,32 @@ export function createLedger({
   const unpricedOtherZero = `(m.details->>'category' IS DISTINCT FROM 'agent'
     AND ${unpricedUsage('m.')} AND m.details->>'pricing' IS DISTINCT FROM 'reported')`;
 
+  const tokens = {
+    input: "(m.details->>'inputTokens')::float8",
+    output: "(m.details->>'outputTokens')::float8",
+    cacheRead: "(m.details->>'cacheReadTokens')::float8",
+    cacheWrite: "(m.details->>'cacheWriteTokens')::float8",
+    cacheWrite1h: "(m.details->>'cacheWrite1hTokens')::float8",
+  };
+  const tokenColumns = Object.values(tokens);
+  const forecastAgent = "m.details->>'category'='agent'";
+  const costWithPlan = "COALESCE(m.cost_usd,(m.details->>'estimateUsd')::float8)";
+
   function usageForecastColumns(firstParameter: number, includePlanEstimates = true) {
     const thresholds = [...new Set(pricingThresholds?.() ?? [])];
-    const tokens = {
-      input: "(m.details->>'inputTokens')::float8",
-      output: "(m.details->>'outputTokens')::float8",
-      cacheRead: "(m.details->>'cacheReadTokens')::float8",
-      cacheWrite: "(m.details->>'cacheWriteTokens')::float8",
-      cacheWrite1h: "(m.details->>'cacheWrite1hTokens')::float8",
-    };
-    const agent = "m.details->>'category'='agent'";
     const other = "m.details->>'category' IS DISTINCT FROM 'agent'";
-    const tokenColumns = Object.values(tokens);
-    const costWithPlan = "COALESCE(m.cost_usd,(m.details->>'estimateUsd')::float8)";
     const agentCost = includePlanEstimates ? costWithPlan : 'm.cost_usd';
     const sum = (column: string, filter: string) =>
       `COALESCE(sum(${column}) FILTER (WHERE ${filter}),0)::float8`;
-    const base = Object.entries(tokens).map(([key, column]) => `${sum(column, agent)} AS "${key}"`);
+    const base = Object.entries(tokens).map(
+      ([key, column]) => `${sum(column, forecastAgent)} AS "${key}"`,
+    );
     const input = [tokens.input, tokens.cacheRead, tokens.cacheWrite]
       .map((column) => `COALESCE(${column},0)`)
       .join('+');
     const bands = thresholds.map((_, index) => {
       const threshold = `$${firstParameter + index}::float8`;
-      const above = `${agent} AND ${input}>${threshold}`;
+      const above = `${forecastAgent} AND ${input}>${threshold}`;
       return `ARRAY[${threshold},${tokenColumns.map((column) => sum(column, above)).join(',')}]`;
     });
     const otherCoverage = includePlanEstimates
@@ -877,11 +880,11 @@ export function createLedger({
     return {
       thresholds,
       columns: `${base.join(',')},
-        ${sum(agentCost, agent)} AS "agentUsd",
+        ${sum(agentCost, forecastAgent)} AS "agentUsd",
         ${sum(costWithPlan, other)} AS "otherUsd",
-        COALESCE(array_agg(DISTINCT m.details->>'model') FILTER (WHERE ${agent} AND m.details->>'model' IS NOT NULL),'{}') AS models,
+        COALESCE(array_agg(DISTINCT m.details->>'model') FILTER (WHERE ${forecastAgent} AND m.details->>'model' IS NOT NULL),'{}') AS models,
         COALESCE(array_agg(DISTINCT CASE WHEN ${agentCost} IS NOT NULL THEN m.details->>'pricingSignature' END) FILTER (
-          WHERE ${agent} AND GREATEST(${costWithPlan},${tokenColumns.join(',')})>0
+          WHERE ${forecastAgent} AND GREATEST(${costWithPlan},${tokenColumns.join(',')})>0
         ),'{}') AS "pricingSignatures",
         ARRAY[${bands.join(',')}]::float8[] AS "tokensAbove"${otherCoverage}`,
     };
@@ -996,9 +999,13 @@ export function createLedger({
     return { lanes, schedules, tasks, own: [...own.values()] };
   }
 
-  async function recentTurnUsage(turnId?: string) {
+  async function recentTurnUsage(turnId?: string, projectAtApiRates = false) {
     const { columns, thresholds } = usageForecastColumns(3);
-    const priced = `count(m.cost_usd)=count(*) AND sum(m.cost_usd)>0
+    const sampleCost = projectAtApiRates ? costWithPlan : 'm.cost_usd';
+    const zeroWithTokens = projectAtApiRates
+      ? `OR (sum(${sampleCost})=0 AND bool_or(${forecastAgent} AND GREATEST(${tokenColumns.join(',')})>0))`
+      : '';
+    const priced = `count(${sampleCost})=count(*) AND (sum(${sampleCost})>0 ${zeroWithTokens})
       AND count(*) FILTER (WHERE ${unpricedOtherZero})=0`;
     const { rows } = await pool.query<WorkUsage & { recordedUsd: number }>(
       `WITH recent AS (
@@ -1009,7 +1016,7 @@ export function createLedger({
       ), candidates AS (
         SELECT turn_id FROM recent UNION ALL SELECT $2::uuid WHERE NOT EXISTS (SELECT 1 FROM recent)
       )
-      SELECT sum(m.cost_usd)::float8 AS "recordedUsd",${columns}
+      SELECT sum(${sampleCost})::float8 AS "recordedUsd",${columns}
       FROM model_usage m JOIN candidates c ON c.turn_id=m.turn_id
       WHERE m.owner_id=$1 GROUP BY m.turn_id
       HAVING ${priced}`,
