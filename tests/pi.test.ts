@@ -9253,6 +9253,8 @@ test('each session opens on its work model and the observer starts fresh after a
     },
   });
   const catalog = await backend.catalog('openai', 'api_key');
+  const { modelPricingSignature } = await import('../src/shared/models.ts');
+  const signatures: Array<string | undefined> = [];
   const directory = await mkdtemp(join(tmpdir(), 'nod-work-model-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const chosen: Array<string | undefined> = [];
@@ -9310,7 +9312,9 @@ test('each session opens on its work model and the observer starts fresh after a
       ...sandbox,
       tools: [],
       shouldStop: () => false,
-      onEvent() {},
+      onEvent(event) {
+        if (event.type === 'model_usage') signatures.push(event.pricingSignature);
+      },
     });
     await session.prompt(prompt, []);
     await session.dispose();
@@ -9324,6 +9328,14 @@ test('each session opens on its work model and the observer starts fresh after a
     requests.map((request) => request.model),
     ['gpt-6-luna', 'gpt-6-luna', 'gpt-6.1-sol', 'gpt-6.1-sol'],
   );
+  assert.equal(signatures.length, requests.length);
+  for (const [index, { model }] of requests.entries()) {
+    const cost = catalog.find((item) => item.choice.id === model)!.spec
+      .cost as import('../src/shared/models.ts').ModelPricing;
+    const expected = modelPricingSignature(cost);
+    assert.ok(expected);
+    assert.equal(signatures[index], expected);
+  }
   assert.ok(requests[1]!.history.includes('Synthetic first batch'));
   assert.ok(!requests[2]!.history.includes('Synthetic second batch'));
   assert.ok(requests[3]!.history.includes('Synthetic third batch'));

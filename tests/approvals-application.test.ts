@@ -36,7 +36,7 @@ import { authenticatorCode } from '../src/server/authenticator.ts';
 import { transaction } from '../src/server/transaction.ts';
 import { createChannels } from '../src/server/channels.ts';
 import type { AppState, Task } from '../src/shared/contracts.ts';
-import type { WorkUsageResponse } from '../src/shared/models.ts';
+import { modelPricingSignature, type WorkUsageResponse } from '../src/shared/models.ts';
 import { mergeMessages } from '../src/web/lib/chat-messages.ts';
 import { ApprovalCard, ApprovalChoiceCard } from '../src/web/components/action-card.tsx';
 
@@ -1482,6 +1482,57 @@ test(
             use: 'same',
           })) as { last30Days?: { withChoiceUsd: number | null } };
           assert.equal(followDefault.last30Days?.withChoiceUsd, (1000 * lunaPrice.input) / 1e6);
+          const mainPrice = models
+            .view()
+            .connections[0]!.models.find((item) => item.id === before!.modelId)!.pricing;
+          assert.ok(mainPrice && mainPrice !== 'variable');
+          const projectMain = async () =>
+            (await application.personal.manage('model_select', {
+              scope: 'task',
+              id: followUp,
+              ...before,
+            })) as { last30Days?: { last30Usd: number; withChoiceUsd: number | null } };
+          assert.deepEqual((await projectMain()).last30Days, {
+            last30Usd: 0.01,
+            withChoiceUsd: (1000 * mainPrice.input) / 1e6,
+          });
+
+          await pool.query(
+            "UPDATE model_usage SET details=details || jsonb_build_object('pricingSignature',$2::text) WHERE turn_id=$1",
+            [followTurn, modelPricingSignature(mainPrice)],
+          );
+          assert.deepEqual((await projectMain()).last30Days, {
+            last30Usd: 0.01,
+            withChoiceUsd: 0.01,
+          });
+          await pool.query(
+            'INSERT INTO model_usage(id,owner_id,turn_id,cost_usd,details) VALUES($1,$2,$3,$4,$5)',
+            [
+              randomUUID(),
+              ownerId,
+              followTurn,
+              0.02,
+              {
+                category: 'agent',
+                model: before!.modelId,
+                cacheReadTokens: 2_000,
+                pricingSignature: modelPricingSignature({ ...mainPrice, cacheRead: 20 }),
+              },
+            ],
+          );
+          const mixed = (await projectMain()).last30Days!;
+          assert.equal(mixed.last30Usd, 0.03);
+          const estimated =
+            (1_000 * mainPrice.input + 2_000 * (mainPrice.cacheRead ?? mainPrice.input)) / 1e6;
+          assert.equal(mixed.withChoiceUsd, estimated);
+          await pool.query(
+            "UPDATE model_usage SET cost_usd=NULL,details=details || jsonb_build_object('pricingSignature',$2::text) WHERE turn_id=$1 AND details ? 'cacheReadTokens'",
+            [followTurn, modelPricingSignature(mainPrice)],
+          );
+          assert.deepEqual((await projectMain()).last30Days, {
+            last30Usd: 0.01,
+            withChoiceUsd: estimated,
+          });
           await pool.query('DELETE FROM tasks WHERE id=$1', [followUp]);
 
           const back = await put(`/api/tasks/${task.id}/model`, { model: null });

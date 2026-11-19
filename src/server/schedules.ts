@@ -15,6 +15,7 @@ import type {
 import { abortTurns, cancelTurns, lockThread, type enqueueTurn } from './thread.ts';
 import { modelSelectionInput } from './models.ts';
 import {
+  canReuseWorkCost,
   repriceUsd,
   type ModelChoice,
   type ModelSelection,
@@ -114,13 +115,18 @@ export interface ScheduleDependencies {
   watchable?(connectionIds: string[]): Promise<boolean>;
   watchState?(connectionIds: string[]): Promise<string | null>;
   modelPaused?(model: ModelSelection | null): boolean;
-  recentTurnCost?(turnId?: string): Promise<number | null>;
+  recentTurnUsage?(turnId?: string): Promise<Array<WorkUsage & { recordedUsd: number }>>;
   validateModel?(choice: ModelSelection): ModelSelection;
   sessionUsage?(sessionIds: string[]): Promise<Record<string, WorkUsage>>;
   workPricing?(own: ModelSelection | null): WorkPrice | undefined;
 }
 
-type WorkPrice = { modelId: string; pricing: ModelChoice['pricing'] };
+type WorkPrice = {
+  modelId: string;
+  pricing: ModelChoice['pricing'];
+  audio?: boolean;
+  plan?: boolean;
+};
 
 interface ScheduleRow {
   id: string;
@@ -772,39 +778,54 @@ export function createSchedules(dependencies: ScheduleDependencies) {
         [recurring.map((row) => row.id), ownerId],
       )
     ).rows;
-    const costs = await dependencies.sessionCosts(runs.map((run) => run.turn_id));
-    const usage = (await dependencies.sessionUsage?.(runs.map((run) => run.turn_id))) ?? {};
-    const runCost = (run: (typeof runs)[number], target: WorkPrice | undefined) => {
-      const recorded = costs[run.turn_id];
-      const spent = usage[run.turn_id];
-      if (!spent || !target || (spent.models.length === 1 && spent.models[0] === target.modelId))
-        return recorded;
-      return repriceUsd(spent, target.pricing);
-    };
+    const sessions = runs.map((run) => run.turn_id);
+    const usage = await dependencies.sessionUsage?.(sessions);
+    const costs = usage ? {} : await dependencies.sessionCosts(sessions);
+    const forecast = (
+      spent: WorkUsage | undefined,
+      recorded: number | null | undefined,
+      target: WorkPrice | undefined,
+    ) =>
+      !spent || !target || canReuseWorkCost(spent, target.modelId, target.pricing)
+        ? recorded
+        : repriceUsd(spent, target.pricing, target.audio);
+    const hasPrice = (cost: number | null | undefined): cost is number =>
+      typeof cost === 'number' && cost > 0;
     const pricedRuns = (
       target: WorkPrice | undefined,
       keep: (run: (typeof runs)[number]) => boolean,
     ) =>
       runs.flatMap((run) => {
-        const cost = keep(run) ? runCost(run, target) : undefined;
-        return typeof cost === 'number' && cost > 0 ? [cost] : [];
+        const spent = usage?.[run.turn_id];
+        const recorded = spent ? spent.agentUsd + spent.otherUsd : costs[run.turn_id];
+        if (!keep(run)) return [];
+        const cost = forecast(spent, recorded, target);
+        return hasPrice(cost) ? [cost] : [];
       });
-    let fallback: Promise<number | null> | undefined;
+    let fallback: Promise<Array<WorkUsage & { recordedUsd: number }>> | undefined;
+    const recentTurnMedian = async (target: WorkPrice | undefined) => {
+      const samples = (
+        await (fallback ??= dependencies.recentTurnUsage?.(turnId) ?? Promise.resolve([]))
+      )
+        .map((sample) => forecast(sample, sample.recordedUsd, target))
+        .filter(hasPrice)
+        .sort((a, b) => a - b);
+      if (!samples.length) return [];
+      const middle = Math.floor(samples.length / 2);
+      return [(samples[middle]! + samples[Math.ceil(samples.length / 2) - 1]!) / 2];
+    };
     const from = now();
     const month = 30 * 86_400_000;
     for (const row of recurring) {
       const target = dependencies.workPricing?.(row.model);
-      if (dependencies.workPricing && !target) continue;
+      if (target?.plan || (dependencies.workPricing && !target)) continue;
       const own = pricedRuns(target, (run) => run.schedule_id === row.id);
       const recent = pricedRuns(target, (run) => run.latest);
       const priced = runs.some((run) => run.schedule_id === row.id)
         ? own
         : recent.length
           ? recent
-          : [
-              (await (fallback ??=
-                dependencies.recentTurnCost?.(turnId) ?? Promise.resolve(null))) ?? 0,
-            ];
+          : await recentTurnMedian(target);
       if (!priced.some((cost) => cost > 0)) continue;
       const upcoming = scheduler.previewSchedule(row.cron!, { tz: row.timeZone, count: 200, from });
       const last = upcoming.at(-1)?.getTime();

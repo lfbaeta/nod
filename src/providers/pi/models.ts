@@ -32,6 +32,7 @@ import type {
 import {
   bedrockRegionPattern,
   boundedPrice,
+  modelPricingSignature,
   modelProviders,
   modelProviderNames,
   type ModelProvider,
@@ -1452,6 +1453,7 @@ export async function createPiModelRuntime(
           costUsd: null,
           pricing: 'unavailable',
           ...piUsageMetrics(message?.usage),
+          pricingSignature: modelPricingSignature(target.cost, target.api),
         });
       };
       const cancel = () => report();

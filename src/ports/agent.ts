@@ -26,9 +26,11 @@ export interface ModelUsageObservation {
   outputTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
+  cacheWrite1hTokens?: number;
   totalTokens: number;
   costUsd: number | null;
   estimateUsd?: number | null;
+  pricingSignature?: string;
   costSource: 'sdk_estimate' | 'unavailable';
   createdAt: string;
 }

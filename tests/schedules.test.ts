@@ -12,6 +12,7 @@ import type {
   ScheduleRun,
   TaskDetail,
 } from '../src/shared/contracts.ts';
+import { modelPricingSignature, type ModelPricing } from '../src/shared/models.ts';
 import {
   captureOwnerInstructions,
   mergeOwnerInstructions,
@@ -258,6 +259,81 @@ test(
         schedule_runs_schedule_id_schedule_revision_scheduled_for_key
         UNIQUE(schedule_id,schedule_revision,scheduled_for)`);
       await personal.initialize({ workers: false });
+
+      await t.test('a new schedule prices recent chat requests at the selected tier', async () => {
+        const { createLedger } = await import('../src/server/ledger.ts');
+        const threshold = 272_000;
+        const ledger = createLedger({
+          pool: db.pool,
+          ownerId,
+          pricingThresholds: () => [threshold],
+        });
+        await ledger.initialize();
+        const original: ModelPricing = {
+          input: 2,
+          output: 10,
+          longCacheWrites: true,
+          tiers: [{ inputTokensAbove: threshold, input: 4, output: 15 }],
+        };
+        let pricing = original;
+        const modelId = 'synthetic-model';
+        const modelled = createPersonalService({
+          pool: db.pool,
+          ownerId,
+          scheduler: thread.boss,
+          now: () => clock,
+          enqueueTurn: thread.enqueueTurn,
+          refresh() {},
+          sessionCosts: ledger.sessionCosts,
+          sessionUsage: ledger.sessionUsage,
+          recentTurnUsage: ledger.recentTurnUsage,
+          workPricing: () => ({ modelId, pricing }),
+        });
+        const turnId = await thread.enqueueTurn('Synthetic forecast sample', { source: 'event' });
+        const schedule = await create({ title: 'Synthetic first schedule', cron: '0 9 * * *' });
+        try {
+          await db.pool.query("UPDATE turns SET status='succeeded' WHERE id=$1", [turnId]);
+          for (const [inputTokens, cacheWriteTokens, cost] of [
+            [150_000, 0, 0.3],
+            [150_000, 0, 0.3],
+            [280_000, 20_000, 1.28],
+          ] as const)
+            await db.pool.query(
+              'INSERT INTO model_usage(id,owner_id,turn_id,cost_usd,details) VALUES($1,$2,$3,$4,$5)',
+              [
+                randomUUID(),
+                ownerId,
+                turnId,
+                cost,
+                {
+                  category: 'agent',
+                  model: modelId,
+                  inputTokens,
+                  cacheWriteTokens,
+                  cacheWrite1hTokens: cacheWriteTokens,
+                  pricingSignature: modelPricingSignature(original),
+                },
+              ],
+            );
+          const old = (await modelled.getSchedule(schedule.id)).monthlyUsd!;
+          assert.ok(old > 0);
+          pricing = {
+            input: 2.2,
+            output: 11,
+            longCacheWrites: true,
+            tiers: [{ inputTokensAbove: threshold, input: 4.4, output: 16.5 }],
+          };
+          const revised = (await modelled.getSchedule(schedule.id)).monthlyUsd!;
+          assert.ok(Math.abs(revised / old - 2.068 / 1.88) < 1e-9);
+          pricing = { ...original, longCacheWrites: false };
+          const standardWrites = (await modelled.getSchedule(schedule.id)).monthlyUsd!;
+          assert.ok(Math.abs(standardWrites / old - 1.8 / 1.88) < 1e-9);
+        } finally {
+          await request('DELETE', `/api/schedules/${schedule.id}`);
+          await db.pool.query('DELETE FROM model_usage WHERE turn_id=$1', [turnId]);
+          await db.pool.query('DELETE FROM turns WHERE id=$1', [turnId]);
+        }
+      });
 
       await t.test(
         'Stop ends only the selected schedule run and keeps future runs enabled',
@@ -1008,13 +1084,25 @@ test(
         'a schedule model changes only the model of its next runs and reprices its month',
         async (t) => {
           const { createLedger } = await import('../src/server/ledger.ts');
-          const ledger = createLedger({ pool: db.pool, ownerId });
+          const threshold = 900_000;
+          const ledger = createLedger({
+            pool: db.pool,
+            ownerId,
+            pricingThresholds: () => [threshold],
+          });
           await ledger.initialize();
           const connectionId = randomUUID();
           const main = { connectionId, modelId: 'gpt-6.1-sol', effort: 'high' };
           const light = { connectionId, modelId: 'gpt-6-luna', effort: 'low' };
-          const prices: Record<string, { input: number; output: number } | null> = {
-            'gpt-6.1-sol': { input: 2, output: 10 },
+          const originalPrice: ModelPricing = {
+            input: 2,
+            output: 10,
+            tiers: [{ inputTokensAbove: threshold, input: 2.25, output: 10 }],
+          };
+          let nativeAudio = false;
+          let plan = false;
+          const prices: Record<string, ModelPricing | null> = {
+            'gpt-6.1-sol': originalPrice,
             'gpt-6-luna': { input: 0.1, output: 0.5 },
             'fixture-local': null,
           };
@@ -1036,7 +1124,7 @@ test(
             },
             workPricing: (own) => {
               const modelId = own?.modelId ?? main.modelId;
-              return { modelId, pricing: prices[modelId] ?? undefined };
+              return { modelId, pricing: prices[modelId] ?? undefined, audio: nativeAudio, plan };
             },
           });
           const modelledApp = Fastify();
@@ -1114,11 +1202,24 @@ test(
           ).rows[0]!;
           assert.equal((await thread.workOrigin(resumed.id))?.kind, 'schedule');
 
+          const agentUsageId = randomUUID();
+          const agentUsage = {
+            category: 'agent',
+            model: main.modelId,
+            inputTokens: 1_000_000,
+            outputTokens: 100_000,
+          };
           await db.pool.query(
             `INSERT INTO model_usage(id,owner_id,turn_id,cost_usd,details) VALUES
-               ($1,$3,$4,3,'{"category":"agent","model":"gpt-6.1-sol","inputTokens":1000000,"outputTokens":100000}'),
+               ($1,$3,$4,3.35,$5),
                ($2,$3,$4,0.01,'{"category":"review","model":"gpt-6.1-sol","inputTokens":5000}')`,
-            [randomUUID(), randomUUID(), ownerId, run.turnId],
+            [
+              agentUsageId,
+              randomUUID(),
+              ownerId,
+              run.turnId,
+              { ...agentUsage, pricingSignature: modelPricingSignature(originalPrice) },
+            ],
           );
           await db.pool.query(
             "UPDATE turns SET status='succeeded' WHERE id=$1 OR parent_turn_id=$1",
@@ -1127,14 +1228,58 @@ test(
           const monthly = async () => (await modelled.getSchedule(schedule.id)).monthlyUsd!;
           const onMain = await monthly();
           assert.ok(onMain > 0);
+          const expectRunCost = async (cost: number) => {
+            assert.ok(Math.abs((await monthly()) / onMain - cost / 3.36) < 1e-9);
+          };
+          prices[main.modelId] = { input: 2.2, output: 11 };
+          await expectRunCost(3.31);
+          prices[main.modelId] = { ...originalPrice, tiers: [] };
+          await expectRunCost(3.01);
+          prices[main.modelId] = originalPrice;
+          await db.pool.query('UPDATE model_usage SET details=$2 WHERE id=$1', [
+            agentUsageId,
+            agentUsage,
+          ]);
+          await expectRunCost(3.26);
+          assert.ok(Math.abs((await ledger.sessionCosts([run.turnId]))[run.turnId]! - 3.36) < 1e-9);
           await setModel(schedule.id, light);
-          const onLight = await monthly();
-          assert.ok(Math.abs(onLight / onMain - (0.1 + 0.05 + 0.01) / 3.01) < 1e-9);
+          await expectRunCost(0.16);
           await setModel(schedule.id, { ...light, modelId: 'fixture-local' });
           assert.equal((await modelled.getSchedule(schedule.id)).monthlyUsd ?? null, null);
           await setModel(schedule.id, null);
           assert.equal((await modelled.getSchedule(schedule.id)).model, null);
-          assert.equal(await monthly(), onMain);
+          await expectRunCost(3.26);
+          nativeAudio = true;
+          assert.equal(await monthly(), null);
+          nativeAudio = false;
+          await db.pool.query(
+            "UPDATE model_usage SET details=details || jsonb_build_object('estimateUsd',cost_usd),cost_usd=NULL WHERE turn_id=$1",
+            [run.turnId],
+          );
+          plan = true;
+          assert.equal(await monthly(), null);
+          plan = false;
+          await expectRunCost(3.25);
+          await db.pool.query(
+            "UPDATE model_usage SET cost_usd=(details->>'estimateUsd')::float8,details=details-'estimateUsd' WHERE turn_id=$1",
+            [run.turnId],
+          );
+          const cancelledUsageId = randomUUID();
+          await db.pool.query(
+            'INSERT INTO model_usage(id,owner_id,turn_id,cost_usd,details) VALUES($1,$2,$3,NULL,$4)',
+            [
+              cancelledUsageId,
+              ownerId,
+              run.turnId,
+              { category: 'agent', status: 'cancelled', model: main.modelId },
+            ],
+          );
+          await expectRunCost(3.26);
+          assert.equal((await ledger.sessionCosts([run.turnId]))[run.turnId], null);
+          await db.pool.query('DELETE FROM model_usage WHERE id=$1', [cancelledUsageId]);
+          await db.pool.query('UPDATE model_usage SET cost_usd=0 WHERE turn_id=$1', [run.turnId]);
+          await setModel(schedule.id, light);
+          await expectRunCost(0.15);
         },
       );
       await t.test(

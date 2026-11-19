@@ -19,6 +19,7 @@ import {
   modelProviderNames,
   modelProviders,
   modelSource,
+  canReuseWorkCost,
   repriceUsd,
   type ModelIssue,
   type ModelSelection,
@@ -897,6 +898,7 @@ async function initializeApplication(
     ownerId,
     analytics: captureAnalytics,
     telemetry: adapters.telemetry,
+    pricingThresholds: () => adapters.models?.pricingThresholds() ?? [],
   });
   await ledger.initialize();
   adapters.models?.setRequestBudget?.(ledger.reserve);
@@ -1152,15 +1154,14 @@ async function initializeApplication(
           : (model ?? models.workModel(origin).selection),
       );
       if (!target) return null;
-      const withChoiceUsd =
-        spent.models.length === 1 && spent.models[0] === target.modelId
-          ? last30Usd
-          : repriceUsd(spent, target.pricing);
+      const withChoiceUsd = canReuseWorkCost(spent, target.modelId, target.pricing)
+        ? last30Usd
+        : repriceUsd(spent, target.pricing, target.audio);
       return { last30Usd, withChoiceUsd };
     },
     sessionCosts: ledger.sessionCosts,
     sessionUsage: ledger.sessionUsage,
-    recentTurnCost: ledger.recentTurnCost,
+    recentTurnUsage: ledger.recentTurnUsage,
     ...(adapters.models
       ? {
           validateModel: (choice: ModelSelection) => adapters.models!.validateChoice(choice),

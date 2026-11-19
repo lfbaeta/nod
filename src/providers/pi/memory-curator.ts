@@ -8,7 +8,7 @@ import { ModelRuntime } from '@earendil-works/pi-coding-agent';
 import { retryAssistantCall } from '@earendil-works/pi-ai/utils/retry';
 import { createPiModelRuntime, localModelSilenceMs } from './models.ts';
 import type { ModelAccess } from '../../ports/models.ts';
-import { lightestEffort } from '../../shared/models.ts';
+import { lightestEffort, modelPricingSignature } from '../../shared/models.ts';
 import type { MemoryCurator } from '../../ports/memory-curator.ts';
 import { agentModels, memoryModels } from '../../shared/model-defaults.ts';
 import { piUsageMetrics } from './usage.ts';
@@ -191,6 +191,7 @@ export function createPiMemoryCurator(options: {
           });
         } finally {
           const metrics = piUsageMetrics(reply?.usage);
+          const target = reply && (runtime.getModel(reply.provider, reply.model) ?? model);
           report?.({
             id: crypto.randomUUID(),
             attempt,
@@ -198,6 +199,7 @@ export function createPiMemoryCurator(options: {
             model: reply?.model ?? model.id,
             durationMs: performance.now() - started,
             ...metrics,
+            pricingSignature: modelPricingSignature(target?.cost, target?.api),
             status:
               reply?.stopReason === 'aborted' || (!reply && signal?.aborted)
                 ? 'cancelled'

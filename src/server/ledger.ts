@@ -287,11 +287,13 @@ export function createLedger({
   ownerId,
   analytics,
   telemetry,
+  pricingThresholds,
 }: {
   pool: Pool;
   ownerId: string;
   analytics?: CaptureAnalytics;
   telemetry?: UsageTelemetry;
+  pricingThresholds?(): number[];
 }) {
   const activeTurn = new AsyncLocalStorage<{ id: string; automatic: boolean }>();
   const pastLimit = new AsyncLocalStorage<true>();
@@ -835,27 +837,59 @@ export function createLedger({
     return Object.fromEntries(rows.map(({ sessionId, costUsd }) => [sessionId, costUsd]));
   }
 
-  const usageColumns = `
-    COALESCE(sum((m.details->>'inputTokens')::float8) FILTER (WHERE m.details->>'category'='agent'),0) AS input,
-    COALESCE(sum((m.details->>'outputTokens')::float8) FILTER (WHERE m.details->>'category'='agent'),0) AS output,
-    COALESCE(sum((m.details->>'cacheReadTokens')::float8) FILTER (WHERE m.details->>'category'='agent'),0) AS "cacheRead",
-    COALESCE(sum((m.details->>'cacheWriteTokens')::float8) FILTER (WHERE m.details->>'category'='agent'),0) AS "cacheWrite",
-    COALESCE(sum(COALESCE(m.cost_usd,(m.details->>'estimateUsd')::float8)) FILTER (WHERE m.details->>'category'='agent'),0)::float8 AS "agentUsd",
-    COALESCE(sum(COALESCE(m.cost_usd,(m.details->>'estimateUsd')::float8)) FILTER (WHERE m.details->>'category' IS DISTINCT FROM 'agent'),0)::float8 AS "otherUsd",
-    COALESCE(array_agg(DISTINCT m.details->>'model') FILTER (WHERE m.details->>'category'='agent' AND m.details->>'model' IS NOT NULL),'{}') AS models`;
+  function usageForecastColumns(firstParameter: number, includePlanEstimates = true) {
+    const thresholds = [...new Set(pricingThresholds?.() ?? [])];
+    const tokens = {
+      input: "(m.details->>'inputTokens')::float8",
+      output: "(m.details->>'outputTokens')::float8",
+      cacheRead: "(m.details->>'cacheReadTokens')::float8",
+      cacheWrite: "(m.details->>'cacheWriteTokens')::float8",
+      cacheWrite1h: "(m.details->>'cacheWrite1hTokens')::float8",
+    };
+    const agent = "m.details->>'category'='agent'";
+    const billed = includePlanEstimates
+      ? "COALESCE(m.cost_usd,(m.details->>'estimateUsd')::float8)"
+      : 'm.cost_usd';
+    const sum = (column: string, filter: string) =>
+      `COALESCE(sum(${column}) FILTER (WHERE ${filter}),0)::float8`;
+    const base = Object.entries(tokens).map(([key, column]) => `${sum(column, agent)} AS "${key}"`);
+    const input = [tokens.input, tokens.cacheRead, tokens.cacheWrite]
+      .map((column) => `COALESCE(${column},0)`)
+      .join('+');
+    const bands = thresholds.map((_, index) => {
+      const threshold = `$${firstParameter + index}::float8`;
+      const above = `${agent} AND ${input}>${threshold}`;
+      return `ARRAY[${threshold},${Object.values(tokens)
+        .map((column) => sum(column, above))
+        .join(',')}]`;
+    });
+    return {
+      thresholds,
+      columns: `${base.join(',')},
+        ${sum(billed, agent)} AS "agentUsd",
+        ${sum(billed, "m.details->>'category' IS DISTINCT FROM 'agent'")} AS "otherUsd",
+        COALESCE(array_agg(DISTINCT m.details->>'model') FILTER (WHERE ${agent} AND m.details->>'model' IS NOT NULL),'{}') AS models,
+        COALESCE(array_agg(DISTINCT CASE WHEN ${billed} IS NOT NULL THEN m.details->>'pricingSignature' END) FILTER (
+          WHERE ${agent} AND GREATEST(${billed},${Object.values(tokens).join(',')})>0
+        ),'{}') AS "pricingSignatures",
+        ARRAY[${bands.join(',')}]::float8[] AS "tokensAbove"`,
+    };
+  }
 
   async function sessionUsage(sessionIds: string[]): Promise<Record<string, WorkUsage>> {
     if (!sessionIds.length) return {};
+    const { columns, thresholds } = usageForecastColumns(3, false);
     const { rows } = await pool.query<WorkUsage & { sessionId: string }>(
-      `SELECT u.session_id AS "sessionId",${usageColumns}
+      `SELECT u.session_id AS "sessionId",${columns}
        FROM model_usage m JOIN turns u ON u.id=m.turn_id AND u.owner_id=m.owner_id
        WHERE m.owner_id=$1 AND u.session_id=ANY($2::uuid[]) GROUP BY u.session_id`,
-      [ownerId, [...new Set(sessionIds)]],
+      [ownerId, [...new Set(sessionIds)], ...thresholds],
     );
     return Object.fromEntries(rows.map(({ sessionId, ...usage }) => [sessionId, usage]));
   }
 
   async function workUsage() {
+    const { columns, thresholds } = usageForecastColumns(2);
     const { rows } = await pool.query<
       WorkUsage & {
         kind: WorkKind;
@@ -878,19 +912,22 @@ export function createLedger({
          FROM origins
        )
        SELECT x.kind,x.schedule_id AS "scheduleId",x.task_id AS "taskId",
-         x.task_model AS "taskModel",x.schedule_model AS "scheduleModel",${usageColumns}
+         x.task_model AS "taskModel",x.schedule_model AS "scheduleModel",${columns}
        FROM recent m JOIN sessions x ON x.session_id=m.session_id
        GROUP BY x.kind,x.schedule_id,x.task_id,x.task_model,x.schedule_model`,
-      [ownerId],
+      [ownerId, ...thresholds],
     );
     const empty = (): WorkUsage => ({
       input: 0,
       output: 0,
       cacheRead: 0,
       cacheWrite: 0,
+      cacheWrite1h: 0,
       agentUsd: 0,
       otherUsd: 0,
       models: [],
+      pricingSignatures: [],
+      tokensAbove: [],
     });
     const add = (target: WorkUsage, usage: WorkUsage) => {
       for (const key of [
@@ -902,7 +939,26 @@ export function createLedger({
         'otherUsd',
       ] as const)
         target[key] += Number(usage[key]);
+      target.cacheWrite1h = (target.cacheWrite1h ?? 0) + (usage.cacheWrite1h ?? 0);
       target.models = [...new Set([...target.models, ...usage.models])].sort();
+      target.pricingSignatures = [
+        ...new Set([...(target.pricingSignatures ?? []), ...(usage.pricingSignatures ?? [])]),
+      ];
+      const bands = (target.tokensAbove ??= []);
+      for (const [index, band] of (usage.tokensAbove ?? []).entries()) {
+        const previous = bands[index];
+        const [threshold, input, output, cacheRead, cacheWrite, cacheWrite1h] = band;
+        bands[index] = previous
+          ? [
+              threshold,
+              input + previous[1],
+              output + previous[2],
+              cacheRead + previous[3],
+              cacheWrite + previous[4],
+              cacheWrite1h + previous[5],
+            ]
+          : band;
+      }
     };
     const lanes: Record<WorkKind, WorkUsage> = {
       chat: empty(),
@@ -927,17 +983,24 @@ export function createLedger({
     return { lanes, schedules, tasks, own: [...own.values()] };
   }
 
-  async function recentTurnCost(turnId?: string) {
-    const { rows } = await pool.query<{ cost: number | null }>(
-      `SELECT COALESCE((SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY cost) FROM (
-         SELECT sum(m.cost_usd) AS cost FROM model_usage m JOIN turns u ON u.id=m.turn_id AND u.owner_id=m.owner_id
-         WHERE m.owner_id=$1 AND u.status='succeeded' GROUP BY m.turn_id
-         HAVING count(m.cost_usd)=count(*) AND sum(m.cost_usd)>0 ORDER BY max(m.created_at) DESC LIMIT 20) recent),
-         (SELECT sum(cost_usd) FROM model_usage WHERE owner_id=$1 AND turn_id=$2::uuid
-           HAVING count(cost_usd)=count(*) AND sum(cost_usd)>0))::float8 AS cost`,
-      [ownerId, turnId ?? null],
+  async function recentTurnUsage(turnId?: string) {
+    const { columns, thresholds } = usageForecastColumns(3);
+    const { rows } = await pool.query<WorkUsage & { recordedUsd: number }>(
+      `WITH recent AS (
+        SELECT m.turn_id FROM model_usage m JOIN turns u ON u.id=m.turn_id AND u.owner_id=m.owner_id
+        WHERE m.owner_id=$1 AND u.status='succeeded' GROUP BY m.turn_id
+        HAVING count(m.cost_usd)=count(*) AND sum(m.cost_usd)>0
+        ORDER BY max(m.created_at) DESC,m.turn_id DESC LIMIT 20
+      ), candidates AS (
+        SELECT turn_id FROM recent UNION ALL SELECT $2::uuid WHERE NOT EXISTS (SELECT 1 FROM recent)
+      )
+      SELECT sum(m.cost_usd)::float8 AS "recordedUsd",${columns}
+      FROM model_usage m JOIN candidates c ON c.turn_id=m.turn_id
+      WHERE m.owner_id=$1 GROUP BY m.turn_id
+      HAVING count(m.cost_usd)=count(*) AND sum(m.cost_usd)>0`,
+      [ownerId, turnId ?? null, ...thresholds],
     );
-    return rows[0]?.cost ?? null;
+    return rows;
   }
 
   async function select({
@@ -1385,7 +1448,7 @@ export function createLedger({
     sessionCosts,
     sessionUsage,
     workUsage,
-    recentTurnCost,
+    recentTurnUsage,
     withTurn: <T>(turnId: string, run: () => T, overLimit = false, automatic = true) =>
       activeTurn.run({ id: turnId, automatic }, () =>
         overLimit ? pastLimit.run(true, run) : run(),
