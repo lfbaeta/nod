@@ -94,9 +94,10 @@ export function DataSharing({
           </Item>
         </ul>
         <p>
-          When Composio Zero Data Retention is on, it limits covered execution logs. Composio still
-          processes calls and keeps metadata. Tool search queries, files and trigger events have
-          separate rules.
+          When Composio Zero Data Retention is on, it limits covered execution logs. Composio's own
+          sign-in apps need a Composio Enterprise plan for this coverage. Composio still processes
+          calls and keeps metadata. Tool search queries, files and trigger events have separate
+          rules.
         </p>
         <p>
           n8n&apos;s default services store usage data and traces in the EU. Custom trace services
