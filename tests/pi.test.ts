@@ -8679,6 +8679,13 @@ test('LM Studio servers list tool-trained chat models with their loaded context 
   const { createPiModelBackend } = await import('../src/providers/pi/models.ts');
   let ollamaVersion = false;
   const server = createServer((request, response) => {
+    if (ollamaVersion && request.url === '/api/ps') {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(
+        JSON.stringify({ models: [{ name: 'fixture/vision-chat', context_length: 4096 }] }),
+      );
+      return;
+    }
     if (ollamaVersion && (request.url === '/api/version' || request.url === '/api/show')) {
       response.writeHead(200, { 'content-type': 'application/json' });
       response.end(
@@ -12208,4 +12215,152 @@ test('preparation reserves model cost before dispatch and blocks a request witho
     assert.equal(settlements.length, priced ? 1 : 0);
     if (!priced) assert.match(result.errorMessage!, /Synthetic preparation price is unknown/);
   }
+});
+
+test('Ollama discovery uses the loaded context for model registration and completion limits', async (t) => {
+  const { createServer } = await import('node:http');
+  const calls: string[] = [];
+  const bodies: Array<{ model: string; max_tokens: number }> = [];
+  let mode: 'loaded' | 'changed' | 'unavailable' | 'malformed' | 'generic' = 'loaded';
+  const models = {
+    'fixture/loaded:latest': {
+      capabilities: ['tools'],
+      model_info: { 'llama.context_length': 131072 },
+      parameters: 'num_ctx 65536',
+    },
+    'fixture/cold:latest': {
+      capabilities: ['tools'],
+      model_info: { 'llama.context_length': 131072 },
+      parameters: 'num_ctx 65536',
+    },
+    'fixture/training-bound:latest': {
+      capabilities: ['tools'],
+      model_info: { 'llama.context_length': 32768 },
+      parameters: 'num_ctx 65536',
+    },
+    'fixture/missing-details:latest': {},
+    'fixture/no-tools:latest': {
+      capabilities: ['completion'],
+      model_info: { 'llama.context_length': 131072 },
+    },
+  };
+  const server = createServer((request, response) => {
+    const parts: Buffer[] = [];
+    request.on('data', (part) => parts.push(part));
+    request.on('end', () => {
+      calls.push(request.url!);
+      assert.equal(request.headers.authorization, 'Bearer synthetic-model-server-key');
+      const json = (status: number, value: unknown) => {
+        response.writeHead(status, { 'content-type': 'application/json' });
+        response.end(JSON.stringify(value));
+      };
+      if (request.url === '/v1/models')
+        return json(200, { data: Object.keys(models).map((id) => ({ id })) });
+      if (request.url === '/api/version')
+        return json(mode === 'generic' ? 404 : 200, mode === 'generic' ? {} : { version: '0.0.0' });
+      if (request.url === '/api/show')
+        return json(
+          200,
+          models[JSON.parse(Buffer.concat(parts).toString()).model as keyof typeof models],
+        );
+      if (request.url === '/api/ps') {
+        if (mode === 'unavailable') return json(503, { error: 'Synthetic metadata unavailable.' });
+        if (mode === 'malformed')
+          return json(200, {
+            models: [
+              { name: 'fixture/loaded:latest', context_length: -1 },
+              { name: 'fixture/missing-details:latest', context_length: '16384' },
+            ],
+          });
+        return json(200, {
+          models: [
+            {
+              name: 'fixture/loaded:latest',
+              model: 'fixture/loaded:latest',
+              context_length: mode === 'changed' ? 24576 : 32768,
+            },
+            { model: 'fixture/training-bound:latest', context_length: 131072 },
+            { name: 'fixture/missing-details:latest', context_length: 16384 },
+            { name: 'fixture/loaded:latest-copy', context_length: 1024 },
+            { name: 'fixture/no-tools:latest', context_length: 65536 },
+            { name: 'fixture/loaded:latest', context_length: null },
+          ],
+        });
+      }
+      if (request.url === '/v1/chat/completions') {
+        bodies.push(JSON.parse(Buffer.concat(parts).toString()));
+        response.writeHead(200, { 'content-type': 'text/event-stream' });
+        const chunk = (value: object) => `data: ${JSON.stringify(value)}\n\n`;
+        return response.end(
+          chunk({
+            id: 'synthetic-loaded-context',
+            choices: [{ index: 0, delta: { role: 'assistant', content: 'Synthetic answer.' } }],
+          }) +
+            chunk({
+              id: 'synthetic-loaded-context',
+              choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+              usage: { prompt_tokens: 20, completion_tokens: 3, total_tokens: 23 },
+            }) +
+            'data: [DONE]\n\n',
+        );
+      }
+      json(404, {});
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
+  const { port } = server.address() as import('node:net').AddressInfo;
+  const credential = {
+    type: 'endpoint' as const,
+    url: `http://127.0.0.1:${port}/v1`,
+    key: 'synthetic-model-server-key',
+  };
+  const backend = createPiModelBackend();
+  const definitions = await backend.catalog('compatible', 'api_key', credential);
+  const context = (items: typeof definitions) =>
+    items.map(({ choice }) => [choice.id, choice.contextWindow]);
+  assert.deepEqual(context(definitions), [
+    ['fixture/loaded:latest', 32768],
+    ['fixture/cold:latest', 65536],
+    ['fixture/training-bound:latest', 32768],
+    ['fixture/missing-details:latest', 16384],
+  ]);
+  assert.equal(calls.filter((path) => path === '/api/ps').length, 1);
+  const { runtime, model } = await createPiModelRuntime({
+    provider: 'compatible',
+    method: 'api_key',
+    definition: definitions[0],
+    effort: 'off',
+    read: async () => credential,
+  });
+  assert.equal(model.contextWindow, 32768);
+  assert.equal(model.maxTokens, 8192);
+  const answer = await runtime.completeSimple(
+    model,
+    { messages: [{ role: 'user', content: 'Finish the synthetic task.', timestamp: 1 }] },
+    {},
+  );
+  assert.equal(answer.stopReason, 'stop');
+  assert.equal(bodies.length, 1);
+  assert.equal(bodies[0].max_tokens, 8192);
+  assert.equal(bodies[0].model, 'fixture/loaded:latest');
+  mode = 'changed';
+  assert.equal(
+    (await backend.catalog('compatible', 'api_key', credential))[0].choice.contextWindow,
+    24576,
+  );
+  for (const failure of ['unavailable', 'malformed'] as const) {
+    mode = failure;
+    const fallback = await backend.catalog('compatible', 'api_key', credential);
+    assert.equal(fallback[0].choice.contextWindow, 65536);
+    assert.equal(
+      fallback.find(({ choice }) => choice.id === 'fixture/missing-details:latest')!.choice
+        .contextWindow,
+      128000,
+    );
+  }
+  mode = 'generic';
+  calls.length = 0;
+  await backend.catalog('compatible', 'api_key', credential);
+  assert.ok(!calls.includes('/api/ps'));
 });
