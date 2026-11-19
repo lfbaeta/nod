@@ -1094,6 +1094,7 @@ test(
       covered:
         "const cover=document.createElement('button');cover.style.cssText='position:fixed;inset:0;z-index:1000';cover.textContent='Cover';cover.onclick=()=>fetch('/covered',{method:'POST'});document.body.append(cover)",
       changedOnPress: "primary.addEventListener('mousedown',()=>primary.form.action='/other')",
+      changedOnRelease: "primary.addEventListener('pointerup',()=>primary.form.action='/other')",
       removedOnRelease: "primary.addEventListener('mouseup',()=>primary.remove())",
     };
     const server = createHttpServer(async (request, response) => {
@@ -1112,6 +1113,17 @@ test(
       response.setHeader('content-type', 'text/html');
       if (request.url === '/done') {
         response.end('<h1>Selected</h1>');
+        return;
+      }
+      if (request.url?.startsWith('/initial-')) {
+        const attributes: Record<string, string> = {
+          '/initial-disabled': 'disabled',
+          '/initial-hidden': 'hidden',
+          '/initial-inert': 'inert',
+        };
+        response.end(
+          `<button id="primary" ${attributes[request.url] ?? ''}>Continue</button><p id="plain">Plain text</p>`,
+        );
         return;
       }
       if (request.url === '/scrolled' || request.url === '/scrolled-xy') {
@@ -1204,6 +1216,25 @@ test(
       { label: 'Another misleading label', selector: '#alternate' },
     ];
     try {
+      for (const path of [
+        '/initial-disabled',
+        '/initial-hidden',
+        '/initial-inert',
+        '/initial-plain',
+      ]) {
+        await act({ action: 'open', url: origin + path });
+        await assert.rejects(
+          client.signInMethods!('fixture', origin, [
+            { label: 'Ignored', selector: path === '/initial-plain' ? '#plain' : '#primary' },
+          ]),
+          (error: unknown) => {
+            assert.ok(error instanceof BrowserActionError);
+            assert.equal(error.code, 'browser_sign_in_choice');
+            assert.equal(error.signInGuard, 'choice_ineligible');
+            return true;
+          },
+        );
+      }
       await act({ action: 'open', url: origin });
       await assert.rejects(
         client.signInMethods!('fixture', origin, [
@@ -1255,6 +1286,13 @@ test(
             document: stale.document,
             methodId: stale.methods[0]!.id,
           }),
+          (error: unknown) => {
+            if (change === 'changedOnRelease')
+              assert.equal(Object(error).signInGuard, 'click_guard_changed');
+            if (change === 'removedOnRelease')
+              assert.equal(Object(error).signInGuard, 'click_not_received');
+            return true;
+          },
         );
         assert.deepEqual(received, ['/selected']);
       }

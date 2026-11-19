@@ -12962,34 +12962,49 @@ test(
     const scope = { turnId, sessionId, runId: childRun, parentRunId: mainRun, callId };
     const { createBrowserWorkerFixture } = await import('./browser-fixture.ts');
     const { withFailureLog } = await import('../src/ports/failure-log.ts');
+    let pickerGuard = 'control_covered';
+    const refusePicker = async () => {
+      throw Object.assign(new Error(privateText), {
+        signInGuard: pickerGuard,
+        cause: privateText,
+      });
+    };
     const bridge = await createBrowserWorkerFixture({
       computer: fakeComputer({
-        signInMethods: async () => {
-          throw Object.assign(new Error(privateText), {
-            signInGuard: 'control_covered',
-            cause: privateText,
-          });
-        },
+        signInMethods: refusePicker,
+        selectSignInMethod: refusePicker,
       }),
     });
     try {
-      await assert.rejects(
-        withFailureLog(
-          (event, error, context) =>
-            failureJournal.record('failure', { event, error, context }, scope),
-          () =>
-            bridge.client('/synthetic/diagnostic-picker').signInMethods!(
-              'task',
-              'https://example.test',
-              [{ label: privateValues[0], selector: `[data-account="${privateValues[1]}"]` }],
-            ),
-        ),
-        (error: unknown) => {
-          assert.equal(Object(error).signInGuard, 'control_covered');
-          assert.ok(privateValues.every((value) => !Object(error).message.includes(value)));
-          return true;
-        },
-      );
+      const client = bridge.client('/synthetic/diagnostic-picker');
+      for (const [method, guard] of [
+        ['signInMethods', 'control_covered'],
+        ['signInMethods', 'control_changed'],
+        ['selectSignInMethod', 'control_changed'],
+      ]) {
+        pickerGuard = guard;
+        await assert.rejects(
+          withFailureLog(
+            (event, error, context) =>
+              failureJournal.record('failure', { event, error, context }, scope),
+            () =>
+              method === 'signInMethods'
+                ? client.signInMethods!('task', 'https://example.test', [
+                    { label: privateValues[0], selector: `[data-account="${privateValues[1]}"]` },
+                  ])
+                : client.selectSignInMethod!('task', {
+                    origin: 'https://example.test',
+                    document: 'synthetic-document',
+                    methodId: randomUUID(),
+                  }),
+          ),
+          (error: unknown) => {
+            assert.equal(Object(error).signInGuard, guard);
+            assert.ok(privateValues.every((value) => !Object(error).message.includes(value)));
+            return true;
+          },
+        );
+      }
     } finally {
       await bridge.close();
     }
@@ -13215,7 +13230,7 @@ test(
     assert.equal(report.logs[0].data.tool, 'apps');
     assert.equal(report.logs[0].data.input.query, 'Find the failed workflow');
     assert.equal(report.logs[1].data.output.statusCode, 503);
-    assert.equal(report.failures.length, 6);
+    assert.equal(report.failures.length, 8);
     const mailFailures = report.failures.filter(
       (row: any) => row.data.event === 'mail_check_failed',
     );
@@ -13236,6 +13251,17 @@ test(
     );
     const pickerFailure = report.failures.find(
       (row: any) => row.data.context?.signInGuard === 'control_covered',
+    );
+    const pickerFailures = report.failures.filter((row: any) => row.data.context?.signInGuard);
+    assert.deepEqual(
+      pickerFailures
+        .map((row: any) => [row.data.context.method, row.data.context.signInGuard, row.count])
+        .sort(),
+      [
+        ['selectSignInMethod', 'control_changed', 1],
+        ['signInMethods', 'control_changed', 1],
+        ['signInMethods', 'control_covered', 1],
+      ],
     );
     assert.equal(pickerFailure.data.error.code, 'unavailable');
     assert.equal(pickerFailure.data.context.method, 'signInMethods');

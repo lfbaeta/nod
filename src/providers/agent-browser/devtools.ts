@@ -1154,6 +1154,7 @@ export async function openDevtools(url: string, targetId: string, signal?: Abort
       const name = `nodSignIn${crypto.randomUUID().replaceAll('-', '')}`;
       let pressed = false;
       let outcome: boolean | undefined;
+      const guardRefused = () => outcome === false;
       let timer: ReturnType<typeof setTimeout> | undefined;
       let context: number | undefined;
       try {
@@ -1259,7 +1260,7 @@ export async function openDevtools(url: string, targetId: string, signal?: Abort
           { type: 'mousePressed', ...point, button: 'left', buttons: 1, clickCount: 1 },
           page,
         );
-        if (outcome === false)
+        if (guardRefused())
           throw signInFailure('click_guard_changed', 'The sign-in control changed.');
         await check();
         await send(
@@ -1269,11 +1270,14 @@ export async function openDevtools(url: string, targetId: string, signal?: Abort
         );
         pressed = false;
         timer = setTimeout(() => resolveClick(false), 5000);
-        if (!(await clicked))
+        if (!(await clicked)) {
+          if (guardRefused())
+            throw signInFailure('click_guard_changed', 'The sign-in control changed.');
           throw signInFailure(
             'click_not_received',
             'The sign-in control did not receive the click.',
           );
+        }
       } finally {
         if (pressed)
           await send(
