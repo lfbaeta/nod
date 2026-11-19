@@ -107,11 +107,12 @@ export function DataSharing({
         </p>
         <p>
           n8n&apos;s default services store usage data and traces in the EU. Custom trace services
-          use their operator&apos;s storage and retention rules. With usage sharing on, n8n&apos;s
-          default signup service sends a consented onboarding email to Customer.io in the US. The
-          signup also includes fixed About you choices only if you shared them successfully. Turning
-          a switch off stops new sends for that setting. A send already in progress can finish. Ask
-          n8n to delete data sent to its services. For a custom trace service, contact its operator.
+          use their operator&apos;s storage and retention rules. With usage sharing on and your
+          consent to updates, n8n&apos;s default signup service sends your email address and signup
+          data to Customer.io in the US. The signup also includes fixed About you choices only if
+          you shared them successfully. Turning a switch off stops new sends for that setting. A
+          send already in progress can finish. Ask n8n to delete data sent to its services. For a
+          custom trace service, contact its operator.
         </p>
         <div className="data-sharing-actions">
           <a href={detailsUrl} target="_blank" rel="noreferrer">
