@@ -9346,6 +9346,122 @@ test(
 );
 
 test(
+  'renames a custom MCP server for the owner without changing its saved connection',
+  { skip: !process.env.TEST_DATABASE_URL },
+  async (t) => {
+    const schema = `test_mcp_name_${randomUUID().replaceAll('-', '')}`;
+    const admin = new pg.Pool({ connectionString: process.env.TEST_DATABASE_URL });
+    await admin.query(`CREATE SCHEMA ${schema}`);
+    const pool = new pg.Pool({
+      connectionString: process.env.TEST_DATABASE_URL,
+      options: `-c search_path=${schema}`,
+    });
+    const app = Fastify();
+    const foreign = Fastify();
+    t.after(async () => {
+      await app.close();
+      await foreign.close();
+      await pool.end();
+      await admin.query(`DROP SCHEMA ${schema} CASCADE`);
+      await admin.end();
+    });
+    const ownerId = 'fixture-mcp-owner';
+    const key = randomBytes(32);
+    const keyStore = { id: 'fixture', configured: true, getKey: async () => key };
+    const unused = async () => {
+      throw new Error('Renaming must not call the MCP server or its authorization service.');
+    };
+    const transport = {
+      ...createDiscoveredTransport(unused),
+      listTools: t.mock.fn(async () => ({
+        tools: [{ name: 'list_records', inputSchema: { type: 'object' } }],
+      })),
+    };
+    const options = {
+      ownerId,
+      baseUrl: 'http://localhost:4310',
+      grantVault: await createAppGrantVault(pool, { ownerId, keyStore }),
+      transport,
+      oauth: { begin: unused, finish: unused, refresh: unused },
+    };
+    const connections = await createDiscoveredConnections(pool, options);
+    connections.registerRoutes(app);
+    const foreignConnections = await createDiscoveredConnections(pool, {
+      ...options,
+      ownerId: 'foreign-owner',
+    });
+    foreignConnections.registerRoutes(foreign);
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/apps/mcp',
+      payload: { name: 'Fixture Research', endpoint: 'https://93.184.216.34/mcp', auth: 'bearer' },
+    });
+    assert.equal(created.statusCode, 200, created.body);
+    const seed = async (owner: string) =>
+      (
+        await pool.query(
+          `INSERT INTO discovered_connections (id,owner_id,service,name,account_name,paths)
+         SELECT gen_random_uuid(),$2,service,name,'Fixture account',paths
+         FROM discovered_connection_proposals WHERE id=$1
+         RETURNING id,service`,
+          [created.json().id, owner],
+        )
+      ).rows[0];
+    const first = await seed(ownerId);
+    const before = (await connections.list())[0];
+    assert.equal(before.canRename, true);
+    await options.grantVault.put(first.id, 'synthetic-mcp-token');
+    const priorServers = await connections.servers();
+    assert.equal(priorServers.length, 1);
+    assert.equal(priorServers[0].name, 'Fixture Research');
+    const rename = (server: typeof app, service: string, payload: Record<string, unknown>) =>
+      server.inject({ method: 'PATCH', url: `/api/apps/mcp/${service}`, payload });
+
+    const response = await rename(app, first.service, { name: '  Project Library MCP  ' });
+    assert.equal(response.statusCode, 200, response.body);
+    assert.deepEqual(response.json(), { name: 'Project Library MCP' });
+    assert.deepEqual(await connections.servers(), [
+      { ...priorServers[0], name: 'Project Library MCP' },
+    ]);
+    for (const name of ['Project Library MCP', 'Fixture Research']) {
+      const { accounts } = await connections.search(name, first.id);
+      assert.equal(accounts[0].paths[0].kind, 'mcp');
+      assert.deepEqual((accounts[0].paths[0] as { toolNames?: string[] }).toolNames, [
+        'list_records',
+      ]);
+    }
+    assert.equal(transport.listTools.mock.callCount(), 1);
+    assert.equal((await rename(app, first.service, { name: ' ' })).statusCode, 400);
+    assert.equal(
+      (await rename(app, first.service, { name: 'Valid', endpoint: 'https://example.test/mcp' }))
+        .statusCode,
+      400,
+    );
+    assert.equal((await rename(app, 'notion', { name: 'Project Library' })).statusCode, 404);
+    assert.equal((await rename(foreign, first.service, { name: 'Foreign' })).statusCode, 404);
+    const sibling = await seed(ownerId);
+    await seed('foreign-owner');
+    const apps = await connections.list();
+    assert.deepEqual(
+      apps.map(({ connectionId }) => connectionId).sort(),
+      [first.id, sibling.id].sort(),
+    );
+    assert.deepEqual(
+      apps.find(({ connectionId }) => connectionId === first.id),
+      {
+        ...before,
+        name: 'Project Library MCP',
+      },
+    );
+    assert.equal(
+      apps.find(({ connectionId }) => connectionId === sibling.id)?.name,
+      'Project Library MCP',
+    );
+    assert.equal((await foreignConnections.list())[0].name, 'Fixture Research');
+  },
+);
+
+test(
   'manual MCP setup accepts an owner-typed private address and binds it to that origin',
   { skip: !process.env.TEST_DATABASE_URL },
   async (t) => {

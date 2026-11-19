@@ -219,6 +219,7 @@ export interface PasswordManagerLogin {
 }
 export interface Connection {
   canReconnect?: boolean;
+  canRename?: boolean;
   reconnectRequired?: boolean;
   disconnectPending?: boolean;
   slug: string;

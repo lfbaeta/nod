@@ -33,6 +33,7 @@ import {
 } from './analytics-connections.ts';
 
 const envName = appEnvironmentNameSchema;
+const manualMcpService = /^mcp-[0-9a-f]{24}$/;
 
 const proposalSchema = z.object({
   service: z
@@ -57,6 +58,7 @@ type AccountRow = {
   paths: AccessPath[];
   reconnect_required: boolean;
 };
+type NamedAccountRow = AccountRow & { display_name: string | null };
 type ProposalRow = {
   id: string;
   owner_id: string;
@@ -258,6 +260,10 @@ export async function createDiscoveredConnections(
       account_name text NOT NULL,paths jsonb NOT NULL,
       created_at timestamptz NOT NULL DEFAULT now()
     );
+    CREATE TABLE IF NOT EXISTS discovered_mcp_names (
+      owner_id text NOT NULL,service text NOT NULL,name text NOT NULL,
+      PRIMARY KEY (owner_id,service)
+    );
     CREATE TABLE IF NOT EXISTS discovered_connection_proposals (
       id uuid PRIMARY KEY,owner_id text NOT NULL,service text NOT NULL,name text NOT NULL,
       paths jsonb NOT NULL,connection_id uuid,turn_id uuid,
@@ -292,16 +298,23 @@ export async function createDiscoveredConnections(
     if (!result.rows[0]) throw error('This connected account is unavailable.', 404);
     return result.rows[0];
   }
+  const namedAccounts = `SELECT account.*, names.name AS display_name
+    FROM discovered_connections account LEFT JOIN discovered_mcp_names names USING (owner_id,service)`;
   async function list(client?: PoolClient): Promise<Connection[]> {
     const rows = (
-      await (client ?? pool).query<AccountRow>(
-        'SELECT * FROM discovered_connections WHERE owner_id=$1 ORDER BY created_at',
+      await (client ?? pool).query<NamedAccountRow>(
+        `${namedAccounts} WHERE account.owner_id=$1 ORDER BY account.created_at`,
         [owner],
       )
     ).rows;
     return rows.map((row) => ({
       slug: row.service,
-      name: row.name,
+      name: row.display_name ?? row.name,
+      ...(manualMcpService.test(row.service) &&
+      !apps.has(row.service) &&
+      row.paths.some((path) => path.kind === 'mcp')
+        ? { canRename: true }
+        : {}),
       status: row.reconnect_required ? 'disconnected' : 'connected',
       ...(row.reconnect_required ? { canReconnect: true } : {}),
       connectionId: row.id,
@@ -1422,8 +1435,8 @@ export async function createDiscoveredConnections(
     const score = (text: string) =>
       words.filter((word) => text.toLowerCase().includes(word)).length;
     const rows = (
-      await pool.query<AccountRow>(
-        'SELECT * FROM discovered_connections WHERE owner_id=$1 AND ($2::uuid IS NULL OR id=$2)',
+      await pool.query<NamedAccountRow>(
+        `${namedAccounts} WHERE account.owner_id=$1 AND ($2::uuid IS NULL OR account.id=$2)`,
         [owner, connectionId ?? null],
       )
     ).rows;
@@ -1450,7 +1463,8 @@ export async function createDiscoveredConnections(
               };
             try {
               const { tools: available, instructions } = await catalog(row, path, signal);
-              const accountMatch = score(row.service) || score(row.name);
+              const accountMatch =
+                score(row.service) || score(row.name) || score(row.display_name ?? '');
               const matching = available
                 .map((tool) => ({ tool, score: score(`${tool.name} ${tool.description ?? ''}`) }))
                 .filter((entry) => entry.score)
@@ -1485,6 +1499,7 @@ export async function createDiscoveredConnections(
         return {
           connectionId: row.id,
           service: row.service,
+          ...(row.display_name ? { name: row.display_name } : {}),
           accountName: row.account_name,
           ...(app ? { description: app.description, documentation: app.contract.source } : {}),
           paths,
@@ -1495,8 +1510,9 @@ export async function createDiscoveredConnections(
   }
   async function servers(): Promise<ConnectedMcpServer[]> {
     const rows = (
-      await pool.query<AccountRow>(
-        'SELECT * FROM discovered_connections WHERE owner_id=$1 AND NOT reconnect_required ORDER BY created_at',
+      await pool.query<NamedAccountRow>(
+        `${namedAccounts} WHERE account.owner_id=$1 AND NOT account.reconnect_required
+         ORDER BY account.created_at`,
         [owner],
       )
     ).rows;
@@ -1510,7 +1526,7 @@ export async function createDiscoveredConnections(
                     connectionId: row.id,
                     pathId: path.id,
                     service: row.service,
-                    name: row.name,
+                    name: row.display_name ?? row.name,
                     accountName: row.account_name,
                     ...(instructions ? { instructions } : {}),
                     tools,
@@ -1720,6 +1736,26 @@ export async function createDiscoveredConnections(
     return rows.rows.flatMap((row) => row.paths.map(connection));
   }
   function registerRoutes(app: FastifyInstance) {
+    app.patch<{ Params: { service: string } }>('/api/apps/mcp/:service', async (request) => {
+      const { service } = request.params;
+      if (!manualMcpService.test(service) || apps.has(service))
+        throw error('This custom MCP server is unavailable.', 404);
+      const input = z.object({ name: proposalSchema.shape.name }).strict().safeParse(request.body);
+      if (!input.success) throw error('To rename this server, enter a name of 1 to 80 characters.');
+
+      const result = await pool.query<{ name: string }>(
+        `INSERT INTO discovered_mcp_names (owner_id,service,name)
+         SELECT $1,$2,$3 WHERE EXISTS (
+           SELECT 1 FROM discovered_connections
+           WHERE owner_id=$1 AND service=$2 AND paths @> '[{"kind":"mcp"}]'::jsonb
+         )
+         ON CONFLICT (owner_id,service) DO UPDATE SET name=EXCLUDED.name RETURNING name`,
+        [owner, service, input.data.name],
+      );
+      if (!result.rows[0]) throw error('This custom MCP server is unavailable.', 404);
+      options.refresh?.();
+      return result.rows[0];
+    });
     app.post('/api/apps/mcp', async (request, reply) => {
       const parsed = z
         .object({

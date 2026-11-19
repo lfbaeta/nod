@@ -3095,10 +3095,17 @@ export async function createIntegrations(pool: Pool, options: IntegrationOptions
               !connection.browserState ||
               ['saved', 'needs_sign_in', 'pending'].includes(connection.browserState),
           )
-          .map(({ accountId: _accountId, browserUrl: _browserUrl, ...connection }) => ({
-            ...connection,
-            ...(connection.browserState ? { browserAccess: 'browser_session' } : {}),
-          }));
+          .map(
+            ({
+              accountId: _accountId,
+              browserUrl: _browserUrl,
+              canRename: _canRename,
+              ...connection
+            }) => ({
+              ...connection,
+              ...(connection.browserState ? { browserAccess: 'browser_session' } : {}),
+            }),
+          );
         const logins = connections.filter((connection) => connection.savedLogin);
         const matching = site
           ? logins.filter((connection) => {
