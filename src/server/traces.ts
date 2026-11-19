@@ -11,7 +11,6 @@ import {
 import { createTextRedactor, withoutSecretKeys } from './redaction.ts';
 
 const cacheLimit = 4096;
-const conversationGap = 30 * 60_000;
 const identifiers = new Set(['turn_id', 'run_id', 'parent_run_id']);
 const uuids = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
 const home = homedir();
@@ -33,6 +32,7 @@ export function createModelTraces(deliver?: ModelTraceDelivery, appVersion?: str
   const version = analyticsVersion.safeParse(appVersion).data;
   let enabled = false;
   let userId: string | undefined;
+  let conversationKey: Uint8Array = randomBytes(32);
   const turns = new AsyncLocalStorage<{
     sessionId: string;
     turnId: string;
@@ -44,7 +44,6 @@ export function createModelTraces(deliver?: ModelTraceDelivery, appVersion?: str
   let loaded: { profile: string; text: (value: string) => string } | undefined;
   let seen = -1;
   const cache = new Map<string, string>();
-  const conversations = new Map<string, { id: string; last: number }>();
   let stopping = new AbortController();
   const salt = randomBytes(32);
   const pseudonym = (value: string) =>
@@ -53,17 +52,11 @@ export function createModelTraces(deliver?: ModelTraceDelivery, appVersion?: str
       .digest('hex')
       .slice(0, 32);
 
-  function conversation(session: string, start: number, end = start) {
-    let current = conversations.get(session);
-    if (!current || start - current.last > conversationGap) {
-      for (const [key, value] of conversations)
-        if (start - value.last > conversationGap) conversations.delete(key);
-      current = { id: randomBytes(16).toString('hex'), last: start };
-      conversations.set(session, current);
-    }
-    current.last = Math.max(current.last, end);
-    return current.id;
-  }
+  const conversation = (session: string) =>
+    createHmac('sha256', conversationKey)
+      .update(`nod:trace:conversation:v1:${session}`)
+      .digest('hex')
+      .slice(0, 32);
 
   async function scrubber() {
     const current = await profile();
@@ -103,7 +96,7 @@ export function createModelTraces(deliver?: ModelTraceDelivery, appVersion?: str
           typeof item === 'string' ? text(item) : item,
         ),
       );
-    if (!enabled || !deliver || !identity || signal.aborted) return;
+    if (!enabled || !deliver || signal.aborted) return;
     await deliver(
       {
         ...trace,
@@ -122,7 +115,7 @@ export function createModelTraces(deliver?: ModelTraceDelivery, appVersion?: str
             ),
           ),
           ...ids,
-          user_id: identity,
+          ...(identity ? { user_id: identity } : {}),
           ...(trace.usage.costUsd === null ? {} : { cost_usd: trace.usage.costUsd }),
           ...(version ? { app_version: version } : {}),
         },
@@ -137,17 +130,24 @@ export function createModelTraces(deliver?: ModelTraceDelivery, appVersion?: str
       secrets?: string[];
       profile?: () => Promise<PersonalProfile>;
       userId?: string;
+      conversationKey?: Uint8Array;
     }) {
-      if (options.userId !== undefined)
-        userId = /^local:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(
-          options.userId,
-        )
-          ? options.userId
-          : undefined;
+      if (options.conversationKey) {
+        if (options.conversationKey.byteLength !== 32)
+          throw new Error('The trace conversation key must contain 32 bytes.');
+        conversationKey = Buffer.from(options.conversationKey);
+      }
+      if ('userId' in options)
+        userId =
+          typeof options.userId === 'string' &&
+          /^local:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(
+            options.userId,
+          )
+            ? options.userId
+            : undefined;
       if (options.enabled !== undefined) enabled = options.enabled;
       if (!enabled) {
         cache.clear();
-        conversations.clear();
         stopping.abort();
         stopping = new AbortController();
       }
@@ -162,30 +162,26 @@ export function createModelTraces(deliver?: ModelTraceDelivery, appVersion?: str
       }
     },
     available: deliver !== undefined,
-    active: () => enabled && deliver !== undefined && userId !== undefined,
+    active: () => enabled && deliver !== undefined,
     withTurn<T>(
       context: { sessionId: string; turnId: string },
       run: (ids: { thread_id: string; turn_id: string }) => T,
     ): T {
       const ids = {
-        thread_id: conversation(context.sessionId, Date.now()),
+        thread_id: conversation(context.sessionId),
         turn_id: pseudonym(context.turnId),
       };
       return turns.run({ ...context, ids }, () => run(ids));
     },
     record(trace: ModelTrace) {
-      if (!enabled || !deliver || !userId) return;
+      if (!enabled || !deliver) return;
       const turn = turns.getStore();
       const metadata = {
         ...trace.metadata,
         ...(turn ? { session_id: turn.sessionId, turn_id: turn.turnId } : {}),
       };
       const turnId = String(metadata.turn_id ?? trace.id);
-      const thread = conversation(
-        String(metadata.session_id ?? turnId),
-        Date.parse(trace.startedAt),
-        Date.parse(trace.endedAt),
-      );
+      const thread = conversation(String(metadata.session_id ?? turnId));
       void send(
         { ...trace, metadata },
         turn?.ids ?? { thread_id: thread, turn_id: pseudonym(turnId) },

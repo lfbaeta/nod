@@ -4097,6 +4097,36 @@ test('each model call yields one chat-format trace without image data', async ()
   for (const [error, expected, phase = 'response'] of [
     ['Your credit balance is too low. (HTTP 400)', 'billing'],
     ['Insufficient credits. (HTTP 402)', 'billing'],
+    ['You need a positive balance. (HTTP 402)', 'billing'],
+    ['You need a positive balance to use this model.', 'billing'],
+    ['401 The API key is invalid or expired.', 'auth'],
+    ['The provider refused the credential. (HTTP 401)', 'auth'],
+    ['Incorrect API key provided.', 'auth'],
+    ['The access token has expired.', 'auth'],
+    ['API key not valid. Please pass a valid API key.', 'auth'],
+    ['The model is under high demand. (HTTP 503)', 'provider_unavailable'],
+    ['Upstream said HTTP 401. The proxy refused the call. (HTTP 503)', 'provider_unavailable'],
+    ['An earlier call returned HTTP 402. This call failed. (HTTP 429)', 'rate_limit'],
+    ['Quota exceeded. (HTTP 402)', 'billing'],
+    ['503 Service unavailable.', 'provider_unavailable'],
+    ['The model is currently experiencing high demand.', 'provider_unavailable'],
+    ['overloaded_error: The service is overloaded.', 'provider_unavailable'],
+    ['terminated', 'connection'],
+    ['TypeError: terminated (HTTP 200) [request phase: stream]', 'connection'],
+    [
+      'terminated (HTTP 200) (transport cause: UND_ERR_SOCKET) [request phase: stream]',
+      'connection',
+    ],
+    ['The response stream terminated before completion.', 'connection'],
+    ['The connection has been terminated.', 'connection'],
+    ['The account was terminated.', 'unknown'],
+    ['The subscription was terminated.', 'unknown'],
+    ['You have hit your rate limit.', 'rate_limit'],
+    ['The subscription rate limit was reached.', 'rate_limit'],
+    ['You have hit your usage limit for tokens per minute.', 'rate_limit'],
+    ["You've hit your tokens per minute limit.", 'rate_limit'],
+    ["You've hit your usage limit (Plus plan). Try again later.", 'quota'],
+    ['usage_limit_reached: ChatGPT subscription usage limit reached.', 'quota'],
     ['Prepayment credits are depleted.', 'billing'],
     ['429 {"error":{"details":[{"quotaValue":"0"}]}}', 'quota'],
     ['Quota exceeded. Check billing details. (HTTP 429)', 'quota'],
@@ -4117,7 +4147,9 @@ test('each model call yields one chat-format trace without image data', async ()
       'prepare',
     ],
     ['The selected model connection is unavailable.', 'model_config', 'prepare'],
-    ['The provider gave no reason. (HTTP 402)', 'unknown'],
+    ['The provider gave no reason. (HTTP 402)', 'billing'],
+    ['The request contains 401 tokens.', 'unknown'],
+    ['The request contains 402 tokens.', 'unknown'],
     ['Synthetic provider error.', 'unknown'],
   ] as const) {
     const failed = piModelTrace(
@@ -4130,6 +4162,22 @@ test('each model call yields one chat-format trace without image data', async ()
     );
     assert.equal(failed.metadata.error_type, expected, error);
     assert.equal(failed.error, error);
+  }
+  for (const errorMessage of [
+    undefined,
+    'Request aborted by the owner.',
+    'terminated (HTTP 503)',
+  ]) {
+    const cancelled = piModelTrace(
+      {
+        ...calls[0],
+        message: { ...calls[0].message, stopReason: 'aborted', errorMessage },
+      },
+      {},
+    );
+    assert.equal(cancelled.metadata.error_type, 'aborted');
+    assert.equal(cancelled.metadata.stop_reason, 'aborted');
+    assert.equal(cancelled.error, errorMessage ?? 'aborted');
   }
   const { untrustedBlock } = await import('../src/shared/untrusted.ts');
   const result = (toolCallId: string, toolName: string, text: string) => ({
@@ -11725,7 +11773,7 @@ test('preparation reserves model cost before dispatch and blocks a request witho
     assert.equal(traced.length, 1);
     assert.equal(
       piModelTrace(traced[0], {}).metadata.error_type,
-      priced ? 'unknown' : 'model_config',
+      priced ? 'provider_unavailable' : 'model_config',
     );
     assert.equal(settlements.length, priced ? 1 : 0);
     if (!priced) assert.match(result.errorMessage!, /Synthetic preparation price is unknown/);

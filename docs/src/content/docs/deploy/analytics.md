@@ -97,7 +97,7 @@ Server events captured within a turn add a random analytics `run_id`, `work_type
 
 Server events within a turn also carry pseudonymous `thread_id` and `turn_id` fields. These IDs match [conversation traces](/trust/conversation-traces/#ids-errors-and-cost). A turn is one unit of Nod's work, such as a request, schedule fire, observer batch, or continuation. It is not a user-message count. The analytics ID (`user_id`) equals the PostHog `distinct_id`. Join on that ID, `thread_id`, and `turn_id` to connect model calls to the turn's source and task classification. The analytics `run_id` remains separate from the trace's agent `run_id`.
 
-Release marker: **Unreleased (after v0.9.0)**. Replace this marker with the first shipping version during release preparation. Earlier events omit `thread_id` and `turn_id`. Keep those events as missing-ID coverage in reports.
+First desktop release: **v0.9.1**. Earlier events omit `thread_id` and `turn_id`. Keep those events as missing-ID coverage in reports. For a saved session, conversation IDs remain stable across idle gaps and restarts when the private conversation key loads. If key loading fails, the fallback IDs change on restart. Earlier trace releases used temporary conversation IDs. Keep those trace release groups separate for cost-per-conversation reports. Work without a saved session gets a new auxiliary ID for each job.
 
 Owner-authored messages in Tasks are owner-requested background work. Agent-created child tasks can also retain the original owner request, so `owner_requested=true` doesn't establish a new owner message. Work category and owner request are separate dimensions; autonomous event and schedule starts aren't owner-requested.
 
