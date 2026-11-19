@@ -179,11 +179,12 @@ test('confirmation repairs rejected wording against the unchanged saved action',
     const communication = createCommunication({
       pool: { query: async () => ({ rows: [] }) } as unknown as pg.Pool,
       ownerId: 'synthetic-owner',
-      review: async (_instructions, input) => {
+      review: async (_instructions, input, _signal, _question, responseSchema) => {
         const request = input as Record<string, any>;
         assert.deepEqual(request.data.args, proposal.args);
         assert.equal(request.data.action, proposal.action);
         if (request.purpose === 'confirmation_review') {
+          assert.equal(responseSchema, undefined);
           checks++;
           assert.equal(request.repair, undefined);
           if (mode === 'invalid_review' && checks === 1) return { valid: 'true' };
@@ -196,6 +197,10 @@ test('confirmation repairs rejected wording against the unchanged saved action',
                 reason: 'The question or label describes sending instead of searching.',
               };
         }
+        assert.equal(responseSchema?.type, 'object');
+        assert.equal(responseSchema?.$schema, undefined);
+        assert.deepEqual(responseSchema?.required, ['text', 'action']);
+        assert.equal(responseSchema?.additionalProperties, false);
         drafts++;
         request.data.args.query = 'A mutated draft must not change the saved action';
         if (drafts === 1) {
@@ -216,6 +221,92 @@ test('confirmation repairs rejected wording against the unchanged saved action',
     assert.equal(checks, mode === 'format' ? 1 : 2);
     assert.deepEqual(proposal.args, { query: 'Synthetic receipts' });
   }
+});
+
+test('invalid confirmation replies keep a bounded reason and the failed attempt state', async (t) => {
+  for (const kind of [
+    'action',
+    'text',
+    'fields',
+    'review then action',
+    'long action',
+    'multiline action',
+    'long text',
+    'empty text',
+  ] as const)
+    await t.test(kind, async () => {
+      let drafts = 0;
+      let reviews = 0;
+      const repairs: Array<{ issue?: unknown }> = [];
+      const communication = createCommunication({
+        pool: { query: async () => ({ rows: [] }) } as unknown as pg.Pool,
+        ownerId: 'synthetic-owner',
+        review: async (_instructions, input) => {
+          const request = input as Record<string, any>;
+          if (request.purpose === 'confirmation_review') {
+            reviews++;
+            return { valid: false, reason: 'The synthetic target is incorrect.' };
+          }
+          drafts++;
+          if (request.repair) repairs.push(structuredClone(request.repair));
+          if (kind === 'text') return { action: 'Send email' };
+          if (kind === 'long action')
+            return { text: 'Send the synthetic email?', action: 'A'.repeat(65) };
+          if (kind === 'multiline action')
+            return { text: 'Send the synthetic email?', action: 'Send\nemail' };
+          if (kind === 'long text') return { text: 'A'.repeat(12_001), action: 'Send email' };
+          if (kind === 'empty text') return { text: ' ', action: 'Send email' };
+          if (kind === 'fields')
+            return {
+              text: 'Send the synthetic email?',
+              action: 'Send email',
+              PRIVATE_REPLY_KEY: 'PRIVATE_REPLY_VALUE',
+            };
+          if (kind === 'review then action' && drafts === 1)
+            return { text: 'Send the synthetic email?', action: 'Send email' };
+          return { text: 'Send the synthetic email?' };
+        },
+      });
+      await assert.rejects(
+        communication.describe({
+          turn: { threadId: 'synthetic-thread', turnId: 'synthetic-turn' },
+          action: 'GMAIL_SEND_EMAIL',
+          args: { recipient_email: 'format@example.test', body: 'Synthetic message.' },
+        }),
+        (error: Error & { notRun?: boolean }) => {
+          assert.equal(drafts, 2);
+          assert.equal(reviews, kind === 'review then action' ? 1 : 0);
+          assert.doesNotMatch(error.message, /PRIVATE_REPLY_KEY|PRIVATE_REPLY_VALUE/);
+          assert.doesNotMatch(JSON.stringify(repairs), /PRIVATE_REPLY_KEY|PRIVATE_REPLY_VALUE/);
+          assert.ok(repairs.length > 0);
+          assert.ok(
+            repairs.every((repair) => typeof repair.issue === 'string' && repair.issue.trim()),
+          );
+          assert.equal(error.notRun, true);
+          return true;
+        },
+      );
+    });
+});
+
+test('an ordinary message format failure makes no claim about an action', async () => {
+  let drafts = 0;
+  const communication = createCommunication({
+    pool: { query: async () => ({ rows: [] }) } as unknown as pg.Pool,
+    ownerId: 'synthetic-owner',
+    review: async () => {
+      drafts++;
+      return { action: 'Synthetic invalid message' };
+    },
+  });
+  await assert.rejects(
+    communication.present(null, { kind: 'question', question: 'Which synthetic item?' }),
+    (error: Error & { notRun?: boolean }) => {
+      assert.equal(drafts, 2);
+      assert.equal(error.notRun, undefined);
+      return true;
+    },
+  );
 });
 
 test('local file confirmation reviews the visible path and rejects a different path', async (t) => {

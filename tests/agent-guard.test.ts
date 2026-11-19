@@ -11,7 +11,12 @@ import type { Pool } from 'pg';
 import { Compile } from 'typebox/compile';
 import { unified } from 'unified';
 import remarkParse from 'remark-parse';
-import { appConfirmation, ContextLimitError, ModelRequestError } from '../src/ports/agent.ts';
+import {
+  appConfirmation,
+  ContextLimitError,
+  ModelRequestError,
+  ToolFailureError,
+} from '../src/ports/agent.ts';
 import type {
   Agent,
   AgentEvent,
@@ -3749,7 +3754,8 @@ test('repeated input, sign-in and action review failures stop while source text 
           if (options.shouldStop([{ name, error: reason }])) break;
         }
       }),
-      /failed five times/,
+      (error: unknown) =>
+        error instanceof ToolFailureError && /failed five times/.test(error.message),
     );
     assert.equal(calls, 5);
   }

@@ -169,7 +169,9 @@ test(
     let checkCost: number | undefined;
     const connectionLabels: unknown[] = [];
     let confirmationValid = true;
-    let confirmationModel: ((input: Record<string, unknown>) => unknown) | undefined;
+    let confirmationModel:
+      | ((input: Record<string, unknown>, responseSchema?: Record<string, unknown>) => unknown)
+      | undefined;
     let httpReview: ((input: Record<string, unknown>) => Promise<unknown>) | undefined;
     let heldReview:
       | {
@@ -259,7 +261,7 @@ test(
     const fixtureCurator: MemoryCurator = {
       id: 'fixture',
       configured: true,
-      curate: async ({ task, input, instructions }, _signal, report) => {
+      curate: async ({ task, input, instructions, responseSchema }, _signal, report) => {
         if (task === 'review' && Object(input).action?.name === 'GOOGLECALENDAR_EVENTS_GET')
           await calendarReadReview?.();
         if (String(Object(input).action?.name).startsWith('GOOGLECALENDAR_'))
@@ -287,7 +289,7 @@ test(
           'purpose' in input &&
           ['confirmation', 'confirmation_review'].includes(String(input.purpose))
         )
-          return confirmationModel(input as Record<string, unknown>);
+          return confirmationModel(input as Record<string, unknown>, responseSchema);
         if (task === 'review' && 'reply' in input && 'question' in input && 'args' in input) {
           assert.match(instructions, /"probability"/);
           repeatChecks.push(input);
@@ -1609,6 +1611,74 @@ test(
           const again = await click(clickCard.id);
           assert.equal(again.statusCode, 409, again.body);
           assert.equal(sends(), 1);
+        },
+      );
+
+      await t.test(
+        'a failed question format keeps earlier receipts and dispatches no new Gmail action',
+        async (t) => {
+          const completed = (
+            await pool.query(
+              "SELECT id,status,result,args FROM approvals WHERE action='GMAIL_SEND_EMAIL' AND status='completed' ORDER BY id",
+            )
+          ).rows;
+          assert.ok(completed.length);
+          for (const kind of ['send', 'fetch', 'review then format'])
+            await t.test(kind, async () => {
+              let drafts = 0;
+              let reviews = 0;
+              const action = kind === 'fetch' ? 'GMAIL_FETCH_EMAILS' : 'GMAIL_SEND_EMAIL';
+              const before = executedApps.filter((value) => value === action).length;
+              const text = `Check the synthetic Gmail format failure ${randomUUID()}.`;
+              confirmationModel = (input) => {
+                if (input.purpose === 'confirmation_review') {
+                  reviews++;
+                  return { valid: false, reason: 'The synthetic target is incorrect.' };
+                }
+                drafts++;
+                return kind === 'review then format' && drafts === 1
+                  ? syntheticConfirmation(input)
+                  : { text: 'Run the synthetic Gmail action?' };
+              };
+              try {
+                plans.set(text, {
+                  tool: 'apps',
+                  action,
+                  args:
+                    kind === 'fetch'
+                      ? { query: `is:unread synthetic-${randomUUID()}` }
+                      : {
+                          recipient_email: 'format-failure@example.test',
+                          subject: `Synthetic failed question ${randomUUID()}`,
+                          body: 'Synthetic content that must not be sent.',
+                        },
+                });
+                const submitted = await request('POST', '/api/messages', { text });
+                assert.equal(submitted.statusCode, 200, submitted.body);
+                const turn = submitted.json().turnId;
+                await waitFor(turn, 'failed');
+                assert.deepEqual(await approvalsFor(turn), []);
+                assert.equal(executedApps.filter((value) => value === action).length, before);
+                assert.equal(drafts, 2);
+                assert.equal(reviews, kind === 'review then format' ? 1 : 0);
+                assert.deepEqual(
+                  (
+                    await pool.query(
+                      'SELECT id,status,result,args FROM approvals WHERE id=ANY($1::uuid[]) ORDER BY id',
+                      [completed.map((row) => row.id)],
+                    )
+                  ).rows,
+                  completed,
+                );
+                const error = (await pool.query('SELECT error FROM turns WHERE id=$1', [turn]))
+                  .rows[0].error;
+                assert.ok(error.trim());
+              } finally {
+                confirmationModel = undefined;
+                plans.delete(text);
+                await request('POST', '/api/thread/stop');
+              }
+            });
         },
       );
 
@@ -2990,6 +3060,69 @@ test(
           confirmationValid = true;
         }
       });
+
+      await t.test(
+        'a rule-save confirmation keeps its schema through repair and saves only after approval',
+        async () => {
+          const previous = (
+            await pool.query('SELECT rules FROM preferences WHERE owner_id=$1', [ownerId])
+          ).rows[0].rules;
+          const rules = 'Ask me before a synthetic development workflow changes a shared service.';
+          let drafts = 0;
+          let reviews = 0;
+          confirmationModel = (input, schema) => {
+            if (input.purpose === 'confirmation_review') {
+              reviews++;
+              assert.equal(schema, undefined);
+              return { valid: true };
+            }
+            drafts++;
+            assert.deepEqual(schema?.required, ['text', 'action']);
+            assert.equal(schema?.additionalProperties, false);
+            return drafts === 1
+              ? { text: 'Save the synthetic development rule?' }
+              : { text: `Save this rule: ${rules}`, action: 'Save rule' };
+          };
+          try {
+            const turn = await propose('notification_preferences_update', { rules });
+            const [approval] = await approvalsFor(turn);
+            assert.equal(approval.status, 'pending');
+            assert.equal(drafts, 2);
+            assert.equal(reviews, 1);
+            assert.equal(
+              (await pool.query('SELECT rules FROM preferences WHERE owner_id=$1', [ownerId]))
+                .rows[0].rules,
+              previous,
+            );
+            const answer = {
+              text: 'Save rule',
+              replyToMessageId: approval.confirmation_message_id,
+              clientMessageId: randomUUID(),
+              approvalAnswer: { approvalId: approval.id, approved: true },
+            };
+            const accepted = await request('POST', '/api/messages', answer);
+            assert.equal(accepted.statusCode, 200, accepted.body);
+            await waitFor(accepted.json().turnId, 'succeeded');
+            assert.equal(
+              (await pool.query('SELECT rules FROM preferences WHERE owner_id=$1', [ownerId]))
+                .rows[0].rules,
+              rules,
+            );
+            assert.equal((await approvalsFor(turn))[0].status, 'completed');
+            const duplicate = await request('POST', '/api/messages', {
+              ...answer,
+              clientMessageId: randomUUID(),
+            });
+            assert.equal(duplicate.statusCode, 409, duplicate.body);
+          } finally {
+            confirmationModel = undefined;
+            await pool.query('UPDATE preferences SET rules=$2 WHERE owner_id=$1', [
+              ownerId,
+              previous,
+            ]);
+          }
+        },
+      );
 
       await t.test('Gmail deletion confirmation names the verified email', async () => {
         const writes = integrationFixture.writes.length;
