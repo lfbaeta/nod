@@ -129,9 +129,31 @@ ZDR covers eligible tool calls and proxy requests. Files, trigger events, and to
 
 ZDR applies to new covered calls and does not delete older logs. Calls through Composio Managed OAuth apps require Enterprise for ZDR coverage. See [Composio's ZDR coverage](https://docs.composio.dev/docs/security/zero-data-retention) for the full scope.
 
+The default connection service's policy applies to desktop and self-hosted Nod. ZDR coverage follows that service's project and plan, not where Nod runs. A custom connection service has its own settings. Nod cannot check those settings from your conversation.
+
 ZDR does not limit the permissions you grant to an app. Nod's [trust check](/trust/approvals/) checks each app action against your words. If you use another connection service, its operator controls the Composio project and retention settings.
 
 For the other controls, see [How Nod protects app connections](/connect/apps/#how-nod-protects-app-connections).
+
+## Built-in web search and retention
+
+Nod runs built-in web search through its Pi web extension in the Nod server, outside the workspace. With the default search configuration, it uses Exa. A selected ChatGPT plan can use OpenAI search instead. A server operator can configure another supported search provider.
+
+The search provider receives the query and search options. Without an Exa key, the extension uses Exa's public MCP service. With an Exa key, it uses the Exa API. Fetching a result page also contacts that website. These web requests do not pass through Nod's managed app connection service or Composio.
+
+Search data can be kept in several places:
+
+| Place                        | What can be kept                                                                        | Retention                                                                                                                                               |
+| ---------------------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Your Nod runtime             | Search queries and results in saved session transcripts and turn logs                   | No automatic expiry. See [local storage](/trust/security-review/#what-nod-stores).                                                                      |
+| Local page cache             | Fetched page content                                                                    | One-hour cache validity. Cleanup runs when the extension uses the cache, so expired files can remain until then. Saved session and turn records remain. |
+| Usage analytics              | Tool names, timings and bounded technical values                                        | Query text and results stay out. See [Analytics](/deploy/analytics/).                                                                                   |
+| Conversation traces, when on | Queries and results included in model requests and replies, after best-effort redaction | The default trace service keeps traces for 14 days. Custom services set their own rules.                                                                |
+| Search provider and websites | Queries, search options, requests and returned content                                  | Their own terms apply. Composio ZDR does not cover them.                                                                                                |
+
+Exa offers [Zero Data Retention](https://exa.ai/docs/admin/security/zero-data-retention) on Enterprise plans, enabled per team. Nod does not enable or verify Exa ZDR. Use of Exa's public MCP service does not establish that your searches have ZDR coverage. Nod does not promise a fixed storage period or region for that service. For an Exa API key or another search provider, check the account's current agreement and settings.
+
+These rules apply to desktop and self-hosted Nod. Self-hosting keeps Nod's local records on your server; it does not make outside search requests local.
 
 ## Feedback
 
