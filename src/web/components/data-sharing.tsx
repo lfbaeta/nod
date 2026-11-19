@@ -85,7 +85,8 @@ export function DataSharing({
               review conversations and app results. A custom trace service sends them to its
               operator. Nod removes personal details it recognizes. Traces can still identify you.
               Traces include a stable analytics ID whenever trace sharing is on, even if usage
-              sharing is off. It links traces across conversations and to usage data you shared.
+              sharing is off. It links traces across conversations. It can also link them to stored
+              usage data, About you choices, and an email you gave with consent to updates.
               n8n&apos;s default service keeps them for 14 days and never uses them to train AI
               models.
             </Item>
