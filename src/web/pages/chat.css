@@ -1280,13 +1280,6 @@ button.message-work:is(:hover, :focus-visible) {
 .artifact-drawer[hidden] {
   display: none;
 }
-.artifact-drawer-title select {
-  max-width: 100%;
-  font: inherit;
-  color: inherit;
-  background: transparent;
-  border: 0;
-}
 .inline-name {
   font: inherit;
   color: inherit;

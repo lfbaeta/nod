@@ -76,6 +76,8 @@ When a visual makes an answer easier to understand, nod can include images, maps
 
 Each visual appears as a single preview. Hover over it or focus it with the keyboard to reveal its expand control, which stays visible on touch screens. Select that control to inspect it in the file panel. A self-contained card can be the whole answer. Nod adds text for useful context or caveats instead of announcing the card or repeating its contents. Supplied sources and freshness details remain available inside the card. Nod can capture a page it visits and include the screenshot with its answer; select the image to inspect it in the file panel.
 
+When the file panel has more than one file, select the filename at the top to switch files. You can also use the previous and next buttons.
+
 When nod suggests apps to connect, it lists up to three below its message, each with a **Connect** button. Connect starts sign-in right there in the chat, the same as the email step in onboarding. If the app list fails to load, select **Try again** below the message. If catalog access is unavailable, select **Open Apps** to see the available connections. In Telegram and WhatsApp, nod names the apps to connect in [Apps](/connect/apps/) instead.
 
 Location cards pair a numbered overview with a list of places. Select a marker or place, then **Open in Maps** to open its marked location in OpenStreetMap. Select **Map** to load the selected place's street map in chat, or **Overview** to return to relative positions. Maps load only when you choose. With a marker or place focused, use the arrow keys to change selection. A place's **Source** link opens its supplied reference separately.
