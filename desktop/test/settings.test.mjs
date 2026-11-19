@@ -26,7 +26,7 @@ import { execFile } from 'node:child_process';
 import { createServer as createHttpsServer } from 'node:https';
 import { createServer } from 'node:net';
 import { homedir, tmpdir } from 'node:os';
-import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { getCACertificates, setDefaultCACertificates } from 'node:tls';
 import { promisify } from 'node:util';
@@ -10504,4 +10504,48 @@ test('a closed startup helper timer cannot stop its replacement', async (t) => {
   children[1].emit('message', { ready: true });
   assert.equal((await second).status, 'ready');
   client.close();
+});
+
+test('startup report helper keeps its own environment secrets through initialize and snapshot', async () => {
+  const secret = 'synthetic-collector-private-token';
+  const port = new EventEmitter();
+  const replies = [];
+  port.postMessage = (value) => replies.push(value);
+  let configuration;
+  const source = (await readFile(new URL('../main/feedback.mjs', import.meta.url), 'utf8'))
+    .replace(/^import[\s\S]*?;\n/gm, '')
+    .replace(/^const \{[^\n]+\} = await import\('[^']+'\);\n/gm, '');
+  await runInNewContext(`(async () => { ${source} })()`, {
+    process: { env: { NOD_FEEDBACK_TOKEN: secret }, parentPort: port },
+    register() {},
+    trustSystemCertificates() {},
+    basename,
+    homedir: () => '/home/synthetic',
+    hostname: () => 'synthetic-device',
+    userInfo: () => ({ username: 'synthetic' }),
+    environmentSecrets: (environment) => [environment.NOD_FEEDBACK_TOKEN],
+    createFeedbackDelivery: () => ({}),
+    createFeedbackRedactor: ({ secrets }) => ({
+      text: (value) =>
+        secrets.reduce((result, secret) => result.replaceAll(secret, '[redacted]'), value),
+    }),
+    createStartupFeedback: (options) => {
+      configuration = options;
+      return { context: async () => ({ ready: true }) };
+    },
+  });
+  const message = async (id, action, input) => {
+    port.emit('message', { data: { id, action, input } });
+    for (let attempt = 0; attempt < 100 && !replies.some((reply) => reply.id === id); attempt++)
+      await new Promise((resolve) => setImmediate(resolve));
+    const reply = replies.find((reply) => reply.id === id);
+    assert.ok(reply);
+    return reply;
+  };
+  await message(1, 'initialize', { secrets: ['synthetic-runtime-secret'] });
+  assert.deepEqual(Array.from(configuration.secrets), ['synthetic-runtime-secret', secret]);
+  await message(2, 'snapshot', { status: { phase: 'error' }, secrets: [] });
+  assert.deepEqual(Array.from(configuration.secrets), [secret]);
+  assert.equal((await message(3, 'context')).value.ready, true);
+  assert.ok(!JSON.stringify(replies).includes(secret));
 });

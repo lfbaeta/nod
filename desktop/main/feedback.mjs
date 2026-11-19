@@ -8,6 +8,8 @@ register();
 const { createFeedbackDelivery } = await import('../../src/server/composition.ts');
 const { createStartupFeedback } = await import('../../src/server/startup-feedback.ts');
 const { createFeedbackRedactor } = await import('../../src/server/feedback-redaction.ts');
+const { environmentSecrets } = await import('../../src/server/redaction.ts');
+const helperSecrets = environmentSecrets(process.env);
 let feedback;
 let configuration;
 process.parentPort.on('message', async ({ data }) => {
@@ -17,13 +19,14 @@ process.parentPort.on('message', async ({ data }) => {
       if (feedback) throw new Error('The report helper is already open.');
       configuration = {
         ...input,
+        secrets: [...input.secrets, ...helperSecrets],
         names: [userInfo().username, basename(homedir()), hostname()].filter(Boolean),
         delivery: createFeedbackDelivery(process.env),
       };
       feedback = createStartupFeedback(configuration);
     } else if (action === 'snapshot' && feedback) {
       configuration.status = input.status;
-      configuration.secrets = input.secrets;
+      configuration.secrets = [...input.secrets, ...helperSecrets];
     } else if (!feedback || !['context', 'review', 'send', 'status'].includes(action)) {
       throw new Error('This report action is unavailable.');
     }
@@ -33,7 +36,7 @@ process.parentPort.on('message', async ({ data }) => {
     process.parentPort.postMessage({ id, value });
   } catch (error) {
     const redact = createFeedbackRedactor({
-      secrets: configuration?.secrets ?? [],
+      secrets: configuration?.secrets ?? helperSecrets,
       profile: { names: configuration?.names ?? [] },
     });
     process.parentPort.postMessage({
