@@ -72,8 +72,9 @@ export function DataSharing({
           {usage !== undefined && (
             <Item icon={ChartColumn} title="Usage data" state={state(usage)}>
               On by default. Feature use, task types, failures, fixed About you choices and survey
-              answers. Survey answers are sent as entered. Chat messages and memory stay out. Your
-              email needs separate consent.
+              answers. Survey answers are sent as entered and may contain personal details. Chat
+              messages and memory stay out. Usage data has no screen recordings or session replays.
+              Your email needs separate consent.
             </Item>
           )}
           {traces !== undefined && (
