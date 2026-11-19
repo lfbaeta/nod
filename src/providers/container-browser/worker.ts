@@ -79,7 +79,7 @@ async function dispatch(
       return image?.toString('base64') ?? null;
     }
     case 'currentPage':
-      return computer.currentPage(request.threadId, request.input);
+      return computer.currentPage(request.threadId, request.input, signal);
     case 'signInMethods':
       if (!computer.signInMethods) throw new Error('Sign-in choices are not available.');
       return computer.signInMethods(request.threadId, request.origin, request.methods, signal);
