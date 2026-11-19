@@ -4268,6 +4268,14 @@ test('eval budgets count cancelled request estimates and retain unknown spend', 
   assert.equal(usage.costUsd, null);
   assert.equal(usage.modelCalls, 2);
 
+  const tinyCancellation = {
+    ...cancelled,
+    details: { ...cancelled.details, budgetEstimateUsd: 0.00000025 },
+  };
+  const rounded = createSpend();
+  rounded.add(await read(tinyCancellation, tinyCancellation));
+  assert.equal(rounded.blocked(0.000002), true);
+
   const meteredRetry = await read({
     cost_usd: 0.01,
     details: { ...cancelled.details, inputTokens: 20, budgetEstimateUsd: 0.5 },

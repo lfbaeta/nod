@@ -49,6 +49,10 @@ export function estimateAnthropicRequestUsd(
   }
 }
 
+export function sumBudgetCosts(prices: number[]) {
+  return prices.reduce((total, price) => total + units(price), 0) / scale;
+}
+
 export function createSpend() {
   let knownUnits = 0;
   let unpriced = false;

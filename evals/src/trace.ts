@@ -8,7 +8,7 @@ import type { Visit } from './world/sites.ts';
 import { browserSessionId } from '../../src/providers/agent-browser/index.ts';
 import type { UsageDetails } from '../../src/shared/execution.ts';
 import { redactedInput } from './capture.ts';
-import { validCost } from './spend.ts';
+import { sumBudgetCosts, validCost } from './spend.ts';
 
 export interface ToolCall {
   id?: string;
@@ -270,12 +270,16 @@ export async function collectUsage(pool: Stack['pool']): Promise<Run['usage']> {
           budget: validCost(estimate) ? Math.max(estimate, cost_usd ?? 0) : null,
         };
   });
-  const totalCost = (prices: (number | null)[]) =>
-    prices.length && prices.every(validCost)
-      ? prices.reduce((total, price) => total + price, 0)
+  const recorded = costs.map((row) => row.recorded);
+  const costUsd =
+    recorded.length && recorded.every(validCost)
+      ? recorded.reduce((total, price) => total + price, 0)
       : null;
-  const costUsd = totalCost(costs.map((row) => row.recorded));
-  const budgetCostUsd = costUsd === null ? totalCost(costs.map((row) => row.budget)) : null;
+  const estimates = costs.map((row) => row.budget);
+  const budgetCostUsd =
+    costUsd === null && estimates.length && estimates.every(validCost)
+      ? sumBudgetCosts(estimates)
+      : null;
   return {
     tokens,
     modelCalls: usage.length,
