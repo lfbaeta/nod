@@ -156,6 +156,7 @@ export function calendarEventTarget(result: unknown, expectedId: string) {
     return;
   const event = object(outer.data) ?? outer;
   if (event.id !== expectedId || event.status === 'cancelled') return;
+  if (typeof event.etag !== 'string' || !event.etag.trim() || event.etag.length > 1024) return;
   if (event.summary != null && typeof event.summary !== 'string') return;
   const start = object(event.start);
   const allDay = start?.dateTime === undefined;
@@ -272,7 +273,7 @@ export function calendarEventTarget(result: unknown, expectedId: string) {
   return {
     target,
     revision: createHash('sha256')
-      .update(JSON.stringify([event.summary ?? null, event.recurrence ?? []]))
+      .update(JSON.stringify([event.etag, event.summary ?? null, event.recurrence ?? []]))
       .digest('hex'),
   };
 }

@@ -2204,7 +2204,7 @@ async function initializeApplication(
     const target = calendarEventTarget(observed, eventId);
     if (!target)
       throw new Error(
-        'Nod cannot verify the Calendar event and its dates, so it did not propose or make a change.',
+        'Nod cannot verify the Calendar event, its dates and its version, so it did not propose or make a change.',
       );
     await ledger.action(turn.turnId, readAction, verdict.basis);
     signal?.throwIfAborted();

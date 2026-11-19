@@ -989,9 +989,29 @@ test('payment presentation repairs a missing action label', async () => {
   assert.equal(calls, 2);
 });
 
+test('Calendar approval binds the private event version before projecting its target', () => {
+  const event = {
+    id: 'synthetic-event',
+    etag: '"synthetic-private-version-1"',
+    summary: 'Synthetic plan',
+    start: { dateTime: '2030-11-24T09:00:00Z' },
+    end: { dateTime: '2030-11-24T10:00:00Z' },
+    attendeesOmitted: true,
+  };
+  const before = calendarEventTarget(event, event.id);
+  const after = calendarEventTarget({ ...event, etag: '"synthetic-private-version-2"' }, event.id);
+  assert.ok(before && after);
+  assert.deepEqual(before.target, after.target);
+  assert.notEqual(before.revision, after.revision);
+  assert.equal(JSON.stringify(before).includes('synthetic-private-version'), false);
+  for (const etag of [undefined, null, 17, '', ' ', 'x'.repeat(1025)])
+    assert.equal(calendarEventTarget({ ...event, etag }, event.id), undefined);
+});
+
 test('Calendar local times use the event zones instead of the host zone', () => {
   const event = {
     id: 'synthetic-event',
+    etag: '"synthetic-calendar-version-1"',
     summary: 'Synthetic travel plan',
     start: { dateTime: '2030-11-24T10:00:00', timeZone: 'Europe/Paris' },
     end: { dateTime: '2030-11-24T05:00:00', timeZone: 'America/New_York' },
@@ -1024,7 +1044,12 @@ test('Calendar local times refuse missing zones, clock gaps and repeated clock t
   ]) {
     assert.equal(
       calendarEventTarget(
-        { id: 'synthetic-event', start, end: { dateTime: '2030-11-25T10:00:00Z' } },
+        {
+          id: 'synthetic-event',
+          etag: '"synthetic-calendar-version-1"',
+          start,
+          end: { dateTime: '2030-11-25T10:00:00Z' },
+        },
         'synthetic-event',
       ),
       undefined,
@@ -1033,6 +1058,7 @@ test('Calendar local times refuse missing zones, clock gaps and repeated clock t
   const target = calendarEventTarget(
     {
       id: 'synthetic-event',
+      etag: '"synthetic-calendar-version-1"',
       start: { dateTime: '2030-10-27T02:30:00+02:00', timeZone: 'Europe/Paris' },
       end: { dateTime: '2030-10-27T02:30:00+01:00', timeZone: 'Europe/Paris' },
     },
@@ -1045,6 +1071,7 @@ test('Calendar local times refuse missing zones, clock gaps and repeated clock t
 test('Calendar approval keeps the end and occurrence zones when offsets are present', () => {
   const event = {
     id: 'synthetic-event',
+    etag: '"synthetic-calendar-version-1"',
     start: { dateTime: '2030-11-24T10:00:00+01:00', timeZone: 'Europe/Paris' },
     end: { dateTime: '2030-11-24T05:00:00-05:00', timeZone: 'America/New_York' },
     recurringEventId: 'synthetic-series',

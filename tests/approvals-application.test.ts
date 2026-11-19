@@ -218,6 +218,7 @@ test(
     let calendarExecute: IntegrationSession['execute'] | undefined;
     let calendarSession: (() => Promise<void>) | undefined;
     const calendarWording: Array<Record<string, any>> = [];
+    const calendarTrust: Array<Record<string, any>> = [];
     let changeRulesOnDraftRead = false;
     let changedRulesDuringDraftRead = 0;
     let repeatAfterConfirm: FixtureCall | FixtureCall[] | undefined;
@@ -256,6 +257,8 @@ test(
       id: 'fixture',
       configured: true,
       curate: async ({ task, input, instructions }, _signal, report) => {
+        if (String(Object(input).action?.name).startsWith('GOOGLECALENDAR_'))
+          calendarTrust.push(structuredClone(input));
         if (task === 'review' && heldReview?.purpose === Object(input).purpose && heldReview) {
           const held = heldReview;
           held.entered(_signal);
@@ -6528,6 +6531,7 @@ test(
         );
         const event = {
           id: 'abc123def456_20301124T090000Z',
+          etag: '"synthetic-calendar-version-1"',
           summary: 'Synthetic planning',
           start: { dateTime: '2030-11-24T10:00:00+01:00', timeZone: 'Europe/Paris' },
           end: { dateTime: '2030-11-24T10:30:00+01:00', timeZone: 'Europe/Paris' },
@@ -6651,13 +6655,16 @@ test(
             assert.equal('verifiedCalendarRevision' in item.data.details, false);
             assert.equal('verifiedInstructionRevision' in item.data.details, false);
           }
-          assert.deepEqual(calls, [
-            {
-              action: 'GOOGLECALENDAR_EVENTS_GET',
-              args: { calendar_id: 'primary', event_id: event.id, max_attendees: 1 },
-              accountId,
-            },
-          ]);
+          assert.deepEqual(
+            [...calls],
+            [
+              {
+                action: 'GOOGLECALENDAR_EVENTS_GET',
+                args: { calendar_id: 'primary', event_id: event.id, max_attendees: 1 },
+                accountId,
+              },
+            ],
+          );
           assert.equal(
             calls.some((call) => call.action === 'GOOGLECALENDAR_PATCH_EVENT'),
             false,
@@ -6762,7 +6769,7 @@ test(
             ],
           ] as const)
             await t.test(`Calendar metadata keeps the meaning of an ${name}`, async () => {
-              observed = { data: structuredClone(data), successful: true };
+              observed = { data: { etag: event.etag, ...structuredClone(data) }, successful: true };
               try {
                 const { turn: id, approval: card } = await submit();
                 assert.equal(card.status, 'pending');
@@ -6778,6 +6785,10 @@ test(
 
           for (const [name, data] of [
             ['another event', { ...event, id: 'abc999' }],
+            ['missing event version', { ...event, etag: undefined }],
+            ['empty event version', { ...event, etag: '' }],
+            ['invalid event version', { ...event, etag: 17 }],
+            ['oversize event version', { ...event, etag: 'x'.repeat(1025) }],
             ['missing start', { ...event, start: {} }],
             ['missing end', { ...event, end: {} }],
             ['invalid title', { ...event, summary: 17 }],
@@ -6881,7 +6892,11 @@ test(
                   ).rows[0];
                   assert.ok(askedQuestion);
                   observed = {
-                    data: { ...structuredClone(event), summary: 'Synthetic revised planning' },
+                    data: {
+                      ...structuredClone(event),
+                      etag: '"synthetic-calendar-repeat-version"',
+                      summary: 'Synthetic revised planning',
+                    },
                     successful: true,
                   };
                   asked.add(reply);
@@ -6995,6 +7010,147 @@ test(
               assert.equal(writeCount(), writes + 1);
             },
           );
+
+          for (const changed of [false, true])
+            await t.test(
+              changed
+                ? 'Calendar approval preserves a guest added while consent waits'
+                : 'Calendar approval applies the checked guest list exactly once',
+              async () => {
+                const execute = calendarExecute;
+                const writes = writeCount();
+                const trustStart = calendarTrust.length;
+                const ledgerWrites = async () =>
+                  Number(
+                    (
+                      await pool.query(
+                        "SELECT count(*) FROM app_actions WHERE action='GOOGLECALENDAR_PATCH_EVENT'",
+                      )
+                    ).rows[0].count,
+                  );
+                const recorded = await ledgerWrites();
+                const current = {
+                  ...structuredClone(event),
+                  attendees: [
+                    { email: 'owner@example.test', self: true, responseStatus: 'accepted' },
+                    { email: 'existing-guest@example.test', responseStatus: 'accepted' },
+                  ],
+                };
+                const added = { email: 'later-guest@example.test', responseStatus: 'needsAction' };
+                const input = {
+                  connectionId,
+                  calendar_id: 'primary',
+                  event_id: event.id,
+                  attendees: [
+                    ...structuredClone(current.attendees),
+                    { email: 'requested-guest@example.test', responseStatus: 'needsAction' },
+                  ],
+                  send_updates: 'all',
+                };
+                calendarExecute = async (action, args, account, signal) => {
+                  signal?.throwIfAborted();
+                  calls.push({ action, args: structuredClone(args), accountId: account });
+                  if (action === 'GOOGLECALENDAR_EVENTS_GET') {
+                    assert.equal(args.max_attendees, 1);
+                    return {
+                      data: {
+                        ...structuredClone(current),
+                        attendees: [current.attendees[0]],
+                        attendeesOmitted: true,
+                      },
+                      successful: true,
+                    };
+                  }
+                  assert.equal(action, 'GOOGLECALENDAR_PATCH_EVENT');
+                  assert.deepEqual(args.attendees, input.attendees);
+                  current.attendees = structuredClone(args.attendees as typeof current.attendees);
+                  current.etag = '"synthetic-calendar-written"';
+                  return { data: structuredClone(current), successful: true };
+                };
+                try {
+                  const { turn: id, approval: card } = await submit(
+                    'GOOGLECALENDAR_PATCH_EVENT',
+                    input,
+                  );
+                  assert.equal(card.status, 'pending');
+                  assert.deepEqual(card.args, input);
+                  assert.equal(writeCount(), writes);
+                  const shown = JSON.stringify(calendarWording.slice(-2));
+                  assert.equal(shown.includes('synthetic-calendar-version'), false);
+                  assert.equal(shown.includes('attendeesOmitted'), false);
+                  if (changed) {
+                    current.attendees.push(added);
+                    current.etag = '"synthetic-calendar-guest-added"';
+                  }
+                  const accepted = await accept(card);
+                  assert.equal(accepted.statusCode, 200, accepted.body);
+                  await waitFor(accepted.json().turnId, 'waiting|succeeded|failed');
+                  const saved = (await approvalsFor(id))[0];
+                  assert.equal((await approvalsFor(id)).length, 1);
+                  assert.equal(await ledgerWrites(), recorded + (changed ? 0 : 1));
+                  const trust = calendarTrust.slice(trustStart);
+                  assert.ok(
+                    trust.some((input) => input.action.name === 'GOOGLECALENDAR_PATCH_EVENT'),
+                  );
+                  assert.ok(
+                    trust.some((input) => input.action.name === 'GOOGLECALENDAR_EVENTS_GET'),
+                  );
+                  const checked = JSON.stringify(trust);
+                  assert.equal(checked.includes('synthetic-calendar-version'), false);
+                  assert.equal(checked.includes('synthetic-calendar-guest-added'), false);
+                  assert.equal(checked.includes(added.email), false);
+                  const messages = await pool.query(
+                    'SELECT text FROM messages WHERE turn_id = ANY($1::uuid[])',
+                    [[id, accepted.json().turnId]],
+                  );
+                  assert.equal(JSON.stringify(messages.rows).includes(added.email), false);
+                  assert.equal(
+                    JSON.stringify(messages.rows).includes('synthetic-calendar-version'),
+                    false,
+                  );
+                  assert.deepEqual(
+                    {
+                      status: saved.status,
+                      writes: writeCount() - writes,
+                      laterGuestKept: current.attendees.some(
+                        (guest) => guest.email === added.email,
+                      ),
+                    },
+                    changed
+                      ? { status: 'expired', writes: 0, laterGuestKept: true }
+                      : { status: 'completed', writes: 1, laterGuestKept: false },
+                  );
+                  if (changed) assert.match(JSON.stringify(saved), /Calendar event changed/);
+                  else assert.deepEqual(current.attendees, input.attendees);
+                  assert.equal((await accept(card)).statusCode, 409);
+                  assert.equal(writeCount(), writes + (changed ? 0 : 1));
+                } finally {
+                  calendarExecute = execute;
+                }
+              },
+            );
+
+          for (const etag of [undefined, ''])
+            await t.test(
+              `Calendar approval refuses a ${etag === undefined ? 'missing' : 'blank'} final event version`,
+              async () => {
+                const writes = writeCount();
+                const { turn: id, approval: card } = await submit();
+                assert.equal(card.status, 'pending');
+                observed = { data: { ...structuredClone(event), etag }, successful: true };
+                try {
+                  const accepted = await accept(card);
+                  assert.equal(accepted.statusCode, 200, accepted.body);
+                  await waitFor(accepted.json().turnId, 'waiting|succeeded|failed');
+                  const [saved] = await approvalsFor(id);
+                  assert.equal(saved.status, 'expired');
+                  assert.match(JSON.stringify(saved), /cannot verify the Calendar event/);
+                  assert.equal(writeCount(), writes);
+                } finally {
+                  observed = { data: structuredClone(event), successful: true };
+                }
+              },
+            );
 
           await t.test('Calendar approval refuses a changed target before dispatch', async () => {
             const writes = writeCount();
