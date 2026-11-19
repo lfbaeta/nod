@@ -2429,7 +2429,6 @@ async function initializeApplication(
             record: () =>
               ledger.action(turn.turnId, 'NOD_browser', basis, actionTarget('NOD_browser', args)),
           };
-          if (!verdict.chatRevision) return allowed;
           const handoff = await approvals.request(turn, 'NOD_browser', args, {
             allowed: true,
             prepareConfirmation,

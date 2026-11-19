@@ -1574,6 +1574,114 @@ test(
       );
 
       await t.test(
+        'a task browser repeat needs a new approval before its second click',
+        async () => {
+          const title = `Synthetic bank task ${randomUUID()}`;
+          const ownerRequest = `Start a task to inspect the synthetic bank page ${title}.`;
+          const reply = `Click Authorize payment again for ${title}.`;
+          const question = `Should I click Authorize payment again for ${title}?`;
+          const click = { tool: 'browser', action: 'click', args: { selector: '@e7' } };
+          const clicks = () => browserActs.filter((act) => act.action === 'click').length;
+          const before = clicks();
+          try {
+            batches.set(ownerRequest, {
+              subagents: false,
+              sequential: true,
+              chatOnly: true,
+              calls: [
+                {
+                  tool: 'task',
+                  action: 'start',
+                  args: {
+                    title,
+                    message: 'I will inspect the synthetic bank page.',
+                    doneWhen: 'The synthetic page has been checked.',
+                    now: 'Checking the page',
+                  },
+                },
+              ],
+              taskCalls: [click],
+            });
+            await waitFor((await submitUserMessage(ownerRequest)).turnId, 'succeeded');
+            const task = (
+              await pool.query('SELECT id,turn_id FROM tasks WHERE owner_id=$1 AND title=$2', [
+                ownerId,
+                title,
+              ])
+            ).rows[0];
+            assert.ok(task);
+            await waitFor(task.turn_id, 'waiting');
+            const [first] = await approvalsFor(task.turn_id);
+            assert.equal(first.action, 'NOD_browser');
+            assert.equal(first.status, 'pending');
+            assert.equal(clicks(), before);
+            questionAfterConfirm = question;
+            const accepted = await request('POST', '/api/messages', {
+              text: 'Click Authorize payment',
+              replyToMessageId: first.confirmation_message_id,
+              approvalAnswer: { approvalId: first.id, approved: true },
+            });
+            assert.equal(accepted.statusCode, 200, accepted.body);
+            await waitFor(accepted.json().turnId, 'waiting');
+            assert.equal(clicks(), before + 1);
+            const savedFirst = (await approvalsFor(task.turn_id))[0];
+            assert.equal(savedFirst.status, 'completed');
+            const savedQuestion = (
+              await pool.query(
+                "SELECT id FROM messages WHERE turn_id=$1 AND role='assistant' AND text=$2",
+                [accepted.json().turnId, question],
+              )
+            ).rows[0];
+            assert.ok(savedQuestion);
+            asked.add(reply);
+            plans.set(reply, click);
+            repeatDecision = 'new';
+            const repeated = await request('POST', '/api/messages', {
+              text: reply,
+              replyToMessageId: savedQuestion.id,
+            });
+            assert.equal(repeated.statusCode, 200, repeated.body);
+            await waitFor(repeated.json().turnId, 'waiting|succeeded');
+            const repeatedTurn = (
+              await pool.query('SELECT session_id FROM turns WHERE id=$1', [repeated.json().turnId])
+            ).rows[0];
+            const taskSession = (
+              await pool.query('SELECT session_id FROM turns WHERE id=$1', [task.turn_id])
+            ).rows[0];
+            assert.equal(repeatedTurn.session_id, taskSession.session_id);
+            const [second] = await approvalsFor(repeated.json().turnId);
+            assert.ok(second, 'A repeated task browser action must save a new approval.');
+            assert.ok(
+              repeatChecks.some(
+                (input) => Object(input).reply === reply && Object(input).question === question,
+              ),
+            );
+            assert.equal(second.status, 'pending');
+            assert.equal(second.source_message_id, repeated.json().messageId);
+            assert.deepEqual(second.args, first.args);
+            assert.equal(clicks(), before + 1);
+            assert.deepEqual((await approvalsFor(task.turn_id))[0].result, savedFirst.result);
+            const confirmed = await request('POST', '/api/messages', {
+              text: 'Click Authorize payment',
+              replyToMessageId: second.confirmation_message_id,
+              approvalAnswer: { approvalId: second.id, approved: true },
+            });
+            assert.equal(confirmed.statusCode, 200, confirmed.body);
+            await waitFor(confirmed.json().turnId, 'succeeded');
+            assert.equal(clicks(), before + 2);
+            assert.equal((await approvalsFor(repeated.json().turnId))[0].status, 'completed');
+            assert.deepEqual((await approvalsFor(task.turn_id))[0].result, savedFirst.result);
+          } finally {
+            questionAfterConfirm = undefined;
+            repeatDecision = 'same';
+            batches.delete(ownerRequest);
+            plans.delete(reply);
+            asked.delete(reply);
+          }
+        },
+      );
+
+      await t.test(
         'a labeled click keeps its replay command out of wording and waits for approval',
         async () => {
           const before = browserActs.filter((act) => act.action === 'click').length;
