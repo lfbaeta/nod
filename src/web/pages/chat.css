@@ -921,6 +921,13 @@ button.message-work:is(:hover, :focus-visible) {
 .chat-page .message-attachments {
   margin-bottom: 8px;
 }
+.chat-page
+  .message-assistant
+  .message-body
+  > :is(.message-text:not(:empty), .action-card)
+  + .message-attachments {
+  margin-top: 8px;
+}
 .chat-page .message-bubble:has(.audio-player) {
   min-width: min(350px, calc(100% - 40px));
 }
