@@ -242,6 +242,8 @@ In **Settings → Voice & audio**, choose **Free voices**, then **Set up → Dow
 
 The default voice uses OpenRouter, then OpenAI, then ElevenLabs, then local speech, depending on which connection is available. Selecting a local voice explicitly uses local speech for both transcription and replies. Nod does not change providers automatically after a failed paid request.
 
+Local audio has a five-minute limit. A short passage can also exceed a local voice's pronunciation limit, especially with numbers or an unsupported language. Nod reports that limit separately. Try shorter text or choose a voice service that supports the language, such as Russian, that you need.
+
 ## Docker stack settings
 
 These values belong in `deployment/self-host/.env` and control Compose. They are separate from the application settings above.
