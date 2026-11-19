@@ -52,7 +52,12 @@ import type {
   RuntimeContext,
   RuntimeResult,
 } from '../ports/agent.ts';
-import { appConfirmation, ContextLimitError, ModelRequestError } from '../ports/agent.ts';
+import {
+  appConfirmation,
+  ContextLimitError,
+  ModelRequestError,
+  ToolFailureError,
+} from '../ports/agent.ts';
 import { isMessageReaction, reactionEmoji } from '../shared/emoji.ts';
 import { defaultPreferences, isQuietTime } from './preferences.ts';
 import { formattingLocale, timeZoneRegion } from '../shared/date-locale.ts';
@@ -953,7 +958,7 @@ async function withdraw(client: PoolClient, turnIds: string[], wholeRequest: boo
 export async function cancelTurns(
   client: PoolClient,
   threadId: string,
-  scope: { sessionId?: string; background?: boolean } = {},
+  scope: { sessionId?: string; background?: boolean; withdrawRequest?: boolean } = {},
   analytics?: CaptureAnalytics,
   actor: 'owner' | 'agent' = 'owner',
 ) {
@@ -975,7 +980,7 @@ export async function cancelTurns(
     "UPDATE turns SET status='cancelled',finished_at=now() WHERE thread_id=$1 AND owner_id=$2 AND ($3::uuid IS NULL OR session_id=$3) AND (NOT $4 OR session_id<>$1) AND status IN ('queued','running','waiting') RETURNING id,session_id",
     values,
   );
-  if (actor === 'owner') {
+  if (actor === 'owner' && scope.withdrawRequest !== false) {
     const stopped = new Set(current.rows.map((row) => row.id as string));
     await withdraw(
       client,
@@ -1122,7 +1127,7 @@ export async function clearChatContext(
       chatStop = new AbortController();
       previous.abort(clearedIntakeError());
     });
-    await cancelTurns(client, thread.id, { sessionId: thread.id });
+    await cancelTurns(client, thread.id, { sessionId: thread.id, withdrawRequest: false });
     const turnId = randomUUID();
     await client.query(
       `INSERT INTO turns(id,owner_id,thread_id,session_id,source,source_id,message_id,prompt,channel,status,finished_at)
@@ -1508,11 +1513,13 @@ async function failTurn(
     failure,
     contextExhausted,
     cause,
+    expected = false,
   }: {
     next?: string;
     failure?: 'model' | 'offline' | 'unknown';
     contextExhausted?: boolean;
     cause?: Pick<ScheduleRunPresentation, 'reason' | 'code' | 'link'>;
+    expected?: boolean;
   } = {},
 ) {
   const modelFailure = failure === 'model' || failure === 'offline';
@@ -1605,7 +1612,7 @@ async function failTurn(
     if (!current.rowCount) return;
     const ref = { threadId: turn.thread_id, turnId, taskMessageId: turn.taskMessageId };
     const streamId = `${failureStream}:${turnId}`;
-    if (failure === 'unknown')
+    if (failure === 'unknown' && !expected)
       await insertBugReportDraft(
         client,
         ref,
@@ -2697,6 +2704,7 @@ async function executeTurn(turn: any, dependencies: ThreadDependencies) {
       if (
         await failTurn(turnId, dependencies.present, text, {
           failure,
+          expected: error instanceof ToolFailureError,
           next: alternative ?? (server ? offlineHint : undefined),
           contextExhausted: error instanceof ContextLimitError,
           cause: offline

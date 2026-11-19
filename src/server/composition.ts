@@ -932,7 +932,7 @@ async function initializeApplication(
     ),
   );
   const decisions = adapters.decisions && ledger.decisions(adapters.decisions);
-  const review: ModelReview = async (instructions, input, signal, question) => {
+  const review: ModelReview = async (instructions, input, signal, question, responseSchema) => {
     if (question) {
       const result = await decisions?.check({ instructions, input, question }, signal);
       if (result !== undefined) return result;
@@ -940,7 +940,7 @@ async function initializeApplication(
       instructions += `\nReply with only JSON with one property, ${JSON.stringify(question.name)}. Its value must be one of: ${values.map((value) => JSON.stringify(value)).join(', ')}.`;
     }
     return onboardingCurator.configured
-      ? onboardingCurator.curate({ task: 'review', instructions, input }, signal)
+      ? onboardingCurator.curate({ task: 'review', instructions, input, responseSchema }, signal)
       : undefined;
   };
   const mailCheck = createMailCheck({ curator, decisions });
@@ -2956,8 +2956,11 @@ async function initializeApplication(
               'Only work the owner started, in chat, a task or a schedule, can save a skill.',
             );
           await admit?.(false);
-          return learnedSkills.learn(args, turn.turnId, (write) =>
-            withTurnLock(turn.turnId, write),
+          return learnedSkills.learn(
+            args,
+            turn.turnId,
+            (write) => withTurnLock({ turnId: turn.turnId, signal }, write),
+            signal,
           );
         }
         await admit?.(false);
@@ -2965,8 +2968,11 @@ async function initializeApplication(
           const origin = await turnOrigin(turn.turnId);
           if (!origin || !['user', 'task'].includes(origin.source))
             throw new Error('Only work the owner started, in chat or a task, can save to memory.');
-          return learning.remember(args, provenance.sourceMessageId, (write) =>
-            withTurnLock(turn.turnId, write),
+          return learning.remember(
+            args,
+            provenance.sourceMessageId,
+            (write) => withTurnLock({ turnId: turn.turnId, signal }, write),
+            signal,
           );
         }
         if (action === 'usage_get')
