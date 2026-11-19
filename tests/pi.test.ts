@@ -12055,6 +12055,8 @@ test('invalid tool calls stop before another model request and a valid repair re
     [false, 'task'],
     [true, 'task'],
     [false, 'sign_in'],
+    [false, 'skills'],
+    [true, 'skills'],
   ] as const)
     await t.test(`${toolName} ${repair ? 'repair' : 'stop'}`, async () => {
       const directory = await mkdtemp(join(tmpdir(), 'nod-tool-recovery-'));
@@ -12083,23 +12085,27 @@ test('invalid tool calls stop before another model request and a valid repair re
                         id: `fixture-task-${requests}`,
                         name: toolName,
                         arguments:
-                          toolName === 'sign_in'
-                            ? {
-                                origin: 'https://signin.example.test',
-                                label: 'Synthetic login',
-                                message: 'Sign in to the synthetic account.',
-                                action: 'Sign in',
-                                kind: 'method',
-                              }
-                            : valid
+                          toolName === 'skills'
+                            ? valid
+                              ? { action: 'list' }
+                              : { action: 'schedule_create', args: {} }
+                            : toolName === 'sign_in'
                               ? {
-                                  action: 'start',
-                                  title: 'Synthetic task',
-                                  doneWhen: 'The synthetic result exists.',
-                                  now: 'Read the synthetic source.',
-                                  message: 'Starting the synthetic task.',
+                                  origin: 'https://signin.example.test',
+                                  label: 'Synthetic login',
+                                  message: 'Sign in to the synthetic account.',
+                                  action: 'Sign in',
+                                  kind: 'method',
                                 }
-                              : { action: 'start' },
+                              : valid
+                                ? {
+                                    action: 'start',
+                                    title: 'Synthetic task',
+                                    doneWhen: 'The synthetic result exists.',
+                                    now: 'Read the synthetic source.',
+                                    message: 'Starting the synthetic task.',
+                                  }
+                                : { action: 'start' },
                       },
                     ],
                 { stopReason: done ? 'stop' : 'toolUse' },
@@ -12128,13 +12134,20 @@ test('invalid tool calls stop before another model request and a valid repair re
       if (repair) {
         assert.equal((await run()).status, 'succeeded');
         assert.equal(requests, 11);
-        assert.equal(writes, 2);
+        assert.equal(writes, toolName === 'skills' ? 0 : 2);
       } else {
         for (let attempt = 0; attempt < 2; attempt++) {
           requests = 0;
           await assert.rejects(run(), (error: Error) => {
             assert.match(error.message, /failed five times/);
-            assert.match(error.message, toolName === 'sign_in' ? /\/methods:/ : /\/doneWhen:/);
+            assert.match(
+              error.message,
+              toolName === 'skills'
+                ? /expected one of \["list","read","save","patch"\]/
+                : toolName === 'sign_in'
+                  ? /\/methods:/
+                  : /\/doneWhen:/,
+            );
             return true;
           });
           assert.equal(requests, 5);
