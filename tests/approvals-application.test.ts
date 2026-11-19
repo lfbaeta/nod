@@ -1061,6 +1061,142 @@ test(
       );
 
       await t.test(
+        'schedule approval displays and saves the complete checked instruction once',
+        async () => {
+          const title = `Synthetic checked schedule ${randomUUID()}`;
+          const prompt = [
+            'Review inbox@example.test at the scheduled time.',
+            'Read the full threads and attachments.',
+            'Include linked summaries.',
+            'Never send email or change sources.',
+          ].join('\n');
+          const args = {
+            title,
+            prompt,
+            kind: 'recurring',
+            cron: '0 15 * * *',
+            timeZone: 'Europe/London',
+          };
+          let expectedPrompt = prompt;
+          let drafts = 0;
+          const reviewed: Array<Record<string, any>> = [];
+          confirmationModel = (value) => {
+            const input = value as Record<string, any>;
+            assert.equal(input.data.details.scheduleDefinition.prompt, expectedPrompt);
+            if (input.purpose === 'confirmation_review') {
+              reviewed.push(input);
+              if (input.text.includes('wrong@example.test'))
+                return { valid: false, reason: 'The question changes the Gmail account.' };
+              return input.text.includes(expectedPrompt) &&
+                input.text.includes('Every day at 15:00') &&
+                input.text.includes('Europe/London')
+                ? { valid: true }
+                : { valid: false, reason: 'The checked schedule instruction is missing.' };
+            }
+            drafts++;
+            return drafts % 2
+              ? {
+                  text: 'Save a daily review for wrong@example.test?',
+                  action: 'Save schedule',
+                }
+              : { text: 'Save this schedule?', action: 'Save schedule' };
+          };
+          const click = (card: { id: string; confirmation_message_id: string }) =>
+            request('POST', '/api/messages', {
+              text: 'Save schedule',
+              replyToMessageId: card.confirmation_message_id,
+              clientMessageId: randomUUID(),
+              approvalAnswer: { approvalId: card.id, approved: true },
+            });
+          try {
+            const proposed = await propose('schedule_create', args);
+            const [first] = await approvalsFor(proposed);
+            assert.equal(first.status, 'pending');
+            assert.equal(
+              (await pool.query('SELECT 1 FROM schedules WHERE title=$1', [title])).rowCount,
+              0,
+            );
+            const firstQuestion = await confirmationFor(first);
+            assert.ok(firstQuestion.includes(prompt));
+            assert.ok(!firstQuestion.includes('wrong@example.test'));
+            assert.equal(reviewed.length, 2);
+            const page = (await request('GET', '/api/messages')).json().messages;
+            const visible = page.find(
+              (message: { id: string }) => message.id === first.confirmation_message_id,
+            );
+            assert.equal(visible.text, firstQuestion);
+            assert.equal(visible.approval.state, 'pending');
+            const accepted = await click(first);
+            assert.equal(accepted.statusCode, 200, accepted.body);
+            await waitFor(accepted.json().turnId, 'succeeded');
+            const original = (await approvalsFor(proposed))[0];
+            const saved = (
+              await pool.query(
+                'SELECT id,prompt,authority,revision FROM schedules WHERE title=$1',
+                [title],
+              )
+            ).rows[0];
+            assert.equal(saved.prompt, prompt);
+            assert.deepEqual(
+              saved.authority.approvals.at(-1).definition,
+              first.instruction_change.after,
+            );
+            assert.equal((await click(first)).statusCode, 409);
+            assert.equal(
+              (await pool.query('SELECT 1 FROM schedules WHERE title=$1', [title])).rowCount,
+              1,
+            );
+            const reloaded = (await request('GET', '/api/messages')).json().messages;
+            const completed = reloaded.find(
+              (message: { id: string }) => message.id === first.confirmation_message_id,
+            );
+            assert.equal(completed.text, firstQuestion);
+            assert.equal(completed.approval.state, 'done');
+
+            expectedPrompt = prompt.replace(
+              'Include linked summaries.',
+              'Include linked summaries and dates.',
+            );
+            const updated = await propose('schedule_update', {
+              id: saved.id,
+              prompt: expectedPrompt,
+            });
+            const [second] = await approvalsFor(updated);
+            assert.equal(second.status, 'pending');
+            assert.equal(
+              (await pool.query('SELECT prompt FROM schedules WHERE id=$1', [saved.id])).rows[0]
+                .prompt,
+              prompt,
+            );
+            const secondQuestion = await confirmationFor(second);
+            assert.ok(secondQuestion.includes(expectedPrompt));
+            assert.ok(secondQuestion.includes('Every day at 15:00'));
+            assert.ok(!secondQuestion.includes(saved.id));
+            const changed = await click(second);
+            assert.equal(changed.statusCode, 200, changed.body);
+            await waitFor(changed.json().turnId, 'succeeded');
+            const final = (
+              await pool.query('SELECT prompt,authority,revision FROM schedules WHERE id=$1', [
+                saved.id,
+              ])
+            ).rows[0];
+            assert.equal(final.prompt, expectedPrompt);
+            assert.equal(final.revision, saved.revision + 1);
+            assert.deepEqual(
+              final.authority.approvals.at(-1).definition,
+              second.instruction_change.after,
+            );
+            assert.equal((await click(second)).statusCode, 409);
+            assert.deepEqual((await approvalsFor(proposed))[0].result, original.result);
+            assert.equal(drafts, 4);
+            assert.equal(reviewed.length, 4);
+          } finally {
+            confirmationModel = undefined;
+          }
+        },
+      );
+
+      await t.test(
         'model settings use the trust check and save only the approved selection',
         async () => {
           const before = models.view().selection;

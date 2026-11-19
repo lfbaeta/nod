@@ -665,6 +665,47 @@ const fixtureEnv = {
   WHATSAPP_POLICY_CONFIRMED: 'true',
 };
 
+test('channel transports check literal instructions against their actual formatting and split rules', () => {
+  const sdk = createChatSdkTransport({} as pg.Pool, fixtureEnv);
+  const linked = createWhatsAppLinkedTransport({
+    mode: 'bot',
+    store: {
+      open: async () => {
+        throw new Error('This check must not open a linked account.');
+      },
+    },
+  });
+  const combined = combineMessagingTransports(sdk, linked);
+  for (const [literal, telegram, whatsapp] of [
+    [
+      'Review boîte@example.test.\n    Never send email.\nKeep [source](https://records.example.test/item) and `data`.',
+      true,
+      true,
+    ],
+    [
+      `${'a'.repeat(3600)}\n[Source](https://records.example.test/item)\n    Never send email.`,
+      false,
+      true,
+    ],
+    [
+      `${'a'.repeat(4200)}\n[Source](https://records.example.test/item)\n    Never send email.`,
+      false,
+      false,
+    ],
+    ['Keep ``` as literal text. Never send email.', true, false],
+    ['Keep {{emoji:smile}} as literal text.', false, false],
+  ] as const) {
+    const fence = literal.includes('```') ? '````' : '```';
+    const text = `Instruction:\n\n${fence}\n${literal}\n${fence}\n\nCreate this schedule?`;
+    assert.equal(sdk.canDeliverLiteral!({ channelId: 'telegram', text, literal }), telegram);
+    assert.equal(sdk.canDeliverLiteral!({ channelId: 'whatsapp', text, literal }), whatsapp);
+    assert.equal(linked.canDeliverLiteral!({ channelId: 'whatsapp', text, literal }), whatsapp);
+    assert.equal(combined.canDeliverLiteral!({ channelId: 'whatsapp', text, literal }), whatsapp);
+    assert.equal(combined.canDeliverLiteral!({ channelId: 'telegram', text, literal }), telegram);
+    assert.equal(combined.canDeliverLiteral!({ channelId: 'unknown', text, literal }), false);
+  }
+});
+
 test(
   'WhatsApp links privately, admits only its owner, fences echoes across restart, and reconnects without repeating sends',
   { skip: !process.env.TEST_DATABASE_URL, timeout: 30_000 },
@@ -4119,6 +4160,32 @@ test(
   },
 );
 
+test('channel presentation keeps punctuated local addresses out of delivery wording', async () => {
+  for (const text of [
+    'Read http://localhost:5678.',
+    'Read "http://127.0.0.1:5678".',
+    'Read http://[::1]:5678, next.',
+    'Read http://localhost.:5678.',
+    'Read `http://localhost:5678`.',
+  ]) {
+    let calls = 0;
+    const delivered = await channelReply(text, {
+      threadId: 'owned-thread',
+      present: async (_threadId, input) => {
+        calls++;
+        assert.equal(input.kind, 'delivery');
+        if (input.kind === 'delivery') assert.equal(input.secureAction, true);
+        assert.doesNotMatch(JSON.stringify(input), /localhost|127\.0\.0\.1|\[::1\]|5678/);
+        return 'Open Nod to read this instruction.';
+      },
+    });
+    assert.equal(calls, 1);
+    assert.equal(delivered, 'Open Nod to read this instruction.');
+  }
+  const publicText = 'Read https://records.example.test:443.';
+  assert.equal(await channelReply(publicText, { threadId: 'owned-thread' }), publicText);
+});
+
 test('channel presentation isolates private links from the model and rejects unsafe generated output', async () => {
   const modelsLink = await channelReply('Use [Reconnect](/settings/models).', {
     threadId: 'owned-thread',
@@ -4478,6 +4545,13 @@ test(
       await channels.drain();
       assert.equal((await pool.query('SELECT * FROM turns')).rowCount, 2);
       assert.equal((await pool.query('SELECT * FROM channel_inbox')).rowCount, 2);
+      const literal = 'Review boîte@example.test. Never send email.';
+      const literalQuestion = `Instruction:\n\n\`\`\`\n${literal}\n\`\`\`\n\nSave this schedule?`;
+      for (const row of (await pool.query('SELECT channel FROM turns')).rows) {
+        assert.match(row.channel, /^(telegram|whatsapp):[a-f0-9]{32}$/);
+        assert.equal(channels.canDeliverLiteral(row.channel, literalQuestion, literal), true);
+      }
+      assert.equal(channels.canDeliverLiteral('unknown:identity', literalQuestion, literal), false);
       await addReply(
         'channel:telegram:987:123456:10',
         'Finish [securely](/credentials/private-token), [approve payment](/payments/private-token) or [add a card](/vault?add=card).',

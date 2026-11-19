@@ -1036,10 +1036,13 @@ async function initializeApplication(
   });
   const memoryRecall = createMemoryRecall({ pool, ownerId, memory, curator });
   const writingStyle = createWritingStyleLearning({ memory, curator });
+  let channels: Awaited<ReturnType<typeof createChannels>> | undefined;
   const communication = createCommunication({
     pool,
     ownerId,
     review,
+    canDeliverLiteral: (channel, text, literal) =>
+      channels?.canDeliverLiteral(channel, text, literal) ?? false,
     preferences: async () =>
       (await memory.load()).entries
         .filter(
@@ -1771,7 +1774,6 @@ async function initializeApplication(
     (input, signal) => ledger.forOwner(() => trust.classifyRepeatedAction(input, signal)),
   );
   retireScheduleConfirmations = approvals.retireScheduleConfirmations;
-  let channels: Awaited<ReturnType<typeof createChannels>> | undefined;
   const reactions = createAgentReactionService({
     pool,
     ownerId,

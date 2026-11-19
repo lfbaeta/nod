@@ -48,12 +48,14 @@ import {
   gmailMessageTarget,
 } from '../src/server/action-presentation.ts';
 import { createCommunication } from '../src/server/communication.ts';
+import { channelReply } from '../src/server/channels.ts';
 import { ApprovalCard, ApprovalChoiceCard } from '../src/web/components/action-card.tsx';
 import { MessageText } from '../src/web/components/message.tsx';
 import { createE2eCurators } from '../scripts/e2e-curators.ts';
 import { createIntegrationFixture } from '../scripts/e2e-fixtures.ts';
 import { createPiMemoryCurator } from '../src/providers/pi/memory-curator.ts';
 import { createIntegrations } from '../src/server/integrations.ts';
+import { createChatSdkTransport } from '../src/providers/chat-sdk/index.ts';
 
 function markdownNodes(markdown: string) {
   const tree = unified().use(remarkParse).use(remarkGfm).parse(markdown);
@@ -536,6 +538,268 @@ test('browser confirmation uses the page as context without displaying its actio
   );
 });
 
+test('a schedule confirmation shows the checked instruction before reviewing its question', async () => {
+  const prompt =
+    'Review inbox@example.test threads and attachments. Include linked summaries. Never send email or change sources.';
+  const definition = {
+    title: 'Synthetic inbox review',
+    prompt,
+    kind: 'recurring',
+    cron: '0 15 * * *',
+    runAt: null,
+    timeZone: 'Europe/London',
+    enabled: true,
+    watch: null,
+  };
+  const original = structuredClone(definition);
+  let drafts = 0;
+  const reviews: Array<Record<string, any>> = [];
+  const communication = createCommunication({
+    pool: { query: async () => ({ rows: [] }) } as unknown as pg.Pool,
+    ownerId: 'synthetic-owner',
+    review: async (_instructions, value) => {
+      const input = value as Record<string, any>;
+      assert.deepEqual(input.data.details.scheduleDefinition, original);
+      if (input.purpose === 'confirmation_review') {
+        reviews.push(input);
+        if (input.text.includes('wrong@example.test'))
+          return { valid: false, reason: 'The question names a different Gmail account.' };
+        return input.text.includes(prompt) &&
+          input.text.includes('Every day at 15:00') &&
+          input.text.includes('Europe/London')
+          ? { valid: true }
+          : { valid: false, reason: 'The complete instruction and timing are not visible.' };
+      }
+      drafts++;
+      if (drafts === 1)
+        return {
+          text: 'Create a daily Gmail review for wrong@example.test?',
+          action: 'Create schedule',
+        };
+      assert.ok(input.repair);
+      assert.ok(!input.repair.draft.text.includes(prompt));
+      return { text: 'Create this schedule?', action: 'Create schedule' };
+    },
+  });
+  const result = await communication.describe({
+    turn: { threadId: 'synthetic-thread', turnId: 'synthetic-turn' },
+    channel: 'web',
+    action: 'NOD_schedule_create',
+    args: { title: definition.title, prompt, cron: definition.cron, timeZone: definition.timeZone },
+    details: { scheduleDefinition: definition },
+  });
+  assert.equal(drafts, 2);
+  assert.equal(reviews.length, 2);
+  assert.ok(reviews[1]!.text.includes(prompt));
+  assert.match(result.question, /Synthetic inbox review/);
+  assert.match(result.question, /Every day at 15:00/);
+  assert.match(result.question, /Europe\/London/);
+  assert.match(result.question, /Never send email or change sources/);
+  assert.ok(!result.question.includes('wrong@example.test'));
+  assert.equal(result.action, 'Create schedule');
+  assert.deepEqual(definition, original);
+});
+
+test('schedule confirmations keep literal instructions, checked timing and paused state', async () => {
+  const prompt = [
+    'Review inbox@example.test.',
+    '',
+    'Keep [the source](https://records.example.test/item) and `literal values`.',
+    '    Keep this indentation.',
+    '```',
+    '{"synthetic":"Never send email"}',
+    '```',
+    'Synthetic text. '.repeat(350),
+    'Final limit: do not change any source.',
+  ].join('\n');
+  for (const timing of [
+    { kind: 'recurring', cron: '5 15 * * 1-5', expected: 'Every weekday at 15:05' },
+    { kind: 'recurring', cron: '7 11 2,9 * *', expected: 'Custom timing: 7 11 2,9 * *' },
+    {
+      kind: 'once',
+      runAt: '2030-11-24T15:00:00+01:00',
+      expected: '24 November 2030 at 14:00',
+    },
+    {
+      kind: 'once',
+      runAt: '2030-11-24T15:00:59.123+01:00',
+      expected: '24 November 2030 at 14:00:59',
+    },
+  ]) {
+    const { expected, ...fields } = timing;
+    let visible = '';
+    const definition = {
+      title: 'Synthetic literal instruction',
+      prompt,
+      timeZone: 'Europe/London',
+      enabled: false,
+      cron: null,
+      runAt: null,
+      watch: null,
+      ...fields,
+    };
+    const communication = createCommunication({
+      pool: { query: async () => ({ rows: [] }) } as unknown as pg.Pool,
+      ownerId: 'synthetic-owner',
+      review: async (_instructions, value) => {
+        const input = value as Record<string, any>;
+        if (input.purpose !== 'confirmation_review')
+          return { text: 'Save this schedule?', action: 'Save schedule' };
+        visible = input.text;
+        assert.ok(visible.includes(prompt));
+        assert.ok(visible.includes(expected));
+        if (fields.runAt?.includes('.123')) assert.ok(visible.includes(fields.runAt));
+        assert.match(visible, /Status: Paused/);
+        return { valid: true };
+      },
+    });
+    const result = await communication.describe({
+      turn: { threadId: 'synthetic-thread', turnId: 'synthetic-turn' },
+      channel: 'web',
+      action: 'NOD_schedule_update',
+      args: { id: randomUUID(), prompt },
+      details: { scheduleDefinition: definition },
+    });
+    const tree = unified().use(remarkParse).use(remarkGfm).parse(result.question);
+    const blocks = tree.children.filter((node) => node.type === 'code');
+    assert.equal(blocks.length, 1);
+    assert.equal(blocks[0]!.value, prompt);
+    assert.ok(visible.includes('Final limit: do not change any source.'));
+    assert.equal(result.action, 'Save schedule');
+  }
+});
+
+test('schedule confirmations preserve chat delivery or refuse before facts can change', async () => {
+  let calls = 0;
+  let presentations = 0;
+  const transport = createChatSdkTransport({} as pg.Pool, {
+    TELEGRAM_ENABLED: 'true',
+    TELEGRAM_BOT_TOKEN: '987:fixture-not-live',
+    TELEGRAM_ALLOWED_USER_ID: '123456',
+    TELEGRAM_WEBHOOK_SECRET_TOKEN: 'fixture-webhook-secret-32-characters',
+    WHATSAPP_ENABLED: 'true',
+    WHATSAPP_ACCESS_TOKEN: 'fixture-not-live',
+    WHATSAPP_APP_SECRET: 'fixture-app-secret',
+    WHATSAPP_PHONE_NUMBER_ID: '555000',
+    WHATSAPP_VERIFY_TOKEN: 'fixture-verify-token',
+    WHATSAPP_ALLOWED_NUMBER: '351910000000',
+    WHATSAPP_POLICY_CONFIRMED: 'true',
+  });
+  const communication = createCommunication({
+    pool: { query: async () => ({ rows: [] }) } as unknown as pg.Pool,
+    ownerId: 'synthetic-owner',
+    canDeliverLiteral: (channelId, text, literal) =>
+      transport.canDeliverLiteral!({ channelId, text, literal }),
+    review: async (_instructions, value) => {
+      calls++;
+      return Object(value).purpose === 'confirmation_review'
+        ? { valid: true }
+        : { text: 'Create this schedule?', action: 'Create schedule' };
+    },
+  });
+  const proposal = {
+    turn: { threadId: 'synthetic-thread', turnId: 'synthetic-turn' },
+    action: 'NOD_schedule_create',
+    args: {},
+    details: {
+      scheduleDefinition: {
+        title: 'Synthetic local review',
+        prompt: 'Read https://records.example.test/item. Never send email.',
+        kind: 'recurring',
+        cron: '0 15 * * *',
+        timeZone: 'UTC',
+        enabled: true,
+      },
+    },
+  };
+  for (const channel of ['telegram', 'whatsapp']) {
+    const result = await communication.describe({ ...proposal, channel });
+    const delivered = await channelReply(result.question, {
+      threadId: proposal.turn.threadId,
+      present: async () => {
+        presentations++;
+        return 'This must not replace the checked facts.';
+      },
+    });
+    assert.equal(delivered, result.question);
+  }
+  assert.equal(presentations, 0);
+  for (const prompt of [
+    `${'Synthetic text. '.repeat(350)}\n[Review](https://records.example.test/item)\n    Never send email.`,
+    'Keep {{emoji:smile}} as literal text. Never send email.',
+  ]) {
+    proposal.details.scheduleDefinition.prompt = prompt;
+    const before = calls;
+    for (const channel of ['telegram', 'whatsapp'])
+      await assert.rejects(
+        communication.describe({ ...proposal, channel }),
+        /cannot show the complete schedule confirmation in this channel/,
+      );
+    assert.equal(calls, before);
+  }
+  proposal.details.scheduleDefinition.prompt = 'Keep ``` as literal text. Never send email.';
+  await communication.describe({ ...proposal, channel: 'telegram' });
+  await assert.rejects(
+    communication.describe({ ...proposal, channel: 'whatsapp' }),
+    /cannot show the complete schedule confirmation in this channel/,
+  );
+  proposal.details.scheduleDefinition.prompt = 'Read http://localhost:5678. Never send email.';
+  const web = await communication.describe({ ...proposal, channel: 'web' });
+  assert.ok(web.question.includes(proposal.details.scheduleDefinition.prompt));
+  const before = calls;
+  for (const channel of ['telegram', 'whatsapp'])
+    await assert.rejects(
+      communication.describe({ ...proposal, channel }),
+      /cannot show the complete schedule confirmation in this channel/,
+    );
+  await assert.rejects(communication.describe(proposal), /no verified delivery channel/);
+  await assert.rejects(
+    communication.describe({ ...proposal, channel: 'unknown' }),
+    /cannot show the complete schedule confirmation in this channel/,
+  );
+  assert.equal(calls, before);
+});
+
+test('schedule confirmation facts do not replace the independent review', async () => {
+  let calls = 0;
+  const watch = [randomUUID()];
+  const communication = createCommunication({
+    pool: { query: async () => ({ rows: [] }) } as unknown as pg.Pool,
+    ownerId: 'synthetic-owner',
+    review: async (_instructions, value) => {
+      calls++;
+      const input = value as Record<string, any>;
+      assert.deepEqual(input.data.details.scheduleDefinition.watch, watch);
+      assert.equal(input.data.details.targetModel.name, 'Synthetic model');
+      return input.purpose === 'confirmation_review'
+        ? { valid: false, reason: 'The question omits the watched-source and model conditions.' }
+        : { text: 'Create this schedule?', action: 'Create schedule' };
+    },
+  });
+  await assert.rejects(
+    communication.describe({
+      turn: { threadId: 'synthetic-thread', turnId: 'synthetic-turn' },
+      channel: 'web',
+      action: 'NOD_schedule_create',
+      args: {},
+      details: {
+        targetModel: { name: 'Synthetic model' },
+        scheduleDefinition: {
+          title: 'Synthetic watched review',
+          prompt: 'Review inbox@example.test. Never send email.',
+          kind: 'recurring',
+          cron: '0 15 * * *',
+          timeZone: 'UTC',
+          enabled: true,
+          watch,
+        },
+      },
+    }),
+    /omits the watched-source and model conditions/,
+  );
+  assert.equal(calls, 4);
+});
+
 test('a complete schedule approval refuses a definition with hidden values', async () => {
   let calls = 0;
   const communication = createCommunication({
@@ -577,9 +841,19 @@ test('a complete schedule approval keeps ordinary text and still hides Basic cre
   });
   const proposal = {
     turn: { threadId: 'synthetic-thread', turnId: 'synthetic-turn' },
+    channel: 'web',
     action: 'NOD_schedule_create',
     args: { prompt },
-    details: { scheduleDefinition: { prompt } },
+    details: {
+      scheduleDefinition: {
+        title: 'Synthetic basic briefing',
+        prompt,
+        kind: 'recurring',
+        cron: '0 9 * * *',
+        timeZone: 'UTC',
+        enabled: true,
+      },
+    },
   };
   await communication.describe(proposal);
   assert.equal(calls, 2);

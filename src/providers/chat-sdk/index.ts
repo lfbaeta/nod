@@ -16,7 +16,7 @@ import { telegramSecret, telegramUserId } from '../../ports/channel-settings.ts'
 import { logRepeatedFailure } from '../../ports/failure-log.ts';
 import { MessagingConnectionError } from '../../ports/messaging.ts';
 import { telegramMessage, telegramPairing, telegramAttachments } from './telegram.ts';
-import { telegramText, whatsappText } from './format.ts';
+import { hasLiteralBlock, telegramText, whatsappText } from './format.ts';
 import { contactCards, sharedLocation } from '../../shared/channel-content.ts';
 
 type Environment = Record<string, string | undefined>;
@@ -355,6 +355,25 @@ export function createChatSdkTransport(
   let offsetsReady: Promise<unknown> | undefined;
   const transport: MessagingTransport = {
     channels,
+    canDeliverLiteral({ channelId, text, literal }) {
+      if (!hasLiteralBlock(text, literal)) return false;
+      if (channelId === 'telegram' && telegram) {
+        const formatted = telegramText(text);
+        return (
+          telegram.chunks(text).length === 1 &&
+          convertEmojiPlaceholders(formatted, 'gchat') === formatted
+        );
+      }
+      if (channelId === 'whatsapp' && whatsapp) {
+        const formatted = whatsappText(text);
+        return (
+          !literal.includes('```') &&
+          whatsapp.chunks(text).length === 1 &&
+          convertEmojiPlaceholders(formatted, 'whatsapp') === formatted
+        );
+      }
+      return false;
+    },
     async poll(accept, pair, react) {
       if (closed || polling || !telegram || env.TELEGRAM_MODE !== 'polling') return;
       polling = true;

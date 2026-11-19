@@ -200,3 +200,8 @@ export function telegramText(markdown: string | Root) {
 export function whatsappText(markdown: string) {
   return render(parseMarkdown(markdown), whatsapp, markdown);
 }
+
+export function hasLiteralBlock(markdown: string, literal: string) {
+  const blocks = parseMarkdown(markdown).children.filter((node) => node.type === 'code');
+  return blocks.length === 1 && blocks[0]!.value === literal;
+}

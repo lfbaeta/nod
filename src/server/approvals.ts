@@ -50,6 +50,7 @@ export interface ApprovalWork {
 
 export interface ApprovalDescription {
   turn: TurnRef;
+  channel?: string;
   action: string;
   args: Record<string, unknown>;
   details?: Record<string, unknown>;
@@ -636,6 +637,7 @@ export async function createApprovals(
       return {
         authorMessageId,
         source: current.source,
+        channel: current.channel,
         repeatedScope,
         ...(describing ? { work: await workOf(client, current.task_id, schedule) } : {}),
       };
@@ -712,6 +714,7 @@ export async function createApprovals(
         const presentation = await describe(
           {
             turn: { ...turn },
+            ...(replacesInstruction && instructionChange ? { channel: existing.channel } : {}),
             action,
             args: JSON.parse(encoded),
             ...(details || (replacesInstruction && instructionChange)
