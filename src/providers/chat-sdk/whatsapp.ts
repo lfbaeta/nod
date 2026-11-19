@@ -671,7 +671,7 @@ export function createWhatsAppLinkedTransport(options: {
       return (
         channelId === 'whatsapp' &&
         hasLiteralBlock(text, literal) &&
-        !literal.includes('```') &&
+        formatted.split('```').length === 3 &&
         splitMessage(formatted).length === 1 &&
         convertEmojiPlaceholders(formatted, 'whatsapp') === formatted
       );

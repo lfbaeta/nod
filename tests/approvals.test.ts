@@ -669,9 +669,10 @@ test('schedule confirmations keep literal instructions, checked timing and pause
   }
 });
 
-test('schedule confirmations preserve chat delivery or refuse before facts can change', async () => {
+test('schedule confirmations preserve chat delivery or refuse before facts can change', async (t) => {
   let calls = 0;
   let presentations = 0;
+  let question = 'Create this schedule?';
   const transport = createChatSdkTransport({} as pg.Pool, {
     TELEGRAM_ENABLED: 'true',
     TELEGRAM_BOT_TOKEN: '987:fixture-not-live',
@@ -694,7 +695,7 @@ test('schedule confirmations preserve chat delivery or refuse before facts can c
       calls++;
       return Object(value).purpose === 'confirmation_review'
         ? { valid: true }
-        : { text: 'Create this schedule?', action: 'Create schedule' };
+        : { text: question, action: 'Create schedule' };
     },
   });
   const proposal = {
@@ -724,6 +725,36 @@ test('schedule confirmations preserve chat delivery or refuse before facts can c
     assert.equal(delivered, result.question);
   }
   assert.equal(presentations, 0);
+  for (const [channel, title] of [
+    ['telegram', '{{emoji:smile}}'],
+    ['whatsapp', '```'],
+  ] as const) {
+    await t.test(`${channel} refuses a title that changes its visible facts`, async () => {
+      proposal.details.scheduleDefinition.title = title;
+      const before = calls;
+      await assert.rejects(
+        communication.describe({ ...proposal, channel }),
+        /cannot show the complete schedule confirmation in this channel/,
+      );
+      assert.equal(calls, before);
+    });
+  }
+  proposal.details.scheduleDefinition.title = 'Synthetic local review';
+  for (const [channel, text] of [
+    ['telegram', 'Create {{emoji:smile}} this schedule?'],
+    ['whatsapp', 'Create ``` this schedule?'],
+  ] as const) {
+    await t.test(`${channel} also checks the reviewed model question`, async () => {
+      question = text;
+      const before = calls;
+      await assert.rejects(
+        communication.describe({ ...proposal, channel }),
+        /cannot show the complete schedule confirmation in this channel/,
+      );
+      assert.equal(calls, before + 2);
+    });
+  }
+  question = 'Create this schedule?';
   for (const prompt of [
     `${'Synthetic text. '.repeat(350)}\n[Review](https://records.example.test/item)\n    Never send email.`,
     'Keep {{emoji:smile}} as literal text. Never send email.',

@@ -85,6 +85,16 @@ class Telegram extends TelegramAdapter {
     return chunks(text).flatMap(fit);
   }
 
+  canDeliverLiteral(text: string) {
+    return (
+      this.chunks(text).length === 1 &&
+      [
+        this.formatConverter.fromMarkdown(text),
+        this.renderPlainTextMessage({ markdown: text }, null),
+      ].every((value) => convertEmojiPlaceholders(value, 'gchat') === value)
+    );
+  }
+
   typing(threadId: string, signal?: AbortSignal) {
     return this.telegramFetch(
       'sendChatAction',
@@ -358,16 +368,12 @@ export function createChatSdkTransport(
     canDeliverLiteral({ channelId, text, literal }) {
       if (!hasLiteralBlock(text, literal)) return false;
       if (channelId === 'telegram' && telegram) {
-        const formatted = telegramText(text);
-        return (
-          telegram.chunks(text).length === 1 &&
-          convertEmojiPlaceholders(formatted, 'gchat') === formatted
-        );
+        return telegram.canDeliverLiteral(text);
       }
       if (channelId === 'whatsapp' && whatsapp) {
         const formatted = whatsappText(text);
         return (
-          !literal.includes('```') &&
+          formatted.split('```').length === 3 &&
           whatsapp.chunks(text).length === 1 &&
           convertEmojiPlaceholders(formatted, 'whatsapp') === formatted
         );
