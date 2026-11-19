@@ -789,12 +789,15 @@ export function createSchedules(dependencies: ScheduleDependencies) {
       spent: WorkUsage | undefined,
       recorded: number | null | undefined,
       target: WorkPrice | undefined,
-    ) =>
-      !spent || !target || canReuseWorkCost(spent, target.modelId, target.pricing)
-        ? recorded
-        : repriceUsd(spent, target.pricing, target.audio);
+    ) => {
+      if (!spent || !target) return typeof recorded === 'number' && recorded > 0 ? recorded : null;
+      if (canReuseWorkCost(spent, target.modelId, target.pricing)) return recorded;
+      const cost = repriceUsd(spent, target.pricing, target.audio);
+      const tokens = spent.input + spent.output + spent.cacheRead + spent.cacheWrite;
+      return cost === 0 && tokens === 0 ? null : cost;
+    };
     const hasPrice = (cost: number | null | undefined): cost is number =>
-      typeof cost === 'number' && cost > 0;
+      typeof cost === 'number' && Number.isFinite(cost) && cost >= 0;
     const pricedRuns = (
       target: WorkPrice | undefined,
       keep: (run: (typeof runs)[number]) => boolean,

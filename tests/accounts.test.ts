@@ -4818,6 +4818,7 @@ describe('model connections', { skip: !process.env.TEST_DATABASE_URL }, () => {
     );
     const access = await owner.resolve();
     assert.equal(access.definition.spec.baseUrl, `${address}/v1`);
+    assert.equal(owner.priceOf(owner.view().selection)?.pricing, undefined);
     assert.equal(owner.hasApiKey('openai'), false);
     assert.equal(await owner.apiKey('openai'), undefined);
     assert.deepEqual(await access.read(), {

@@ -291,6 +291,7 @@ test(
         });
         const turnId = await thread.enqueueTurn('Synthetic forecast sample', { source: 'event' });
         const schedule = await create({ title: 'Synthetic first schedule', cron: '0 9 * * *' });
+        const sampleTurns = [turnId];
         try {
           await db.pool.query("UPDATE turns SET status='succeeded' WHERE id=$1", [turnId]);
           for (const [inputTokens, cacheWriteTokens, cost] of [
@@ -344,10 +345,27 @@ test(
             [reviewUsage],
           );
           assert.equal((await modelled.getSchedule(schedule.id)).monthlyUsd, standardWrites);
+
+          const secondTurn = await thread.enqueueTurn('Synthetic second sample', {
+            source: 'event',
+          });
+          sampleTurns.push(secondTurn);
+          await db.pool.query("UPDATE turns SET status='succeeded' WHERE id=$1", [secondTurn]);
+          await db.pool.query(
+            `INSERT INTO model_usage(id,owner_id,turn_id,cost_usd,details) VALUES
+               ($1,$3,$4,0.2,'{"category":"agent","inputTokens":100000}'),
+               ($2,$3,$4,0.02,'{"category":"review","inputTokens":5000}')`,
+            [randomUUID(), randomUUID(), ownerId, secondTurn],
+          );
+          pricing = { input: 0, output: 0 };
+          const free = (await modelled.getSchedule(schedule.id)).monthlyUsd!;
+          assert.ok(Math.abs(free / old - 0.01 / 1.88) < 1e-9);
         } finally {
           await request('DELETE', `/api/schedules/${schedule.id}`);
-          await db.pool.query('DELETE FROM model_usage WHERE turn_id=$1', [turnId]);
-          await db.pool.query('DELETE FROM turns WHERE id=$1', [turnId]);
+          await db.pool.query('DELETE FROM model_usage WHERE turn_id=ANY($1::uuid[])', [
+            sampleTurns,
+          ]);
+          await db.pool.query('DELETE FROM turns WHERE id=ANY($1::uuid[])', [sampleTurns]);
         }
       });
 
@@ -1121,6 +1139,7 @@ test(
             'gpt-6.1-sol': originalPrice,
             'gpt-6-luna': { input: 0.1, output: 0.5 },
             'fixture-local': null,
+            'fixture-free': { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
           };
           const modelled = createPersonalService({
             pool: db.pool,
@@ -1260,6 +1279,8 @@ test(
           assert.ok(Math.abs((await ledger.sessionCosts([run.turnId]))[run.turnId]! - 3.36) < 1e-9);
           await setModel(schedule.id, light);
           await expectRunCost(0.16);
+          await setModel(schedule.id, { ...light, modelId: 'fixture-free' });
+          await expectRunCost(0.01);
           await setModel(schedule.id, { ...light, modelId: 'fixture-local' });
           assert.equal((await modelled.getSchedule(schedule.id)).monthlyUsd ?? null, null);
           await setModel(schedule.id, null);

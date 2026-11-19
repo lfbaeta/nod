@@ -90,6 +90,7 @@ const modelRates = z.object({
 });
 
 function modelPricing(model: ModelDefinition): ModelChoice['pricing'] {
+  if (model.spec.provider === 'compatible') return undefined;
   if (model.choice.id === 'openrouter/auto') return 'variable';
   const cost = modelRates.safeParse(model.spec.cost).data;
   if (!cost) return undefined;

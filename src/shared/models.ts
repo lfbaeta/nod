@@ -200,8 +200,7 @@ export function canReuseWorkCost(
 }
 
 export function repriceUsd(usage: WorkUsage, pricing: ModelChoice['pricing'], audio = false) {
-  if (audio || !pricing || pricing === 'variable' || pricing.input + pricing.output <= 0)
-    return null;
+  if (audio || !pricing || pricing === 'variable') return null;
   const charge = (
     [input, output, cacheRead, cacheWrite, cacheWrite1h]: [number, number, number, number, number],
     rates: ModelPricing,
