@@ -74,7 +74,7 @@ Under **Free voices**, select **Download** for a one-time download of about 180 
 
 When a visual makes an answer easier to understand, nod can include images, maps, flight itineraries and comparisons, seat plans, booking summaries, diagrams, or charts.
 
-Each visual appears as a single preview. Hover over it or focus it with the keyboard to reveal its expand control, which stays visible on touch screens. Select that control to inspect it in the file panel. A self-contained card can be the whole answer. Nod adds text for useful context or caveats instead of announcing the card or repeating its contents. Supplied sources and freshness details remain available inside the card. Nod can capture a page it visits and include the screenshot with its answer; select the image to inspect it in the file panel.
+Each visual appears as a single preview. Hover over it or focus it with the keyboard to reveal its expand control, which stays visible on touch screens. Select that control to inspect it in the file panel. Nod delivers each result with its matching card and keeps the text for context, caveats and sources. A self-contained card can be the whole answer. Nod adds text for useful context or caveats instead of announcing the card or repeating its contents. Supplied sources and freshness details remain available inside the card. Nod can capture a page it visits and include the screenshot with its answer; select the image to inspect it in the file panel.
 
 When the file panel has more than one file, select the filename at the top to switch files. You can also use the previous and next buttons.
 
@@ -82,11 +82,13 @@ When nod suggests apps to connect, it lists up to three below its message, each 
 
 Location cards pair a numbered overview with a list of places. Select a marker or place, then **Open in Maps** to open its marked location in OpenStreetMap. Select **Map** to load the selected place's street map in chat, or **Overview** to return to relative positions. Maps load only when you choose. With a marker or place focused, use the arrow keys to change selection. A place's **Source** link opens its supplied reference separately.
 
-Flight cards group each journey's date, flight number, route, and times. A different arrival date stays beside the destination. Booked trips keep price and booking reference under **Details**; comparisons can show a price beside the carrier. Details also contain terminals, baggage and source links when available. Connection airports, technical stops, airport changes and self-transfers stay visible. Missing information is never treated as proof of a nonstop flight or a protected connection. An itinerary overview shows the reservation as recorded. Ask for a status or check-in update when you need current information.
+Flight cards group each journey's date, flight number, route, and times. A different arrival date stays beside the destination. A known price shows beside the carrier, for a booked trip as well as an option. Booking references stay under **Details**. Details also contain terminals, baggage and source links when available. Connection airports, technical stops, airport changes and self-transfers stay visible. Missing information is never treated as proof of a nonstop flight or a protected connection. An itinerary overview shows the reservation as recorded. Ask for a status or check-in update when you need current information.
 
 Seat plans group the supplied rows by cabin and deck, preserving different layouts, aisles and empty positions. The coverage states whether the source shows the whole aircraft, a cabin or selected rows. Each plan refers to one flight or aircraft configuration. The view is schematic; nod can show the original image when exact geometry matters. Inspecting a seat doesn't reserve it or confirm its availability.
 
 Venue cards can include photos, review summaries with their source rating and review count, and notes such as access or cancellation conditions. Comparisons keep each venue's details together. A proposed booking stays an option until nod has evidence of confirmation.
+
+Diagrams show each step with its details and label the connections between steps. Select a step to read its details and connections in full.
 
 Charts use bars for comparisons, lines for trends, and pie or donut charts for parts of a whole. Hover, select, or focus a category or point to inspect its values. With a point focused, use the arrow keys to move through the data. A chart request stays focused on its data and any gaps. Ask for a forecast or an explanation of the numbers when you need further analysis.
 
