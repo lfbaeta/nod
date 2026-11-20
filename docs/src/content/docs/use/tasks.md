@@ -7,15 +7,15 @@ sidebar:
 
 Task previews in chat show what Nod is working on and what needs your attention. The **Scheduled** page holds open tasks, schedules and their recent runs. Select **New schedule** to open chat, where Nod helps you decide what to do and when.
 
-Nod keeps quick answers, simple lookups and status questions in chat. It starts a saved task for substantial work, including multi-step work it can finish in one sitting, such as research across sources, checked comparisons or report creation, and for an outside wait, such as a person, a reply or an action elsewhere, or work you ask it to track. You never pick an execution mode: Nod starts the task itself and lets it finish the assigned work. Browsing a website, signing in, paying or using a desktop app always runs as its own task, with its own browser and questions.
+Nod keeps quick answers, simple lookups and status questions in chat, including flight searches. It starts a saved task for substantial work, including multi-step work it can finish in one sitting, such as research across sources, checked comparisons or report creation, and for an outside wait, such as a person, a reply or an action elsewhere, or work you ask it to track. You never pick an execution mode: Nod starts the task itself and lets it finish the assigned work. Browsing a website, signing in, paying or using a desktop app always runs as its own task, with its own browser and questions.
 
 | You write                              | What Nod does                    |
 | -------------------------------------- | -------------------------------- |
 | "What time is my next meeting?"        | Answers in chat.                 |
-| "Compare flights to Copenhagen."       | Starts task A.                   |
+| "Compare hotels in Copenhagen."        | Starts task A.                   |
 | "Also prepare my meeting notes."       | Starts task B while A continues. |
-| "For the flights, only direct routes." | Updates task A.                  |
-| "How are the flights going?"           | Reports task A's status in chat. |
+| "For the hotels, only near the metro." | Updates task A.                  |
+| "How are the hotels going?"            | Reports task A's status in chat. |
 
 The main chat stays available while tasks work. Each task keeps its goal and history, and its start message is its acknowledgement. Reply to a task's message to correct it or add a related update; a question about its progress is answered in chat. In the web and desktop apps, each message a task posts quotes your message it belongs to: your latest message that task had picked up when it posted, or else the one that started it. Select the quote to jump to that message.
 
