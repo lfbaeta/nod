@@ -10,6 +10,7 @@ const keyFormats: { prefix: string; providers: ModelProvider[]; name?: string }[
   { prefix: 'gsk_', providers: ['groq'] },
   { prefix: 'hf_', providers: ['huggingface'] },
   { prefix: 'xai-', providers: ['xai'] },
+  { prefix: 'nt_live_', providers: ['neon'] },
 ];
 
 export function modelKeyError(provider: ModelProvider, key: string) {

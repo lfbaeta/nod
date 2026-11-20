@@ -9333,6 +9333,165 @@ test('cloud connections list only the account’s models and send each key only 
   );
 });
 
+test('Neon AI Gateway catalog sends its token only to the branch gateway and routes each model family to its endpoint', async () => {
+  const { neonGatewayAddress } = await import('../src/shared/models.ts');
+  const { modelKeyCredential } = await import('../src/server/models.ts');
+  const { ModelAuthError } = await import('../src/ports/models.ts');
+  const url = 'https://br-fixture-api.ai.c-2.us-east-2.aws.neon.tech';
+  for (const address of [
+    'http://br-fixture-api.ai.c-2.us-east-2.aws.neon.tech',
+    'https://br-fixture-api.ai.c-2.us-east-2.aws.neon.tech.example.test',
+    'https://neon.tech.example.test',
+    'https://br-fixture-api.ai.c-2.us-east-2.aws.neon.tech:8443',
+    'https://user@br-fixture-api.ai.c-2.us-east-2.aws.neon.tech',
+    'https://br-fixture-api.ai.c-2.us-east-2.aws.neon.tech/anthropic',
+    'https://br-fixture-api.ai.c-2.us-east-2.aws.neon.tech/?next=https://example.test',
+  ]) {
+    assert.equal(neonGatewayAddress(address), undefined, address);
+    assert.throws(() => modelKeyCredential('neon', 'nt_live_fixture', { url: address }));
+  }
+  assert.equal(neonGatewayAddress(`${url}/v1/`), url);
+  assert.deepEqual(
+    modelKeyCredential('neon', 'nt_live_fixture', { url: url.slice('https://'.length) }),
+    {
+      type: 'neon',
+      url,
+      key: 'nt_live_fixture',
+    },
+  );
+  const model = (id: string, lab: string, extra: Record<string, unknown> = {}) => ({
+    id,
+    name: id,
+    lab,
+    released: true,
+    tool_call: true,
+    reasoning: true,
+    reasoning_options: [{ type: 'effort', values: ['none', 'low', 'high'] }],
+    modalities: { input: ['text', 'image'], output: ['text'] },
+    limit: { context: 400_000, output: 128_000 },
+    cost: {
+      input: 1,
+      output: 4,
+      cache_read: 0.1,
+      tiers: [{ input: 2, output: 8, tier: { type: 'context', size: 272_000 } }],
+    },
+    ...extra,
+  });
+  const requests: { url: string; authorization: string | null }[] = [];
+  let gatewayStatus = 200;
+  const backend = createPiModelBackend({
+    fetch: async (input, init) => {
+      const target = String(input);
+      requests.push({
+        url: target,
+        authorization: new Headers(init?.headers).get('authorization'),
+      });
+      if (target === `${url}/v1/models`) {
+        if (gatewayStatus !== 200)
+          return Response.json(
+            { error: { message: 'credential not authorized for this branch' } },
+            { status: gatewayStatus },
+          );
+        return Response.json({
+          data: [
+            'claude-opus-5-5',
+            'claude-fixture-budget',
+            'gpt-fixture',
+            'kimi-fixture',
+            'gemini-fixture',
+            'fixture-embedding',
+            'fixture-unreleased',
+            { id: 'fixture-disabled', enabled: false },
+          ].map((id) => (typeof id === 'string' ? { id, enabled: true } : id)),
+        });
+      }
+      assert.equal(target, 'https://neon.com/models.json');
+      return Response.json({
+        neon: {
+          models: {
+            a: model('claude-opus-5-5', 'anthropic', {
+              reasoning_options: [{ type: 'toggle' }, { type: 'budget_tokens' }],
+            }),
+            b: model('claude-fixture-budget', 'anthropic', {
+              reasoning_options: [{ type: 'toggle' }, { type: 'budget_tokens' }],
+            }),
+            c: model('gpt-fixture', 'openai'),
+            d: model('kimi-fixture', 'moonshotai'),
+            e: model('gemini-fixture', 'google'),
+            f: { id: 'fixture-embedding', name: 'Embedding', lab: 'alibaba', type: 'embedding' },
+            g: model('fixture-unreleased', 'openai', { released: false }),
+            h: model('fixture-disabled', 'openai'),
+            i: model('fixture-not-enabled', 'openai'),
+          },
+        },
+      });
+    },
+  });
+  const credential = { type: 'neon' as const, url, key: 'nt_live_fixture-token' };
+  const models = await backend.catalog('neon', 'api_key', credential);
+  assert.deepEqual(
+    requests.map(({ url: target, authorization }) => [target, authorization]),
+    [
+      [`${url}/v1/models`, 'Bearer nt_live_fixture-token'],
+      ['https://neon.com/models.json', null],
+    ],
+  );
+  const specs = Object.fromEntries(models.map(({ choice, spec }) => [choice.id, { choice, spec }]));
+  assert.deepEqual(Object.keys(specs).sort(), [
+    'claude-fixture-budget',
+    'claude-opus-5-5',
+    'gpt-fixture',
+    'kimi-fixture',
+  ]);
+  assert.deepEqual(
+    Object.values(specs).map(({ spec }) => [spec.id, spec.api, spec.baseUrl]),
+    [
+      ['claude-opus-5-5', 'anthropic-messages', `${url}/anthropic`],
+      ['claude-fixture-budget', 'anthropic-messages', `${url}/anthropic`],
+      ['gpt-fixture', 'openai-responses', `${url}/openai/v1`],
+      ['kimi-fixture', 'openai-completions', `${url}/v1`],
+    ],
+  );
+  assert.equal(
+    (specs['claude-opus-5-5']!.spec.compat as { forceAdaptiveThinking?: boolean })
+      .forceAdaptiveThinking,
+    true,
+  );
+  assert.equal(specs['claude-opus-5-5']!.choice.efforts.includes('off'), false);
+  assert.equal(
+    (specs['claude-fixture-budget']!.spec.compat as { forceAdaptiveThinking?: boolean })
+      .forceAdaptiveThinking,
+    false,
+  );
+  assert.deepEqual(specs['gpt-fixture']!.choice.efforts, ['off', 'low', 'high']);
+  assert.deepEqual(specs['gpt-fixture']!.spec.cost, {
+    input: 1,
+    output: 4,
+    cacheRead: 0.1,
+    cacheWrite: 1,
+    tiers: [{ inputTokensAbove: 272_000, input: 2, output: 8, cacheRead: 2, cacheWrite: 2 }],
+  });
+  assert.equal(
+    (specs['kimi-fixture']!.spec.compat as { supportsLongCacheRetention?: boolean })
+      .supportsLongCacheRetention,
+    false,
+  );
+  gatewayStatus = 403;
+  await assert.rejects(
+    backend.catalog('neon', 'api_key', credential),
+    (error: Error) =>
+      error instanceof ModelAuthError &&
+      error.message.includes('Neon AI Gateway didn’t accept this token') &&
+      error.message.includes('credential not authorized for this branch') &&
+      !error.message.includes('nt_live_fixture-token'),
+  );
+  const sent = requests.length;
+  await assert.rejects(
+    backend.catalog('neon', 'api_key', { ...credential, url: 'https://example.test' }),
+  );
+  assert.equal(requests.length, sent);
+});
+
 test('cloud model requests use the connection’s Region, API key and Azure deployment, once and without leaking the key', async (t) => {
   const { createServer } = await import('node:http');
   const { createPiModelBackend, createPiModelRuntime } =

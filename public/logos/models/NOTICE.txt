@@ -55,4 +55,11 @@ Source asset: inline radius-logo-mark SVG, with presentation classes removed.
 Attribution: Earendil Works. This asset is not covered by either bundled MIT
 license.
 
+Neon
+Source: https://neon.com/favicon/favicon.svg (reviewed 2026-11-20)
+Local asset: neon.svg
+Source asset: favicon SVG path, unmodified, with its color style replaced by
+currentColor and dimensions normalized to 24 pixels.
+Attribution: Neon. This asset is not covered by either bundled MIT license.
+
 Provider names and trademarks remain with their respective owners.

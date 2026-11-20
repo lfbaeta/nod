@@ -13,6 +13,7 @@ export type ModelCredential =
   | { type: 'bedrock'; key: string; region: string }
   | { type: 'cloudflare'; key: string; accountId: string; gatewayId?: string }
   | { type: 'azure'; url: string; key: string; model: string; deployment: string }
+  | { type: 'neon'; url: string; key: string }
   | {
       type: 'oauth';
       access: string;

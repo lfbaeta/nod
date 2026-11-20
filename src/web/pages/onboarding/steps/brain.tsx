@@ -66,6 +66,7 @@ const placeholders: Partial<Record<ModelProvider, string>> = {
   openai: 'sk-…',
   anthropic: 'sk-ant-…',
   openrouter: 'sk-or-…',
+  neon: 'nt_live_…',
 };
 
 const depth = { list: 0, setup: 1, done: 2 } as const;
@@ -347,9 +348,13 @@ function KeyForm({
           placeholder={placeholders[provider]}
           autoFocus={
             autoFocus &&
-            !['amazon-bedrock', 'azure', 'cloudflare-workers-ai', 'cloudflare-ai-gateway'].includes(
-              provider,
-            )
+            ![
+              'amazon-bedrock',
+              'azure',
+              'cloudflare-workers-ai',
+              'cloudflare-ai-gateway',
+              'neon',
+            ].includes(provider)
           }
           value={key}
           disabled={c.checking}

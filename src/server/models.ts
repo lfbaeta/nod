@@ -39,6 +39,7 @@ import {
   cloudflareGatewayPattern,
   lightestEffort,
   modelSource,
+  neonGatewayAddress,
   openAIRegions,
   routeModel,
   supportsLongCacheWrites,
@@ -202,6 +203,14 @@ export function modelKeyCredential(
       ...(provider === 'cloudflare-ai-gateway' ? { gatewayId: settings.gatewayId } : {}),
     };
   }
+  if (provider === 'neon') {
+    const url = settings.url && neonGatewayAddress(settings.url);
+    if (!url)
+      throw new ConnectionError(
+        'Enter your Neon AI Gateway base URL from the Neon Console, such as https://br-name-api.ai.c-2.us-east-2.aws.neon.tech.',
+      );
+    return { type: 'neon', url, key };
+  }
   if (provider !== 'azure') return { type: 'api_key', key };
   const url = settings.url && azureAddress(settings.url);
   if (!url)
@@ -236,6 +245,7 @@ function connectionLabel(provider: ModelProvider, method: ModelMethod, value: Mo
   if (value.type === 'endpoint') return new URL(value.url).host;
   if (value.type === 'bedrock') return value.region;
   if (value.type === 'azure') return value.deployment;
+  if (value.type === 'neon') return new URL(value.url).hostname.split('.')[0]!.replace(/-api$/, '');
   if (value.type === 'cloudflare') return value.gatewayId ?? value.accountId;
   return modelSource({ provider, method });
 }

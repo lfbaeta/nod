@@ -60,6 +60,7 @@ import {
   assistantModels,
   cloudflareCredential,
   nativeCatalog,
+  neonCredential,
 } from './model-catalog.ts';
 
 const reconnectChatGpt = `Reconnect your ChatGPT account in ${appPages['/settings/models']}.`;
@@ -778,6 +779,15 @@ export function createPiModelBackend(options: { fetch?: typeof fetch } = {}): Mo
       if (provider === 'amazon-bedrock') return bedrockCatalog(local, credential);
       if (provider === 'google-vertex') return vertexCatalog(local, credential);
       if (provider === 'azure') return azureCatalog(local, credential);
+      if (provider === 'neon')
+        return (
+          await nativeCatalog(
+            provider,
+            [...(await runtime()).getModels('anthropic')],
+            credential,
+            request,
+          )
+        ).map(definition);
       if (provider !== 'openai' && provider !== 'anthropic' && provider !== 'openrouter')
         return (await nativeCatalog(provider, local, credential, request)).map(definition);
       if (credential.type !== 'api_key' && credential.type !== 'oauth')
@@ -1148,6 +1158,7 @@ export async function createPiModelRuntime(
           },
         };
       }
+      if (provider === 'neon') return { type: 'api_key', key: neonCredential(credential).key };
       if (credential.type === 'bedrock')
         return { type: 'api_key', key: credential.key, env: { AWS_REGION: credential.region } };
       if (credential.type === 'azure')
@@ -1238,6 +1249,7 @@ export async function createPiModelRuntime(
       access.provider === 'radius' ||
       access.provider === 'cloudflare-workers-ai' ||
       access.provider === 'cloudflare-ai-gateway' ||
+      access.provider === 'neon' ||
       (access.provider === 'openai' && !subscription) ||
       Boolean(usage);
     const sent = audio?.context ?? context;

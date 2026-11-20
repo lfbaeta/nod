@@ -7,6 +7,7 @@ import {
   cloudflareGatewayPattern,
   modelProviderInfo,
   modelProviderNames,
+  neonGatewayAddress,
   type OpenAIRegion,
   type ModelProvider,
 } from '../../shared/models.ts';
@@ -140,6 +141,149 @@ export const antLingModel: Model<'openai-completions'> = {
   },
 };
 
+const neonCatalogUrl = 'https://neon.com/models.json';
+const neonEfforts = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
+const neonPrice = {
+  input: z.number().nonnegative().finite(),
+  output: z.number().nonnegative().finite(),
+  cache_read: z.number().nonnegative().finite().optional(),
+  cache_write: z.number().nonnegative().finite().optional(),
+};
+const neonModelSchema = z.object({
+  id: modelId,
+  name: z.string().min(1).max(200),
+  lab: z.string().max(100),
+  released: z.boolean().optional(),
+  tool_call: z.literal(true),
+  open_weights: z.boolean().optional(),
+  reasoning: z.boolean().optional(),
+  reasoning_options: z
+    .array(
+      z.object({
+        type: z.string().max(50),
+        values: z.array(z.string().max(50)).max(20).optional(),
+      }),
+    )
+    .max(10)
+    .optional(),
+  modalities: z.object({
+    input: z.array(z.string().max(50)).max(20),
+    output: z.array(z.string().max(50)).max(20),
+  }),
+  limit: z.object({
+    context: z.number().int().positive().max(100_000_000),
+    output: z.number().int().positive().max(100_000_000),
+  }),
+  cost: z
+    .object({
+      ...neonPrice,
+      tiers: z
+        .array(
+          z.object({
+            ...neonPrice,
+            tier: z.object({ type: z.literal('context'), size: z.number().int().positive() }),
+          }),
+        )
+        .max(10)
+        .optional(),
+    })
+    .optional(),
+});
+
+export function neonCredential(credential: ModelCredential) {
+  if (
+    credential.type !== 'neon' ||
+    !credential.key ||
+    neonGatewayAddress(credential.url) !== credential.url
+  )
+    throw new Error('The selected Neon AI Gateway connection is unavailable.');
+  return credential;
+}
+
+function neonModel(
+  url: string,
+  model: z.infer<typeof neonModelSchema>,
+  claude: readonly Model<Api>[],
+): Model<Api> {
+  const anthropic = model.lab === 'anthropic';
+  const known = anthropic ? claude.find((item) => item.id === model.id) : undefined;
+  const responses = model.lab === 'openai' && !model.open_weights;
+  const options = model.reasoning_options ?? [];
+  const efforts = options.find((option) => option.type === 'effort')?.values ?? [];
+  const reasoning =
+    model.reasoning === true && (anthropic ? options.length > 0 : efforts.length > 0);
+  const rates = (price: {
+    input: number;
+    output: number;
+    cache_read?: number;
+    cache_write?: number;
+  }) => ({
+    input: price.input,
+    output: price.output,
+    cacheRead: price.cache_read ?? price.input,
+    cacheWrite: price.cache_write ?? price.input,
+  });
+  return {
+    id: model.id,
+    name: model.name,
+    provider: 'neon',
+    api: anthropic ? 'anthropic-messages' : responses ? 'openai-responses' : 'openai-completions',
+    baseUrl: anthropic ? `${url}/anthropic` : responses ? `${url}/openai/v1` : `${url}/v1`,
+    reasoning: known?.reasoning ?? reasoning,
+    ...(known
+      ? { thinkingLevelMap: known.thinkingLevelMap }
+      : reasoning
+        ? {
+            thinkingLevelMap: {
+              off: anthropic
+                ? options.some((option) => option.type === 'toggle')
+                  ? undefined
+                  : null
+                : efforts.includes('none')
+                  ? 'none'
+                  : null,
+              ...(efforts.length
+                ? Object.fromEntries(
+                    neonEfforts.map((level) => [level, efforts.includes(level) ? level : null]),
+                  )
+                : {}),
+            },
+          }
+        : {}),
+    input: model.modalities.input.includes('image') ? ['text', 'image'] : ['text'],
+    contextWindow: model.limit.context,
+    maxTokens: Math.min(model.limit.output, model.limit.context),
+    cost: model.cost
+      ? {
+          ...rates(model.cost),
+          ...(model.cost.tiers?.length
+            ? {
+                tiers: model.cost.tiers.map((tier) => ({
+                  inputTokensAbove: tier.tier.size,
+                  ...rates(tier),
+                })),
+              }
+            : {}),
+        }
+      : { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    compat: anthropic
+      ? {
+          forceAdaptiveThinking: known
+            ? (known.compat as { forceAdaptiveThinking?: boolean } | undefined)
+                ?.forceAdaptiveThinking === true
+            : efforts.length > 0,
+        }
+      : responses
+        ? {}
+        : {
+            supportsStore: false,
+            supportsDeveloperRole: false,
+            supportsLongCacheRetention: false,
+            maxTokensField: 'max_tokens',
+          },
+  } as Model<Api>;
+}
+
 export function assistantModelId(id: string) {
   return !specialist.test(id);
 }
@@ -172,7 +316,9 @@ export async function nativeCatalog(
     new ModelAuthError(
       provider === 'cloudflare-ai-gateway'
         ? 'Cloudflare couldn’t read this gateway. Check its Account ID, Gateway ID and token’s AI Gateway Read permission.'
-        : `${modelProviderNames[provider]} didn’t accept this API key. Check its permissions and try again.`,
+        : provider === 'neon'
+          ? 'Neon AI Gateway didn’t accept this token. Check that the token and base URL come from the same Neon branch and that the token has the ai_gateway:invoke scope.'
+          : `${modelProviderNames[provider]} didn’t accept this API key. Check its permissions and try again.`,
     );
   const read = async (url: string | URL, headers: Record<string, string>) => {
     try {
@@ -250,6 +396,35 @@ export async function nativeCatalog(
         return select(ids);
     }
     throw failed();
+  }
+
+  if (provider === 'neon') {
+    const { url, key } = neonCredential(credential);
+    const gateway = parse(
+      z.object({ data: z.array(z.unknown()).max(10000) }),
+      await read(`${url}/v1/models`, { Authorization: `Bearer ${key}` }),
+    );
+    const enabled = new Set(
+      list(gateway.data, z.object({ id: modelId, enabled: z.boolean().optional() }))
+        .filter((model) => model.enabled !== false)
+        .map((model) => model.id),
+    );
+    const catalog = parse(
+      z.object({ neon: z.object({ models: z.record(z.string(), z.unknown()) }) }),
+      await read(neonCatalogUrl, {}),
+    );
+    return assistantModels(
+      list(Object.values(catalog.neon.models), neonModelSchema)
+        .filter(
+          (model) =>
+            model.released !== false &&
+            enabled.has(model.id) &&
+            !model.id.startsWith('gemini-') &&
+            model.modalities.input.includes('text') &&
+            model.modalities.output.includes('text'),
+        )
+        .map((model) => neonModel(url, model, local)),
+    );
   }
 
   if (credential.type !== 'api_key' || !credential.key)
