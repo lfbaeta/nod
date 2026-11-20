@@ -200,11 +200,11 @@ function Diagram({ visual }: { visual: Visual<'diagram'> }) {
   for (const level of levels) {
     const ids = [...rows].filter(([, row]) => row === level).map(([id]) => id);
     ids.forEach((id, index) =>
-      points.set(id, { x: 40 + ((index + 0.5) * (width - 80)) / ids.length, y: level * 128 + 60 }),
+      points.set(id, { x: 40 + ((index + 0.5) * (width - 80)) / ids.length, y: level * 140 + 64 }),
     );
   }
   const scale = availableWidth ? Math.min(1, availableWidth / width) : 1;
-  const height = levels.length * 128;
+  const height = levels.length * 140;
   const edgeLabels: Array<{ key: number; text: string; x: number; y: number }> = [];
   const node = selected ? nodes.get(selected) : undefined;
   const connections = visual.edges.filter((edge) => edge.from === selected || edge.to === selected);
@@ -230,25 +230,22 @@ function Diagram({ visual }: { visual: Visual<'diagram'> }) {
               {visual.edges.map((edge, index) => {
                 const a = points.get(edge.from)!,
                   b = points.get(edge.to)!;
-                const y1 = a.y + 38,
-                  y2 = b.y - 40;
+                const y1 = a.y + 42,
+                  y2 = b.y - 44;
                 const rail = width - 12 - (index % 6) * 5;
                 const loop = edge.from === edge.to;
-                const direct = b.y - a.y === 128;
+                const direct = b.y - a.y === 140;
                 const path = loop
-                  ? `M ${a.x + 78} ${a.y - 14} H ${a.x + 98} V ${a.y + 54} H ${a.x} V ${a.y + 40}`
+                  ? `M ${a.x + 78} ${a.y - 14} H ${a.x + 98} V ${a.y + 58} H ${a.x} V ${a.y + 44}`
                   : direct
                     ? `M ${a.x} ${y1} C ${a.x} ${(y1 + y2) / 2}, ${b.x} ${(y1 + y2) / 2}, ${b.x} ${y2}`
                     : `M ${a.x} ${y1} V ${y1 + 16} H ${rail} V ${y2 - 16} H ${b.x} V ${y2}`;
-                if (edge.label)
+                if (edge.label && direct)
                   edgeLabels.push({
                     key: index,
                     text: edge.label,
-                    ...(loop
-                      ? { x: a.x + 98, y: a.y + 20 }
-                      : direct
-                        ? { x: (a.x + b.x) / 2, y: (y1 + y2) / 2 }
-                        : { x: (a.x + rail) / 2, y: y1 + 16 }),
+                    x: a.x + (b.x - a.x) * 0.7,
+                    y: (y1 + y2) / 2,
                   });
                 return (
                   <path
@@ -276,7 +273,7 @@ function Diagram({ visual }: { visual: Visual<'diagram'> }) {
                   key={item.id}
                   type="button"
                   className="diagram-node"
-                  style={{ left: point.x - 78, top: point.y - 38 }}
+                  style={{ left: point.x - 78, top: point.y - 42 }}
                   aria-pressed={item.id === selected}
                   title={item.label}
                   onClick={() => setSelected(item.id)}

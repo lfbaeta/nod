@@ -219,7 +219,7 @@
   justify-content: center;
   gap: 2px;
   width: 156px;
-  height: 76px;
+  height: 84px;
   padding: 8px 10px;
   overflow: hidden;
   border: 1px solid var(--border);
@@ -257,7 +257,7 @@
 }
 .diagram-edge-label {
   position: absolute;
-  max-width: 140px;
+  max-width: 110px;
   padding: 1px 6px;
   overflow: hidden;
   border-radius: var(--radius-full);
