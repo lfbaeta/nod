@@ -40,18 +40,11 @@ export default scenario({
         async (run) => {
           const rules = String((await run.api('GET', '/api/preferences')).body?.rules ?? '');
           return {
-            pass:
-              /\b(ask|confirm|approv)/i.test(rules) &&
-              /\b(bank|card)/i.test(rules) &&
-              /\b(short|brief|concise)/i.test(rules),
+            pass: /\b(bank|card)/i.test(rules),
             evidence: rules.slice(0, 300) || 'no rules',
           };
         },
-        {
-          failure: 'tool',
-          otherwise:
-            'The saved standing rules cover asking before sending, booking, buying, cancelling or deleting, staying off bank and card sites, and short answers, in any wording.',
-        },
+        { failure: 'tool' },
       ),
       check(
         'no-approval-asked',
@@ -77,7 +70,7 @@ export default scenario({
       ),
       judge(
         'rules-are-complete',
-        'The saved rules quoted in the evidence keep all three requested rules: the owner approves before Nod sends, books, buys, cancels or deletes anything; Nod never signs in to bank or card sites; answers are short, without tables. Wording is free.',
+        'The saved rules setting quoted in the evidence keeps all three requested rules: the owner approves before Nod sends, books, buys, cancels or deletes anything; Nod never signs in to bank or card sites; answers are short, without tables. Wording is free. Memory notes do not count as the rules setting.',
         { failure: 'incomplete' },
       ),
       judge(
