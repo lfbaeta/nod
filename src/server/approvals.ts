@@ -767,18 +767,15 @@ export async function createApprovals(
       await options.validate?.(client);
       options.signal?.throwIfAborted();
       if (!question) {
-        const closed = await client.query<{ turn_id: string }>(
-          "UPDATE approvals SET status='expired' WHERE owner_id=$1 AND thread_id=$2 AND action=$3 AND args=$4::jsonb AND status='pending' RETURNING turn_id",
-          [ownerId, turn.threadId, action, snapshot],
+        const closed = await client.query(
+          `UPDATE approvals a SET status='expired' FROM turns u
+           WHERE u.id=a.turn_id AND u.owner_id=a.owner_id AND u.session_id=(SELECT session_id FROM turns WHERE id=$5)
+             AND a.owner_id=$1 AND a.thread_id=$2 AND a.action=$3 AND a.args=$4::jsonb AND a.status='pending'
+           RETURNING a.id`,
+          [ownerId, turn.threadId, action, snapshot, turn.turnId],
         );
-        if (closed.rowCount) {
-          await client.query(
-            "UPDATE turns SET status='cancelled',finished_at=now() WHERE owner_id=$1 AND id=ANY($2::uuid[]) AND id<>$3 AND status='waiting'",
-            [ownerId, closed.rows.map((row) => row.turn_id), turn.turnId],
-          );
-          for (const _ of closed.rows)
-            afterCommit(client, () => changed('expired', action, inspected.source));
-        }
+        for (const _ of closed.rows)
+          afterCommit(client, () => changed('expired', action, inspected.source));
         return { cached: false as const, authorMessageId: inspected.authorMessageId };
       }
       const messageId = randomUUID();
