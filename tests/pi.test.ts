@@ -8381,6 +8381,11 @@ test('OpenAI-compatible servers get tool models, a system message and one attemp
       parameters: 'num_ctx 65536',
       thinking: { values: ['low', 'medium', 'high'] },
     },
+    'fixture-boolean-thinking': {
+      capabilities: ['tools', 'thinking'],
+      model_info: { 'llama.context_length': 32768 },
+      thinking: { values: [false, true] },
+    },
     'fixture-unknown': {
       model_info: { 'llama.context_length': 32768 },
       thinking: { values: [false, true] },
@@ -8439,6 +8444,13 @@ test('OpenAI-compatible servers get tool models, a system message and one attemp
         efforts: ['low', 'medium', 'high'],
         images: true,
         contextWindow: 65536,
+      },
+      {
+        id: 'fixture-boolean-thinking',
+        name: 'fixture-boolean-thinking',
+        efforts: ['off', 'high'],
+        images: false,
+        contextWindow: 32768,
       },
       {
         id: 'fixture-unknown',
@@ -8588,6 +8600,35 @@ test('OpenAI-compatible servers get tool models, a system message and one attemp
     replayed.flatMap(({ tool_call_id }) => tool_call_id ?? []),
     calls,
   );
+  const booleanDefinition = definitions.find(
+    ({ choice }) => choice.id === 'fixture-boolean-thinking',
+  )!;
+  assert.equal(booleanDefinition.spec.compat?.supportsReasoningEffort, true);
+  const unknownBooleanDefinition = definitions.find(
+    ({ choice }) => choice.id === 'fixture-unknown',
+  )!;
+  assert.equal(unknownBooleanDefinition.spec.compat?.supportsReasoningEffort, true);
+  const toolsOnlyDefinition = definitions.find(
+    ({ choice }) => choice.id === 'fixture-tools-only',
+  )!;
+  assert.equal(toolsOnlyDefinition.spec.compat?.supportsReasoningEffort, undefined);
+  assert.equal(definitions[0]!.spec.compat?.supportsReasoningEffort, undefined);
+  const booleanRuntime = await createPiModelRuntime({
+    provider: 'compatible',
+    method: 'api_key',
+    definition: booleanDefinition,
+    effort: 'off',
+    read: async () => credential,
+  });
+  const booleanCheck = await booleanRuntime.runtime.completeSimple(
+    booleanRuntime.model,
+    { messages: [{ role: 'user', content: 'Synthetic fixture', timestamp: 1 }] },
+    { maxRetries: 0, reasoning: 'none' },
+  );
+  assert.equal(booleanCheck.stopReason, 'error');
+  const booleanBody = bodies.at(-1)!;
+  assert.equal(booleanBody.reasoning_effort, 'none');
+  assert.ok(!('think' in booleanBody));
 });
 
 test('OpenAI-compatible discovery checks each model and respects capabilities without model details', async (t) => {
@@ -11951,6 +11992,7 @@ test('Ollama models with on or off thinking complete tasks without a named effor
   for (const thinking of [undefined, { values: [false, true] }, { values: [true] }]) {
     const onlyOn = thinking?.values.length === 1;
     const enabled: Array<boolean | undefined> = [];
+    const requests: Array<[string | undefined, boolean | undefined]> = [];
     globalThis.fetch = async (input, init) => {
       const request = new Request(input, init);
       const path = new URL(request.url).pathname;
@@ -11965,8 +12007,7 @@ test('Ollama models with on or off thinking complete tasks without a named effor
         });
       assert.equal(path, '/v1/chat/completions');
       const body = (await request.json()) as { reasoning_effort?: string; think?: boolean };
-      assert.equal(body.reasoning_effort, undefined);
-      assert.equal(typeof body.think, thinking ? 'boolean' : 'undefined');
+      requests.push([body.reasoning_effort, body.think]);
       enabled.push(body.think);
       return reply({ role: 'assistant', content: 'The synthetic task is complete.' });
     };
@@ -11992,7 +12033,27 @@ test('Ollama models with on or off thinking complete tasks without a named effor
       );
       assert.equal(result.stopReason, 'stop');
     }
-    assert.deepEqual(enabled, thinking ? [true, onlyOn] : [undefined, undefined]);
+    assert.deepEqual(
+      requests,
+      thinking && !onlyOn
+        ? [
+            [undefined, true],
+            ['none', undefined],
+          ]
+        : thinking
+          ? [
+              [undefined, true],
+              [undefined, true],
+            ]
+          : [
+              [undefined, undefined],
+              [undefined, undefined],
+            ],
+    );
+    assert.deepEqual(
+      enabled,
+      thinking && !onlyOn ? [true, undefined] : thinking ? [true, true] : [undefined, undefined],
+    );
   }
 });
 

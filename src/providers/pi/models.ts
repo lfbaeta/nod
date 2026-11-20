@@ -155,6 +155,12 @@ function ollamaModel(show: z.infer<typeof ollamaShowSchema>) {
   const contextWindow = Math.min(trained ?? Infinity, configured ?? Infinity);
   const values = show.thinking?.values;
   const named = levels.filter((level) => values?.includes(level));
+  const supportsReasoningEffort = Boolean(
+    show.capabilities?.includes('thinking') !== false &&
+    values?.includes(false) &&
+    values.includes(true) &&
+    values.every((value) => typeof value === 'boolean'),
+  );
   const thinkingLevelMap =
     show.capabilities?.includes('thinking') === false || !values
       ? undefined
@@ -179,6 +185,7 @@ function ollamaModel(show: z.infer<typeof ollamaShowSchema>) {
     contextWindow: Number.isFinite(contextWindow) ? contextWindow : undefined,
     reasoning: !!thinkingLevelMap,
     thinkingLevelMap,
+    supportsReasoningEffort,
   };
 }
 
@@ -205,6 +212,7 @@ function lmStudioModel(model: z.infer<typeof lmStudioModelSchema>) {
     contextWindow: model.loaded_instances[0]?.config.context_length ?? model.max_context_length,
     reasoning: false,
     thinkingLevelMap: undefined,
+    supportsReasoningEffort: false,
   };
 }
 
@@ -391,6 +399,7 @@ export function createPiModelBackend(options: { fetch?: typeof fetch } = {}): Mo
                 supportsStore: false,
                 supportsDeveloperRole: false,
                 maxTokensField: 'max_tokens',
+                ...(known?.supportsReasoningEffort ? { supportsReasoningEffort: true } : {}),
               },
               reasoning: known?.reasoning ?? false,
               thinkingLevelMap: known?.thinkingLevelMap,
@@ -1322,7 +1331,11 @@ export async function createPiModelRuntime(
         completeRequest = await access.prepareRequest?.(target.id, automatic || cacheWarm);
         const changed = await options?.onPayload?.(payload, target);
         const body = (changed ?? payload) as Record<string, unknown>;
-        if (access.provider === 'compatible' && target.thinkingLevelMap?.high === 'true') {
+        if (
+          access.provider === 'compatible' &&
+          target.thinkingLevelMap?.high === 'true' &&
+          !(target.compat?.supportsReasoningEffort && body.reasoning_effort === 'none')
+        ) {
           body.think = body.reasoning_effort !== 'none' || target.thinkingLevelMap.off === null;
           delete body.reasoning_effort;
         }
