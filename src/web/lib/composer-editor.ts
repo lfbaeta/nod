@@ -9,11 +9,16 @@ import { Fragment, Slice } from '@tiptap/pm/model';
 import { AllSelection, Plugin, TextSelection } from '@tiptap/pm/state';
 import { safeMessageLink } from './message-links';
 
+const touchKeyboardQuery = '(hover: none) and (pointer: coarse)';
+
 export function touchKeyboard() {
-  return (
-    typeof window !== 'undefined' &&
-    window.matchMedia?.('(hover: none) and (pointer: coarse)').matches === true
-  );
+  return typeof window !== 'undefined' && window.matchMedia?.(touchKeyboardQuery).matches === true;
+}
+
+export function subscribeTouchKeyboard(change: () => void) {
+  const query = typeof window === 'undefined' ? undefined : window.matchMedia?.(touchKeyboardQuery);
+  query?.addEventListener('change', change);
+  return () => query?.removeEventListener('change', change);
 }
 
 export function clipboardFiles(clipboard: DataTransfer): File[] {

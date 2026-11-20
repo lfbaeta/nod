@@ -1,4 +1,12 @@
-import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
+import {
+  forwardRef,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react';
 import { EditorContent, useEditor } from '@tiptap/react';
 import type { JSONContent } from '@tiptap/core';
 import {
@@ -19,7 +27,11 @@ import { api, errorMessage } from '../lib/api';
 import { isEditingTarget, shortcutLabel } from '../lib/navigation';
 import { Tooltip } from './tooltip';
 import { captureAnalytics } from '../lib/analytics';
-import { createComposerExtensions, touchKeyboard } from '../lib/composer-editor';
+import {
+  createComposerExtensions,
+  subscribeTouchKeyboard,
+  touchKeyboard,
+} from '../lib/composer-editor';
 import {
   composerDisplayMarkdown,
   composerMarkdown,
@@ -177,6 +189,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
       }),
     [],
   );
+  const touch = useSyncExternalStore(subscribeTouchKeyboard, touchKeyboard, () => false);
   const editor = useEditor({
     extensions,
     content: parseComposerMarkdown(text),
@@ -187,7 +200,6 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
         'aria-label': 'Message Nod',
         'aria-multiline': 'true',
         'aria-describedby': 'composer-keyboard-hint',
-        ...(touchKeyboard() ? { enterkeyhint: 'enter' } : {}),
         class: 'composer-editor message-text',
       },
     },
@@ -197,6 +209,11 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
       setText(value);
     },
   });
+  useEffect(() => {
+    if (!editor || editor.isDestroyed) return;
+    if (touch) editor.view.dom.setAttribute('enterkeyhint', 'enter');
+    else editor.view.dom.removeAttribute('enterkeyhint');
+  }, [editor, touch]);
   useEffect(() => {
     if (editor && !editor.isDestroyed) editor.view.dispatch(editor.state.tr);
   }, [editor, placeholder]);
@@ -1068,8 +1085,8 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
         <EditorContent editor={editor} />
         <EditorFormatting editor={editor} underlineShortcut={false} />
         <span className="sr-only" id="composer-keyboard-hint">
-          {touchKeyboard()
-            ? 'Return for a new line or list item. Select Send message to send.'
+          {touch
+            ? 'Return for a new line or list item. Use the send button to send.'
             : 'Enter to send. Shift or Alt plus Enter for a new line or list item.'}
         </span>
         <div className="composer-tools">
