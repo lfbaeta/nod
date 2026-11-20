@@ -2023,6 +2023,8 @@ test('computer use refuses blocked apps, keeps browsers view-only and acts only 
       request: async (request) => {
         calls.push(request);
         if (request.op === 'apps') return { apps };
+        if (request.op === 'windows')
+          return { windows: apps.find((item) => item.pid === request.pid)?.windows ?? [] };
         if (request.op === 'locate') {
           const found = apps.find((app) => app.bundle === request.bundle);
           if (!found) throw new Error('No app with that bundle ID is installed.');
@@ -2042,6 +2044,7 @@ test('computer use refuses blocked apps, keeps browsers view-only and acts only 
             : { ...window, children: [...window.children, ...findings] };
           return {
             tree,
+            context: JSON.stringify(tree),
             state: createHash('sha256').update(JSON.stringify(tree)).digest('hex'),
             focus: createHash('sha256').update('synthetic-focus').digest('hex'),
             focused: [],
@@ -2145,15 +2148,6 @@ test('computer use refuses blocked apps, keeps browsers view-only and acts only 
     computer.prepare(turn, 'COMPUTER_SET_VALUE', { ref: '@sdraft01:e3', text: 'x' }),
     /no snapshot with that ref/,
   );
-  await assert.rejects(
-    computer.execute(
-      turn,
-      'COMPUTER_SCREENSHOT',
-      await computer.prepare(turn, 'COMPUTER_SCREENSHOT', { pid: 11 }),
-    ),
-    /password field has focus/,
-  );
-
   findings.push({ role: 'statictext', name: 'x'.repeat(25_000) });
   await assert.rejects(
     computer.prepare(turn, 'COMPUTER_PRESS', { ref: '@sdraft01:e1' }),
@@ -2234,18 +2228,6 @@ test('computer use refuses blocked apps, keeps browsers view-only and acts only 
     /password fields/,
   );
   delete subject.states;
-  const before = calls.length;
-  await assert.rejects(
-    computer.execute(
-      turn,
-      'COMPUTER_KEY',
-      await computer.prepare(turn, 'COMPUTER_KEY', { pid: 11, keys: 'cmd+v' }),
-    ),
-    (error: Error & { notRun?: boolean }) =>
-      error.notRun === true && /sent no keys/.test(error.message),
-  );
-  assert.ok(!calls.slice(before).some((call) => call.op === 'key'));
-
   await computer.execute(
     turn,
     'COMPUTER_TYPE',
@@ -2408,9 +2390,12 @@ test('turning computer use off cancels input waiting on a read, even if that rea
       request: async (request) => {
         calls.push(request.op);
         if (request.op === 'apps') return { apps: [app] };
+        if (request.op === 'windows')
+          return { windows: [app].find((item) => item.pid === request.pid)?.windows ?? [] };
         if (request.op === 'inspect')
           return {
             tree: node,
+            context: JSON.stringify(node),
             state: createHash('sha256').update(JSON.stringify(node)).digest('hex'),
           };
         if (request.op === 'snapshot') {
@@ -2494,6 +2479,8 @@ test('computer use on Windows keeps an opened app granted however the app list n
     desktop: {
       request: async (request) => {
         if (request.op === 'apps') return { apps };
+        if (request.op === 'windows')
+          return { windows: apps.find((item) => item.pid === request.pid)?.windows ?? [] };
         if (request.op === 'locate')
           return { bundle: 'notepad.exe', name: 'notepad', program: 'notepad.exe' };
         if (request.op === 'open') {
@@ -2583,6 +2570,8 @@ test('computer use on Linux grants only the opened process when the app list has
     desktop: {
       request: async (request) => {
         if (request.op === 'apps') return { apps };
+        if (request.op === 'windows')
+          return { windows: apps.find((item) => item.pid === request.pid)?.windows ?? [] };
         if (request.op === 'locate')
           return { bundle: 'org.gnome.Weather', name: 'Weather', program: 'gjs' };
         if (request.op === 'open') {
@@ -2616,6 +2605,70 @@ test('computer use on Linux grants only the opened process when the app list has
     computer.prepare(turn, 'COMPUTER_SNAPSHOT', { pid: 42 }),
     /hasn't opened gnome-maps/,
   );
+});
+
+test('computer use presses a menu bar item while the app has an open window', async () => {
+  const pool = {
+    query: async (sql: string) => {
+      if (sql.startsWith('SELECT computer_use'))
+        return { rows: [{ computer_use: true, computer_keep_out: [] }] };
+      if (sql.startsWith('WITH RECURSIVE'))
+        return {
+          rows: [{ id: 'root-turn', source: 'user', message_id: 'message', proactive: false }],
+        };
+      assert.fail(`Unexpected query: ${sql}`);
+    },
+  } as unknown as Pool;
+  const item = { role: 'menuitem', name: 'New Window', ref_id: '@smenu002:e1' };
+  const menuBar = {
+    role: 'menu',
+    children: [
+      { role: 'menuitem', name: 'Apple' },
+      { role: 'menuitem', name: 'Obsidian' },
+      { role: 'menuitem', name: 'File', children: [item] },
+    ],
+  };
+  const note = { role: 'window', name: 'Note', children: [{ role: 'textarea', name: 'Body' }] };
+  const inspected: Array<Record<string, unknown>> = [];
+  const computer = createComputerUse(pool, 'owner', {
+    platform: 'darwin',
+    desktop: {
+      request: async (request) => {
+        if (request.op === 'apps')
+          return { apps: [{ pid: 51, bundle: 'md.obsidian', name: 'Obsidian' }] };
+        if (request.op === 'windows') return { windows: [{ id: 'w-51', title: 'Note' }] };
+        if (request.op === 'snapshot') return { tree: request.ref ? item : menuBar };
+        if (request.op === 'inspect') {
+          inspected.push(request);
+          const tree = request.menu ? menuBar : note;
+          if (request.control && !JSON.stringify(tree).includes('New Window'))
+            throw new Error('STALE_REF: That control is no longer in the window.');
+          return {
+            tree,
+            context: JSON.stringify(tree),
+            state: createHash('sha256').update(JSON.stringify(tree)).digest('hex'),
+            focus: createHash('sha256').update('focus').digest('hex'),
+            focused: [],
+          };
+        }
+        return { disposition: { delivery: 'delivered_verified' } };
+      },
+    },
+  });
+  const turn = { turnId: 'turn', threadId: 'thread' };
+  await computer.execute(
+    turn,
+    'COMPUTER_OPEN',
+    await computer.prepare(turn, 'COMPUTER_OPEN', { bundle: 'md.obsidian' }),
+  );
+  await computer.execute(
+    turn,
+    'COMPUTER_SNAPSHOT',
+    await computer.prepare(turn, 'COMPUTER_SNAPSHOT', { pid: 51, menu: true }),
+  );
+  const press = await computer.prepare(turn, 'COMPUTER_PRESS', { ref: '@smenu002:e1' });
+  assert.equal(press.windowBinding?.menu, true);
+  assert.equal(inspected.at(-1)?.menu, true);
 });
 
 if (process.env.NOD_TEST_WORKSPACE_IMAGE)

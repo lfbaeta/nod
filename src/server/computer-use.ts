@@ -218,7 +218,7 @@ const viewOnlyApps: Array<[RegExp, string]> = [
   ],
 ];
 
-type Window = { id: string; title: string };
+type Window = { id: string; title: string; hidden?: boolean };
 type App = { pid: number; bundle: string; program?: string; name: string; windows?: Window[] };
 type Identity = { bundle: string; program?: string; name: string; pid?: number };
 type Node = {
@@ -271,11 +271,8 @@ export function computerAppRule(bundleId: string, keptOut: string[] = []) {
   return { kind: 'use' as const };
 }
 
-function secureFocused(node: Node | undefined): boolean {
-  return Boolean(
-    node &&
-    ((secure(node) && node.states?.includes('focused')) || node.children?.some(secureFocused)),
-  );
+function shownWindow(app: App) {
+  return app.windows?.find((window) => !window.hidden) ?? app.windows?.[0];
 }
 
 function holdsText(node: Node) {
@@ -362,7 +359,11 @@ export function createComputerUse(
   async function ask(request: Record<string, unknown>, signal?: AbortSignal) {
     signal?.throwIfAborted();
     if (!desktop) throw unavailable();
-    if (!['apps', 'locate', 'snapshot', 'inspect', 'screenshot'].includes(String(request.op)))
+    if (
+      !['apps', 'windows', 'locate', 'snapshot', 'inspect', 'screenshot'].includes(
+        String(request.op),
+      )
+    )
       listing = undefined;
     try {
       const result = await desktop.request(request as { op: string }, signal);
@@ -479,12 +480,11 @@ export function createComputerUse(
       },
       signal,
     );
-    const text = JSON.stringify(
-      focus ? { tree: result.tree, focused: result.focused } : result.tree,
-    );
+    const context = typeof result.context === 'string' ? result.context : '';
+    const text =
+      focus && context ? `${context}\n\nFocused: ${JSON.stringify(result.focused)}` : context;
     if (
       !text ||
-      !result.tree ||
       typeof result.state !== 'string' ||
       !/^[a-f0-9]{64}$/.test(result.state) ||
       (focus && (typeof result.focus !== 'string' || !/^[a-f0-9]{64}$/.test(result.focus))) ||
@@ -526,13 +526,9 @@ export function createComputerUse(
       throw new IntegrationError('That window changed since this step was checked.', 409);
   }
 
-  async function noSecureFocus(
-    scope: { app: string; window?: unknown },
-    refusal: string,
-    signal?: AbortSignal,
-  ) {
-    const current = (await ask({ op: 'snapshot', ...scope }, signal)) as { tree?: Node };
-    if (!current.tree || secureFocused(current.tree)) throw new IntegrationError(refusal, 403);
+  async function windowsOf(app: App, signal?: AbortSignal): Promise<App> {
+    const { windows } = await ask({ op: 'windows', app: app.name, pid: app.pid }, signal);
+    return { ...app, windows: (windows as Window[]) ?? [] };
   }
 
   function shown(root: string, refId: string) {
@@ -568,7 +564,7 @@ export function createComputerUse(
     allowed(app, keptOut, acting);
     granted(root, app);
     unique(apps, app.name);
-    return app;
+    return windowsOf(app, signal);
   }
 
   function unique(apps: App[], name: string) {
@@ -631,7 +627,7 @@ export function createComputerUse(
       const found = targetOf(root, input.ref!, keptOut);
       const node = await live(found, input.ref!, signal);
       const app = await appFor(root, found.pid!, keptOut, true, signal);
-      const chosen = found.windowId ?? app.windows?.[0]?.id;
+      const chosen = found.menu ? undefined : (found.windowId ?? shownWindow(app)?.id);
       if (!chosen && !found.menu)
         throw new IntegrationError(`${found.app} has no open window.`, 409);
       return {
@@ -670,7 +666,7 @@ export function createComputerUse(
     if (input.menu) return { ...base, menu: true, windowTitle: 'menu bar' };
     const chosen = input.window
       ? app.windows?.find((item) => item.id === input.window)
-      : app.windows?.[0];
+      : shownWindow(app);
     if (!chosen)
       throw new IntegrationError(
         input.window
@@ -789,7 +785,13 @@ export function createComputerUse(
     signal?.throwIfAborted();
     const { root, keptOut } = await ready(turn);
     if (action === 'COMPUTER_APPS') {
-      const apps = await running(signal);
+      const apps = await Promise.all(
+        (await running(signal)).map((app) =>
+          ruleFor(app, keptOut).kind !== 'blocked' && isGranted(root, app)
+            ? windowsOf(app, signal)
+            : app,
+        ),
+      );
       return async () => ({
         apps: apps.map((app) => {
           const rule = ruleFor(app, keptOut);
@@ -839,7 +841,7 @@ export function createComputerUse(
           pid: app?.pid ?? pid,
           bundle: target.bundle,
           name: target.name,
-          windows: app?.windows ?? [],
+          windows: app ? (await windowsOf(app, signal)).windows : [],
         };
       };
     }
@@ -891,20 +893,8 @@ export function createComputerUse(
     if (action === 'COMPUTER_FIND') return () => find(root, app, prepared, signal);
     const scope = { app: app.name, window: prepared.window };
     if (action === 'COMPUTER_SCREENSHOT')
-      return async () => {
-        await noSecureFocus(
-          scope,
-          'A password field has focus in this window, so Nod took no screenshot.',
-          signal,
-        );
-        return ask({ op: 'screenshot', ...scope, noSecureFocus: true }, signal);
-      };
+      return () => ask({ op: 'screenshot', ...scope, noSecureFocus: true }, signal);
     await unchangedWindow(prepared, signal);
-    await noSecureFocus(
-      scope,
-      'A password field has focus in this window, so Nod sent no keys.',
-      signal,
-    );
     return async () => {
       await ask(
         {
