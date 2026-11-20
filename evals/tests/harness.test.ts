@@ -2974,6 +2974,7 @@ test('the stack records tool calls, model usage and the main prompts of every tu
     sessionId: 'capture-fixture',
     turnId: 'capture-fixture',
     prompt: 'Inspect the synthetic receipt.',
+    background: true,
     history: [],
     workspacePath: directory,
     signal: t.signal,

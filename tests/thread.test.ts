@@ -1633,6 +1633,7 @@ test(
           { channel: 'telegram:fixture', sourceId, replyToMessageId: targetId },
           {
             answer: async () => undefined,
+            close: async () => {},
             accept: async () => {
               enter();
               await proceed;
@@ -5502,6 +5503,7 @@ test(
             const calls: string[] = [];
             const guarded = thread.createUserMessageService({
               confirmAction: {
+                close: async () => {},
                 answer: async () => {
                   calls.push('classify');
                   return undefined;

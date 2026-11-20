@@ -161,6 +161,7 @@ type ConfirmAction = {
     input: ChatConfirmationInput,
     onInserted?: () => void,
   ): Promise<ChatConfirmationResult>;
+  close(client: PoolClient, sessionId: string, turnId: string): Promise<void>;
 };
 
 export interface ThreadDependencies {
@@ -893,6 +894,7 @@ export async function submitUserMessage(
       ],
     );
     if (taskTarget) await taskTarget.record(turnId);
+    if (live) await confirmAction?.close(client, question?.session_id ?? thread.id, turnId);
     const prepared = (await options.prepareAttachments?.(client, thread.id)) ?? [];
     await client.query(
       "INSERT INTO messages(id,owner_id,role,text,display_text,thread_id,turn_id,attachments,reply_to_message_id,reply_quote,audio_caption,question_answer) VALUES($1,$2,'user',$3,$4,$5,$6,$7,$8,$9,$10,$11)",

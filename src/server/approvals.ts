@@ -1212,9 +1212,26 @@ export async function createApprovals(
     return Boolean(result.rowCount);
   }
 
+  async function closeSessionQuestions(client: PoolClient, sessionId: string, turnId: string) {
+    const expired = await client.query<{ action: string; source: string }>(
+      `UPDATE approvals a SET status='expired' FROM turns u
+       WHERE u.id=a.turn_id AND u.owner_id=a.owner_id AND a.owner_id=$1 AND a.status='pending'
+         AND u.session_id=$2 AND u.id<>$3 AND u.status='waiting'
+       RETURNING a.action,u.source`,
+      [ownerId, sessionId, turnId],
+    );
+    await client.query(
+      "UPDATE turns SET status='cancelled',finished_at=now() WHERE owner_id=$1 AND session_id=$2 AND id<>$3 AND status='waiting'",
+      [ownerId, sessionId, turnId],
+    );
+    afterCommit(client, () => {
+      for (const row of expired.rows) changed('expired', row.action, row.source);
+    });
+  }
+
   return {
     request,
-    chat: { answer: answerChat, accept: acceptChat },
+    chat: { answer: answerChat, accept: acceptChat, close: closeSessionQuestions },
     executeConfirmed,
     stoppedOutcomes,
     retireScheduleConfirmations,
