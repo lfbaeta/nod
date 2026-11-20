@@ -499,6 +499,7 @@ export async function createFixtureProxy(
     if (!entry) {
       entry = forwarder(target);
       forwarders.set(target.href, entry);
+      entry.catch(() => forwarders.delete(target.href));
     }
     return (await entry).url;
   }
