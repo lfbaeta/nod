@@ -240,11 +240,18 @@ function Diagram({ visual }: { visual: Visual<'diagram'> }) {
                   : direct
                     ? `M ${a.x} ${y1} C ${a.x} ${(y1 + y2) / 2}, ${b.x} ${(y1 + y2) / 2}, ${b.x} ${y2}`
                     : `M ${a.x} ${y1} V ${y1 + 16} H ${rail} V ${y2 - 16} H ${b.x} V ${y2}`;
-                if (edge.label && direct)
+                const crowded = (key: 'from' | 'to', id: string) =>
+                  visual.edges.filter(
+                    (other) =>
+                      other[key] === id &&
+                      points.get(other.to)!.y - points.get(other.from)!.y === 140,
+                  ).length > 1;
+                const along = crowded('to', edge.to) ? (crowded('from', edge.from) ? 0 : 0.3) : 0.7;
+                if (edge.label && direct && along)
                   edgeLabels.push({
                     key: index,
                     text: edge.label,
-                    x: a.x + (b.x - a.x) * 0.7,
+                    x: a.x + (b.x - a.x) * along,
                     y: (y1 + y2) / 2,
                   });
                 return (
