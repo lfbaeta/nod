@@ -1460,6 +1460,26 @@ test(
               status,
               questionMessageId: status === 'waiting' ? firstQuestion : null,
             });
+            if (status === 'waiting') {
+              for (const reason of ['question', 'approval', 'credentials'] as const) {
+                await db.pool.query('UPDATE turns SET waiting_reason=$2 WHERE id=$1', [
+                  first,
+                  reason,
+                ]);
+                assert.equal((await active())?.waitingReason, reason);
+                assert.equal(
+                  (await runs(schedule.id)).find((run) => run.turnId === first)?.waitingReason,
+                  reason,
+                );
+              }
+              await db.pool.query("UPDATE turns SET waiting_reason='nope' WHERE id=$1", [first]);
+              assert.equal((await active())?.waitingReason, undefined);
+              assert.equal(
+                (await runs(schedule.id)).find((run) => run.turnId === first)?.waitingReason,
+                undefined,
+              );
+              await db.pool.query('UPDATE turns SET waiting_reason=NULL WHERE id=$1', [first]);
+            }
           }
           const resumed = await thread.enqueueTurn('Synthetic answer.', {
             source: 'resume',
@@ -2797,7 +2817,12 @@ test('waiting scheduled runs open their pending question without starting anothe
   schedule = {
     ...schedule,
     lastRun: waiting,
-    activeRun: { turnId: waiting.turnId, status: 'waiting', questionMessageId: questionId },
+    activeRun: {
+      turnId: waiting.turnId,
+      status: 'waiting',
+      waitingReason: 'approval',
+      questionMessageId: questionId,
+    },
   };
   history = { runs: [waiting, completed], nextCursor: null };
   await act(async () => {
@@ -2805,7 +2830,7 @@ test('waiting scheduled runs open their pending question without starting anothe
     await pageDataCache.refresh(historyPath, true);
   });
   const needsInput = dom.window.document.querySelector<HTMLButtonElement>(
-    `button[aria-label="Needs your input for ${schedule.title}"]`,
+    `button[aria-label="Waiting for your approval for ${schedule.title}"]`,
   );
   assert.ok(needsInput);
   await act(async () => needsInput.click());
@@ -2818,7 +2843,7 @@ test('waiting scheduled runs open their pending question without starting anothe
   assert.deepEqual(
     focused,
     [{ messageId: questionId }],
-    'Needs your input must open the waiting run’s existing question in Chat.',
+    'Waiting for your approval must open the waiting run’s existing question in Chat.',
   );
 
   const resumedQuestionId = randomUUID();

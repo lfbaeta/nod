@@ -12,7 +12,14 @@ import type {
   ScheduleRun,
   TurnStatus,
 } from '../shared/contracts.ts';
-import { abortTurns, cancelTurns, lockThread, type enqueueTurn } from './thread.ts';
+import { knownWaitingReason } from '../shared/waiting-reason.ts';
+import {
+  abortTurns,
+  cancelTurns,
+  clientWaitingReasonSql,
+  lockThread,
+  type enqueueTurn,
+} from './thread.ts';
 import { modelSelectionInput } from './models.ts';
 import {
   canReuseWorkCost,
@@ -174,6 +181,7 @@ interface RunRow {
   timeZone: string;
   createdAt: Date;
   status: TurnStatus;
+  waitingReason: string | null;
   error: string | null;
   messageId: string | null;
   messageText: string | null;
@@ -208,6 +216,7 @@ function scheduleAnalytics(row: ScheduleRow) {
 }
 
 function runValue(row: RunRow): ScheduleRun {
+  const waitingReason = knownWaitingReason(row.waitingReason);
   return {
     id: row.id,
     scheduleId: row.scheduleId,
@@ -217,6 +226,7 @@ function runValue(row: RunRow): ScheduleRun {
     timeZone: row.timeZone,
     createdAt: row.createdAt.toISOString(),
     status: row.status,
+    ...(waitingReason ? { waitingReason } : {}),
     error: row.error,
     observation: row.observation
       ? { ...row.observation, checkedAt: row.observedAt!.toISOString() }
@@ -361,7 +371,7 @@ export function createSchedules(dependencies: ScheduleDependencies) {
 
   async function activeRun(client: Pick<Pool, 'query'>, scheduleId: string) {
     const { rows } = await client.query<NonNullable<Schedule['activeRun']>>(
-      `SELECT u.id AS "turnId",u.status,
+      `SELECT u.id AS "turnId",u.status,${clientWaitingReasonSql('u')} AS "waitingReason",
           (SELECT m.id FROM messages m WHERE u.status='waiting'
             AND m.owner_id=u.owner_id AND m.thread_id=u.thread_id AND m.turn_id=u.id
             AND m.role='assistant' AND m.text<>'' AND m.hidden_at IS NULL AND ${activeThreadSql('m')}
@@ -373,7 +383,15 @@ export function createSchedules(dependencies: ScheduleDependencies) {
          ORDER BY (u.status='running') DESC,(u.status='queued') DESC,u.created_at DESC,u.id DESC LIMIT 1`,
       [ownerId, scheduleId],
     );
-    return rows[0] ?? null;
+    const row = rows[0];
+    if (!row) return null;
+    const waitingReason = knownWaitingReason(row.waitingReason);
+    return {
+      turnId: row.turnId,
+      status: row.status,
+      questionMessageId: row.questionMessageId,
+      ...(waitingReason ? { waitingReason } : {}),
+    };
   }
 
   async function startRun(
@@ -675,7 +693,7 @@ export function createSchedules(dependencies: ScheduleDependencies) {
       await pool.query<RunRow>(
         `SELECT r.id,r.schedule_id AS "scheduleId",r.title,r.turn_id AS "turnId",
            r.scheduled_for AS "scheduledFor",r.time_zone AS "timeZone",r.created_at AS "createdAt",
-           u.status,u.error,r.observation,r.observed_at AS "observedAt",m.id AS "messageId",m.text AS "messageText",
+           u.status,${clientWaitingReasonSql('u')} AS "waitingReason",u.error,r.observation,r.observed_at AS "observedAt",m.id AS "messageId",m.text AS "messageText",
            to_char(r.created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "cursorAt"
          FROM schedule_runs r ${runTurn}
          LEFT JOIN LATERAL (

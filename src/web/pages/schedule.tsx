@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { CalendarClock, LoaderCircle, Play, Sparkles, Square } from '../components/icons';
 import type { Activity, Schedule, ScheduleHistory, ScheduleRun } from '../../shared/contracts';
-import { StatusIcon, statusLabels } from '../components/turn-status';
+import { StatusIcon, statusLabel } from '../components/turn-status';
 import { usePageData } from '../hooks/use-page-data';
 import { api, errorMessage, requestAccountVersion } from '../lib/api';
 import { pageDataCache } from '../lib/page-data-cache';
@@ -67,7 +67,7 @@ export function ScheduleRow({
   const runLabel = starting
     ? 'Starting…'
     : activeStatus
-      ? statusLabels[activeStatus]
+      ? statusLabel(activeStatus, activeRun?.waitingReason)
       : pendingRun.current
         ? 'Try again'
         : 'Run now';
@@ -165,7 +165,7 @@ export function ScheduleRow({
         <h2>{schedule.title}</h2>
         <span className="saved-plan-status">
           {ranOnce
-            ? statusLabels[schedule.lastRun!.status]
+            ? statusLabel(schedule.lastRun!.status, schedule.lastRun!.waitingReason)
             : !schedule.enabled
               ? 'Paused'
               : schedule.kind === 'once'
@@ -298,7 +298,7 @@ function ScheduleRunRow({ run, openResult }: { run: ScheduleRun; openResult: boo
         <time dateTime={run.scheduledFor}>{date(run.scheduledFor)}</time>
         <span className="task-status" data-status={run.status}>
           <StatusIcon status={run.status} />
-          {statusLabels[run.status]}
+          {statusLabel(run.status, run.waitingReason)}
         </span>
       </div>
       {run.timeZone !== dateFormat.timeZone && <p className="saved-plan-note">{run.timeZone}</p>}

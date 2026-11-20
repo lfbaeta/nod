@@ -55,7 +55,9 @@ import { memoryObjectStore } from './fixtures/object-store.ts';
 import type { ProductAnalytics } from '../src/ports/analytics.ts';
 import { createAnalytics, snapshotAnalytics } from '../src/server/analytics.ts';
 import { accessCookie, accessKey } from '../src/server/access.ts';
-import { suggestedTaskStatus } from '../src/web/lib/chat-messages.ts';
+import { suggestedTaskStatus, suggestedTaskView } from '../src/web/lib/chat-messages.ts';
+import { waitingEventText } from '../src/shared/waiting-reason.ts';
+import { statusLabel } from '../src/web/components/turn-status.tsx';
 
 test(
   'one thread runs every turn in order on the same session and workspace',
@@ -4634,6 +4636,43 @@ test(
         await waitFor(settledThread);
         const question = await thread.submitUserMessage('ask-question');
         await waitFor(settled(question.turnId));
+        const waitingState = () =>
+          request('GET', '/api/state').then((response) =>
+            response.json<{ turns: Array<{ id: string; waitingReason?: string | null }> }>(),
+          );
+        assert.equal(
+          (await waitingState()).turns.find((turn) => turn.id === question.turnId)?.waitingReason,
+          'question',
+        );
+        assert.equal(
+          (
+            await db.pool.query<{ summary: string }>(
+              "SELECT summary FROM turn_events WHERE turn_id=$1 AND type='waiting'",
+              [question.turnId],
+            )
+          ).rows[0]?.summary,
+          'Waiting for your answer.',
+        );
+        for (const reason of ['approval', 'credentials'] as const) {
+          await db.pool.query('UPDATE turns SET waiting_reason=$2 WHERE id=$1', [
+            question.turnId,
+            reason,
+          ]);
+          assert.equal(
+            (await waitingState()).turns.find((turn) => turn.id === question.turnId)?.waitingReason,
+            reason,
+          );
+        }
+        await db.pool.query("UPDATE turns SET waiting_reason='nope' WHERE id=$1", [
+          question.turnId,
+        ]);
+        assert.equal(
+          (await waitingState()).turns.find((turn) => turn.id === question.turnId)?.waitingReason,
+          null,
+        );
+        await db.pool.query("UPDATE turns SET waiting_reason='question' WHERE id=$1", [
+          question.turnId,
+        ]);
         const asked = (
           await db.pool.query<{ id: string }>(
             "SELECT id FROM messages WHERE owner_id=$1 AND turn_id=$2 AND role='assistant' ORDER BY created_at DESC,id DESC LIMIT 1",
@@ -13893,6 +13932,40 @@ test('a first task stays open after its chat turn ends and follows its own saved
   assert.equal(status(), 'idle');
   state.tasks = [];
   assert.equal(status(), 'sent');
+});
+
+test('a waiting chat turn says why it is waiting', () => {
+  const messages = [
+    { id: 'cards', role: 'assistant' as const, text: '', turnId: null },
+    { id: 'request', role: 'user' as const, text: 'Draft the reply', turnId: 'chat-turn' },
+  ];
+  const state = {
+    messages,
+    tasks: [] as Array<{ messageId: string; status: Task['status'] }>,
+    turns: [
+      { id: 'other-turn', status: 'waiting' as Turn['status'], waitingReason: 'credentials' },
+      { id: 'chat-turn', status: 'waiting' as Turn['status'], waitingReason: 'approval' },
+    ] as Array<{ id: string; status: Turn['status']; waitingReason?: string | null }>,
+  };
+  const view = () => suggestedTaskView(state, 'Draft the reply', 0, new Set(['request']));
+  assert.deepEqual(view(), { status: 'needs_you', waitingReason: 'approval' });
+  assert.equal(suggestedTaskStatus(state, 'Draft the reply', 0, new Set(['request'])), 'needs_you');
+  assert.equal(statusLabel('waiting', 'approval'), 'Waiting for your approval');
+  state.turns[1] = { id: 'chat-turn', status: 'waiting', waitingReason: 'question' };
+  assert.equal(statusLabel('waiting', view().waitingReason), 'Waiting for your answer');
+  state.turns[1] = { id: 'chat-turn', status: 'waiting', waitingReason: 'credentials' };
+  assert.equal(statusLabel('waiting', view().waitingReason), 'Waiting for you to sign in');
+  state.turns[1] = { id: 'chat-turn', status: 'waiting', waitingReason: 'nope' };
+  assert.deepEqual(view(), { status: 'needs_you' });
+  assert.equal(statusLabel('waiting', view().waitingReason), 'Needs your input');
+  assert.equal(statusLabel('waiting', null), 'Needs your input');
+  assert.equal(statusLabel('running'), 'Working');
+  assert.equal(waitingEventText('approval'), 'Waiting for your approval.');
+  assert.equal(waitingEventText('question'), 'Waiting for your answer.');
+  assert.equal(waitingEventText('credentials'), 'Waiting for you to sign in.');
+  assert.equal(waitingEventText('nope'), 'Waiting for your input.');
+  state.turns[1] = { id: 'chat-turn', status: 'succeeded', waitingReason: 'approval' };
+  assert.deepEqual(view(), { status: 'sent' });
 });
 
 test(

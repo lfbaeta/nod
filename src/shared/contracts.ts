@@ -4,6 +4,7 @@ import type { TrustBecause } from './trust';
 import type { AnswerChoices } from './answer-choices';
 import type { ModelIssue, ModelSelection, WorkKind } from './models';
 export type TurnStatus = 'queued' | 'running' | 'succeeded' | 'waiting' | 'failed' | 'cancelled';
+export type WaitingReason = 'question' | 'approval' | 'credentials';
 export interface Artifact {
   id: string;
   name: string;
@@ -72,6 +73,7 @@ export interface Turn {
   id: string;
   handoffMessageId?: string | null;
   status: TurnStatus;
+  waitingReason?: WaitingReason | null;
   source: 'user' | 'schedule' | 'event' | 'resume' | 'task';
   createdAt: string;
   finishedAt?: string | null;
@@ -361,6 +363,7 @@ export interface Schedule {
   activeRun: {
     turnId: string;
     status: 'queued' | 'running' | 'waiting';
+    waitingReason?: WaitingReason | null;
     questionMessageId: string | null;
   } | null;
   baselineObservation: ScheduleObservation | null;
@@ -382,6 +385,7 @@ export interface ScheduleRun {
   timeZone: string;
   createdAt: string;
   status: TurnStatus;
+  waitingReason?: WaitingReason | null;
   error: string | null;
   observation: ScheduleObservation | null;
   messageId: string | null;

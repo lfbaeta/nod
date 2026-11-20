@@ -18,6 +18,7 @@ import { logFailure } from './failure-log.ts';
 import { cancelTurnOperations } from './turn-cancellation.ts';
 import { modelFailureReason, modelQuotaFailure } from '../shared/model-quota.ts';
 import { appPages } from '../shared/app-links.ts';
+import { waitingEventText } from '../shared/waiting-reason.ts';
 import { pendingAnswerChoicesSql } from './answer-choices.ts';
 import { randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
@@ -1312,6 +1313,9 @@ export async function retryCredentials(turnId: string) {
 export const activeHandoffSql = `u.status='waiting' AND u.waiting_reason='question' AND u.handoff_browser_id IS NOT NULL
     AND NOT ${laterSupersedingTurnSql}`;
 
+export const clientWaitingReasonSql = (alias = 'u') =>
+  `CASE WHEN ${alias}.status='waiting' AND ${alias}.waiting_reason IN ('question','approval','credentials') THEN ${alias}.waiting_reason END`;
+
 export async function resumeAfterHandoff(turnId: string) {
   const resumed = await transaction(async (client) => {
     await lockThread(client);
@@ -1381,7 +1385,7 @@ async function finishTurn(
       status === 'succeeded'
         ? 'Turn finished.'
         : status === 'waiting'
-          ? 'Waiting for your input.'
+          ? waitingEventText(fields.waitingReason)
           : (fields.error ?? status),
     );
   return Boolean(updated.rowCount);

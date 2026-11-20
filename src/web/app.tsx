@@ -234,6 +234,9 @@ function Workspace({
                   ? 'working'
                   : undefined
           }
+          waitingReason={
+            state?.turns[0]?.status === 'waiting' ? state.turns[0].waitingReason : undefined
+          }
           onToggle={toggleSidebar}
           onNavigate={navigate}
           account={account}

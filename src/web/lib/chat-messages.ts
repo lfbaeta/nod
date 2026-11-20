@@ -1,4 +1,5 @@
-import type { Message, Task, Turn } from '../../shared/contracts';
+import type { Message, Task, Turn, WaitingReason } from '../../shared/contracts';
+import { knownWaitingReason } from '../../shared/waiting-reason';
 import { isSameDay, type DateFormat } from './date-format';
 
 export function visibleConversationTurns(
@@ -79,37 +80,57 @@ export function collapseScreenshotMessages(messages: Message[]) {
   return result;
 }
 
-export function suggestedTaskStatus(
+type SuggestedTaskState = 'idle' | 'working' | 'needs_you' | 'waiting' | 'sent' | 'done';
+
+export function suggestedTaskView(
   state: {
     messages: Pick<Message, 'id' | 'role' | 'text' | 'turnId'>[];
     tasks?: Pick<Task, 'messageId' | 'status'>[];
-    turns: Pick<Turn, 'id' | 'status'>[];
+    turns: Array<Pick<Turn, 'id' | 'status'> & { waitingReason?: string | null }>;
   },
   title: string,
   after: number,
   persistedIds: ReadonlySet<string>,
-) {
+): { status: SuggestedTaskState; waitingReason?: WaitingReason } {
   const sent = state.messages
     .slice(after + 1)
     .find((message) => message.role === 'user' && message.text === title);
-  if (!sent) return 'idle';
+  if (!sent) return { status: 'idle' };
   const tasks = (state.tasks ?? []).filter((item) =>
     state.messages.some(
       (message) => message.id === item.messageId && message.turnId === sent.turnId,
     ),
   );
   if (tasks.length) {
-    if (tasks.every((item) => item.status === 'done')) return 'done';
+    if (tasks.every((item) => item.status === 'done')) return { status: 'done' };
     if (tasks.some((item) => item.status === 'failed' || item.status === 'cancelled'))
-      return 'idle';
-    if (tasks.some((item) => item.status === 'needs_you')) return 'needs_you';
-    return tasks.some((item) => item.status === 'queued' || item.status === 'working')
-      ? 'working'
-      : 'waiting';
+      return { status: 'idle' };
+    if (tasks.some((item) => item.status === 'needs_you')) return { status: 'needs_you' };
+    return {
+      status: tasks.some((item) => item.status === 'queued' || item.status === 'working')
+        ? 'working'
+        : 'waiting',
+    };
   }
   const turn = sent.turnId ? state.turns.find((item) => item.id === sent.turnId) : undefined;
-  if (!turn) return persistedIds.has(sent.id) ? 'sent' : 'working';
-  if (turn.status === 'succeeded') return 'sent';
-  if (turn.status === 'waiting') return 'needs_you';
-  return turn.status === 'failed' || turn.status === 'cancelled' ? 'idle' : 'working';
+  if (!turn) return { status: persistedIds.has(sent.id) ? 'sent' : 'working' };
+  if (turn.status === 'succeeded') return { status: 'sent' };
+  if (turn.status === 'waiting') {
+    const waitingReason = knownWaitingReason(turn.waitingReason);
+    return waitingReason ? { status: 'needs_you', waitingReason } : { status: 'needs_you' };
+  }
+  return { status: turn.status === 'failed' || turn.status === 'cancelled' ? 'idle' : 'working' };
+}
+
+export function suggestedTaskStatus(
+  state: {
+    messages: Pick<Message, 'id' | 'role' | 'text' | 'turnId'>[];
+    tasks?: Pick<Task, 'messageId' | 'status'>[];
+    turns: Array<Pick<Turn, 'id' | 'status'> & { waitingReason?: string | null }>;
+  },
+  title: string,
+  after: number,
+  persistedIds: ReadonlySet<string>,
+) {
+  return suggestedTaskView(state, title, after, persistedIds).status;
 }

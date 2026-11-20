@@ -41,11 +41,11 @@ Open **Scheduled** and select **Run now** on a schedule. Nod opens its details s
 
 The extra run uses the saved instruction and delivery channel. The usual approval checks still apply. It does not change the next scheduled time or resume a paused schedule. You can also run a completed one-time schedule again.
 
-The button shows **Queued**, **Working**, or **Needs your input** while a run is active. You cannot start another run until that run ends. A recurring schedule skips timed runs that fall due during an active run. A one-time schedule waits for the active run to end.
+The button shows **Queued** or **Working** while a run is active. While the run is waiting, it shows **Waiting for your answer**, **Waiting for your approval**, **Waiting for you to sign in**, or **Needs your input** when the reason is not one of those. You cannot start another run until that run ends. A recurring schedule skips timed runs that fall due during an active run. A one-time schedule waits for the active run to end.
 
 Select **Stop this run** to stop only that run, including work waiting for your answer. Future runs stay enabled. A watch runs at its next scheduled time even when its accounts have no changes. The control does not pause the schedule. To stop future runs, use the schedule's pause switch. Actions that already reached an app may have completed. Check their result before you start another run.
 
-Select **Needs your input** to open the run's current question in Chat, where you can approve an action or complete sign-in. This opens the existing request without starting another run.
+Select the waiting button to open the run's current question in Chat, where you can approve an action or complete sign-in. This opens the existing request without starting another run.
 
 **Run now** runs a watch even when its connected accounts have no changes. If the connection drops, **Try again** checks or starts the same run. It cannot start a second copy.
 

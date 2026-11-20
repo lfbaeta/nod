@@ -11,12 +11,14 @@ import {
   shortcutLabel,
   sidebarItems,
 } from '../lib/navigation';
+import { waitingLabel } from '../../shared/waiting-reason';
 
 export function Sidebar({
   path,
   unreadCount = 0,
   unreadPending = false,
   presence,
+  waitingReason,
   onToggle,
   onNavigate,
   account,
@@ -26,6 +28,7 @@ export function Sidebar({
   unreadCount?: number;
   unreadPending?: boolean;
   presence?: 'working' | 'waiting';
+  waitingReason?: string | null;
   onToggle(): void;
   onNavigate(path: string): void;
   account?: AccountControls;
@@ -44,7 +47,11 @@ export function Sidebar({
   const chatLabel = [
     'Chat',
     unreadCount || unreadPending ? unreadLabel : null,
-    presence === 'waiting' ? 'waiting for you' : presence === 'working' ? 'Nod is working' : null,
+    presence === 'waiting'
+      ? (waitingLabel(waitingReason)?.toLowerCase() ?? 'waiting for you')
+      : presence === 'working'
+        ? 'Nod is working'
+        : null,
   ]
     .filter(Boolean)
     .join(', ');

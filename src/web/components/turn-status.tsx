@@ -1,5 +1,6 @@
 import { CircleCheck, CircleDashed, LoaderCircle, MessageCircle, CircleAlert } from './icons';
 import type { TurnStatus } from '../../shared/contracts';
+import { waitingLabel } from '../../shared/waiting-reason';
 
 export const statusLabels: Record<TurnStatus, string> = {
   queued: 'Queued',
@@ -9,6 +10,12 @@ export const statusLabels: Record<TurnStatus, string> = {
   failed: 'Could not finish',
   cancelled: 'Stopped',
 };
+
+export function statusLabel(status: TurnStatus, reason?: string | null) {
+  return status === 'waiting'
+    ? (waitingLabel(reason) ?? statusLabels.waiting)
+    : statusLabels[status];
+}
 
 export function StatusIcon({ status }: { status: TurnStatus }) {
   if (status === 'running') return <LoaderCircle size={16} className="spin" aria-hidden="true" />;

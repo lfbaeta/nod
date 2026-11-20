@@ -146,7 +146,7 @@ In the web and desktop apps, if Nod cannot recover from a context error, a small
 
 The banner appears only after automatic recovery fails and the chat has stopped. It is hidden when you start another chat request. Connection, access and quota errors keep their specific error and recovery steps.
 
-In the sidebar, the Chat item shows a moving dot while Nod works and a solid dot when it's waiting for you.
+In the sidebar, the Chat item shows a moving dot while Nod works and a solid dot when it's waiting. The item's name says whether Nod is waiting for your answer, your approval, or for you to sign in.
 
 ### In Telegram and WhatsApp
 

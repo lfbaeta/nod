@@ -18,6 +18,7 @@ import type {
   Message,
   MessageHistoryPage,
   SubmitMessageResponse,
+  WaitingReason,
 } from '../../shared/contracts';
 import type { SuggestedTask, TaskSuggestions } from '../../shared/onboarding';
 import type { TrustView } from '../../shared/trust';
@@ -39,6 +40,7 @@ import { ChatNotifications } from '../components/chat-notifications';
 import { BrandMark } from '../components/brand';
 import { FeedbackLauncher } from '../components/feedback-discovery';
 import { Button, Notice } from '../components/ui';
+import { waitingLabel } from '../../shared/waiting-reason';
 import type { ModelSelection } from '../../shared/models';
 import { desktopSettingsAvailable } from '../lib/desktop';
 import { usePageData } from '../hooks/use-page-data';
@@ -48,7 +50,7 @@ import {
   collapseScreenshotMessages,
   mergeMessages,
   messagesAreGrouped,
-  suggestedTaskStatus,
+  suggestedTaskView,
 } from '../lib/chat-messages';
 import { formatDayLabel, isSameDay, useDateFormat } from '../lib/date-format';
 import { NodGlyph, Rise, prefersReducedMotion } from '../components/motion';
@@ -184,7 +186,10 @@ function TaskCards({
   grouped: boolean;
   suggestions: TaskSuggestions;
   connections: Connection[];
-  status(task: SuggestedTask): 'idle' | 'working' | 'needs_you' | 'waiting' | 'sent' | 'done';
+  status(task: SuggestedTask): {
+    status: 'idle' | 'working' | 'needs_you' | 'waiting' | 'sent' | 'done';
+    waitingReason?: WaitingReason;
+  };
   disabled: boolean;
   onStart(task: SuggestedTask, position: number): void;
 }) {
@@ -199,13 +204,14 @@ function TaskCards({
     (slug) => !connections.some((entry) => entry.slug === slug && entry.status === 'connected'),
   );
   const card = (task: SuggestedTask, index: number) => {
-    const state = status(task);
+    const progress = status(task);
+    const state = progress.status;
     const connection = connections.find((entry) => entry.slug === task.source);
     const label =
       state === 'working'
         ? 'On it…'
         : state === 'needs_you'
-          ? 'Waiting for you'
+          ? (waitingLabel(progress.waitingReason) ?? 'Waiting for you')
           : state === 'waiting'
             ? 'Waiting'
             : state === 'sent'
@@ -2310,7 +2316,7 @@ export function Chat({
                       suggestions={message.suggestions}
                       connections={connections ?? []}
                       status={(task) =>
-                        suggestedTaskStatus(
+                        suggestedTaskView(
                           { messages: allMessages, tasks: state.tasks, turns: state.turns },
                           task.title,
                           allMessages.findIndex((item) => item.id === message.id),
