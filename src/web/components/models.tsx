@@ -87,6 +87,7 @@ const modelProviderLogos: Partial<Record<ModelProvider, string>> = {
   mistral: 'models/mistral',
   moonshotai: 'models/moonshot',
   'moonshotai-cn': 'models/moonshot',
+  neon: 'models/neon',
   nvidia: 'models/nvidia',
   opencode: 'models/opencode',
   'opencode-go': 'models/opencode-go',
@@ -170,6 +171,15 @@ export function ModelKeyHelp({
           </a>
         </p>
       )}
+      {provider === 'neon' && (
+        <p className={className}>
+          In the Neon Console, open Connect, then AI Gateway, and copy the base URL and credential
+          from the same branch.{' '}
+          <a href="https://neon.com/docs/ai-gateway/get-started" target="_blank" rel="noreferrer">
+            Setup
+          </a>
+        </p>
+      )}
       {provider === 'cloudflare-ai-gateway' && (
         <p className={className}>
           Use a token with AI Gateway Read and Run permissions. Add Read to tokens created from the
@@ -207,6 +217,8 @@ function providerDescription(provider: ModelProvider) {
       return 'Models in your Cloudflare account';
     case 'cloudflare-ai-gateway':
       return 'Models through your Cloudflare gateway';
+    case 'neon':
+      return 'Many models with one Neon branch credential';
     case 'compatible':
       return 'Ollama, LM Studio, vLLM or any other server';
     default:
@@ -333,6 +345,23 @@ export function CloudKeyFields({
       </Field>
     );
   if (provider === 'azure') return <AzureKeyFields {...{ value, onChange, disabled }} />;
+  if (provider === 'neon')
+    return (
+      <Field label="Base URL">
+        <Input
+          inputMode="url"
+          value={value.url}
+          required
+          maxLength={2000}
+          placeholder="https://br-name-api.ai.c-2.us-east-2.aws.neon.tech"
+          autoComplete="off"
+          spellCheck={false}
+          autoFocus
+          disabled={disabled}
+          onChange={(event) => onChange({ ...value, url: event.target.value })}
+        />
+      </Field>
+    );
   if (provider === 'cloudflare-workers-ai' || provider === 'cloudflare-ai-gateway')
     return (
       <>

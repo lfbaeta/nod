@@ -4134,11 +4134,17 @@ describe('model connections', { skip: !process.env.TEST_DATABASE_URL }, () => {
       AZURE_OPENAI_DEPLOYMENT: 'fixture-deployment',
       CLOUDFLARE_ACCOUNT_ID: 'ABCDEF0123456789ABCDEF0123456789',
       CLOUDFLARE_GATEWAY_ID: 'fixture-gateway',
+      NEON_AI_GATEWAY_BASE_URL: 'https://br-fixture-api.ai.c-2.us-east-2.aws.neon.tech',
     };
     const backend = {
       ...f.backend,
-      catalog: (provider: import('../src/shared/models.ts').ModelProvider) =>
-        f.backend.catalog(provider, 'api_key'),
+      catalog: async (provider: import('../src/shared/models.ts').ModelProvider) =>
+        provider === 'neon'
+          ? (await f.backend.catalog('openai', 'api_key')).map(({ choice, spec }) => ({
+              choice,
+              spec: { ...spec, provider: 'neon' },
+            }))
+          : f.backend.catalog(provider, 'api_key'),
     };
     const owner = await f.create(
       'fixture-environment-owner',
@@ -4171,18 +4177,26 @@ describe('model connections', { skip: !process.env.TEST_DATABASE_URL }, () => {
                 model: 'gpt-6.1-sol',
                 deployment: 'fixture-deployment',
               }
-            : provider.startsWith('cloudflare-')
+            : provider === 'neon'
               ? {
-                  type: 'cloudflare',
+                  type: 'neon',
                   key,
-                  accountId: 'abcdef0123456789abcdef0123456789',
-                  ...(provider === 'cloudflare-ai-gateway' ? { gatewayId: 'fixture-gateway' } : {}),
+                  url: 'https://br-fixture-api.ai.c-2.us-east-2.aws.neon.tech',
                 }
-              : {
-                  type: 'api_key',
-                  key,
-                  ...(provider === 'anthropic' ? { workspaceId: 'wrkspc_Managed123' } : {}),
-                },
+              : provider.startsWith('cloudflare-')
+                ? {
+                    type: 'cloudflare',
+                    key,
+                    accountId: 'abcdef0123456789abcdef0123456789',
+                    ...(provider === 'cloudflare-ai-gateway'
+                      ? { gatewayId: 'fixture-gateway' }
+                      : {}),
+                  }
+                : {
+                    type: 'api_key',
+                    key,
+                    ...(provider === 'anthropic' ? { workspaceId: 'wrkspc_Managed123' } : {}),
+                  },
       );
     }
     assert.doesNotMatch(JSON.stringify(owner.view()), /fixture-environment-/);

@@ -40,6 +40,7 @@ export function keySettingsReady(provider: ModelProvider, settings: KeySettings)
   if (provider === 'amazon-bedrock') return !!settings.region.trim();
   if (provider === 'azure')
     return !!(settings.url.trim() && settings.deployment.trim() && settings.model);
+  if (provider === 'neon') return !!settings.url.trim();
   if (provider === 'cloudflare-workers-ai') return !!settings.accountId.trim();
   if (provider === 'cloudflare-ai-gateway')
     return !!(settings.accountId.trim() && settings.gatewayId.trim());
@@ -68,6 +69,7 @@ export function keyConnection(provider: ModelProvider, key: string, settings: Ke
       ? { accountId: settings.accountId.trim() }
       : {}),
     ...(provider === 'cloudflare-ai-gateway' ? { gatewayId: settings.gatewayId.trim() } : {}),
+    ...(provider === 'neon' ? { url: settings.url.trim() } : {}),
   };
 }
 

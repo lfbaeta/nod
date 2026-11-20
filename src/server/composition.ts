@@ -307,7 +307,7 @@ export function modelEnvironment(
                 id,
                 modelKeyCredential(id, key, {
                   region: id === 'openai' ? env.OPENAI_API_REGION : env.AWS_REGION,
-                  url: env.AZURE_OPENAI_ENDPOINT,
+                  url: id === 'neon' ? env.NEON_AI_GATEWAY_BASE_URL : env.AZURE_OPENAI_ENDPOINT,
                   model: env.AZURE_OPENAI_MODEL,
                   deployment: env.AZURE_OPENAI_DEPLOYMENT,
                   accountId: env.CLOUDFLARE_ACCOUNT_ID,
@@ -320,6 +320,10 @@ export function modelEnvironment(
             if (id === 'anthropic')
               throw new Error(
                 'ANTHROPIC_WORKSPACE_ID must be a Workspace ID from the Claude Console.',
+              );
+            if (id === 'neon')
+              throw new Error(
+                'NEON_AI_GATEWAY_BASE_URL must be the Neon AI Gateway base URL from the Neon Console, such as https://br-name-api.ai.c-2.us-east-2.aws.neon.tech.',
               );
             throw error;
           }

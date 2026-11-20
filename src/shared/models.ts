@@ -22,6 +22,7 @@ export const apiKeyModelProviders = [
   'mistral',
   'moonshotai',
   'moonshotai-cn',
+  'neon',
   'nvidia',
   'opencode',
   'opencode-go',
@@ -288,6 +289,7 @@ export const modelProviderNames = {
   mistral: 'Mistral',
   moonshotai: 'Moonshot AI',
   'moonshotai-cn': 'Moonshot AI China',
+  neon: 'Neon AI Gateway',
   nvidia: 'NVIDIA',
   opencode: 'OpenCode Zen',
   'opencode-go': 'OpenCode Go',
@@ -402,6 +404,7 @@ export const modelProviderInfo: Record<
     env: 'MOONSHOT_CN_API_KEY',
     catalog: 'account',
   },
+  neon: { keyUrl: 'console.neon.tech', env: 'NEON_AI_GATEWAY_TOKEN', catalog: 'account' },
   nvidia: { keyUrl: 'build.nvidia.com', env: 'NVIDIA_API_KEY', catalog: 'account' },
   opencode: { keyUrl: 'opencode.ai/auth', env: 'OPENCODE_API_KEY', catalog: 'bundled' },
   'opencode-go': { keyUrl: 'opencode.ai/auth', env: 'OPENCODE_GO_API_KEY', catalog: 'bundled' },
@@ -457,6 +460,36 @@ export const bedrockRegionPattern = /^[a-z]{2}(?:-[a-z]+)+-\d{1,2}$/;
 export const azureDeploymentPattern = /^[\w.-]{1,64}$/;
 export const cloudflareAccountPattern = /^[a-f0-9]{32}$/i;
 export const cloudflareGatewayPattern = /^[a-z0-9][a-z0-9-]{0,63}$/;
+
+export function neonGatewayAddress(address: string) {
+  const value = address.trim();
+  if (
+    /[?#@]/.test(value) ||
+    value
+      .replace(/^[a-z][a-z\d+.-]*:\/\//i, '')
+      .split('/')[0]!
+      .includes(':')
+  )
+    return undefined;
+  let url: URL;
+  try {
+    url = new URL(/^[a-z][a-z\d+.-]*:\/\//i.test(value) ? value : `https://${value}`);
+  } catch {
+    return undefined;
+  }
+  if (
+    url.protocol !== 'https:' ||
+    url.username ||
+    url.password ||
+    url.port ||
+    url.search ||
+    url.hash ||
+    !/^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.neon\.tech$/.test(url.hostname) ||
+    !['/', '/v1', '/v1/'].includes(url.pathname)
+  )
+    return undefined;
+  return url.origin;
+}
 
 export function modelSource(connection: Pick<ModelConnection, 'provider' | 'method'>) {
   return connection.method === 'subscription'
