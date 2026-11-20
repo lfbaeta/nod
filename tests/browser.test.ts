@@ -8676,7 +8676,7 @@ test('analytics follow visible Settings sections, Apps tabs and the Scheduled pa
   assert.equal(result.exitCode, 0, result.stdout + result.stderr);
 });
 
-test('Settings nav highlights the heading nearest the top', async () => {
+test('Settings nav highlights the last heading that has reached the top line', async () => {
   const result = await runProcess(process.execPath, ['--import', 'tsx', '--input-type=module'], {
     timeoutMs: 20_000,
     input: String.raw`
