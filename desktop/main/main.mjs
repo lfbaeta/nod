@@ -457,7 +457,7 @@ function update(value) {
     message: bounded(value.message || status.message),
   };
   if (value.phase === 'ready' || value.phase === 'error') status.unlockingKeys = false;
-  if (value.phase === 'ready') delete status.failure;
+  if (value.phase && value.phase !== 'error') delete status.failure;
   if (value.error) status.error = bounded(value.error);
   else if (Object.hasOwn(value, 'error') || (value.phase && value.phase !== 'error'))
     delete status.error;
@@ -2800,7 +2800,7 @@ async function startEngine({ runtime, signal, pending = false }) {
         void writeDiagnostic(line).catch(() => {});
       }
   });
-  child.on('exit', (code, exitSignal) => {
+  child.on('exit', (code) => {
     if (engine !== child) return;
     stayAwake(false);
     if (!closingEngine)
@@ -2817,7 +2817,6 @@ async function startEngine({ runtime, signal, pending = false }) {
         {
           event: 'engine_exit',
           exitCode: code,
-          signal: exitSignal,
           durationMs: Date.now() - started,
         },
       ).catch(() => {});
@@ -2841,7 +2840,7 @@ async function startEngine({ runtime, signal, pending = false }) {
         phase: 'error',
         message: failure,
         error: failure,
-        failure: startupErrorFacts({ exitCode: code, signal: exitSignal }),
+        failure: startupErrorFacts({ exitCode: code }),
       });
       showSettings('general', true);
     }

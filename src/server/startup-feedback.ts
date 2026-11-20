@@ -37,7 +37,11 @@ class SavedStatusError extends StartupFeedbackError {
 
 const reviewSchema = z
   .object({
-    feedback: z.string().trim().min(1).max(feedbackLimits.text),
+    feedback: z
+      .string()
+      .min(1)
+      .max(feedbackLimits.text)
+      .refine((value) => Boolean(value.trim())),
     includeReport: z.boolean(),
   })
   .strict();
@@ -189,8 +193,7 @@ export function createStartupFeedback(options: {
 
   function present(value: FeedbackReceipt) {
     if (reviewed && reviewed.expiresAt <= Date.now()) reviewed = undefined;
-    if (!pending) throw new StartupFeedbackError('original_required');
-    const safe = startupReceiptFacts(value, pending.submissionId);
+    const safe = startupReceiptFacts(value, value.submissionId);
     return {
       ...safe,
       ...(safe.status === 'partial' && {
@@ -275,11 +278,15 @@ export function createStartupFeedback(options: {
     await restore();
     if (sending) return sending;
     if (!pending) return null;
-    if (refresh || !receipt || receipt.status === 'unknown')
-      receipt = startupReceiptFacts(
-        await options.delivery.status(pending.submissionId, pending.payloadHash),
-        pending.submissionId,
+    const current = pending;
+    if (refresh || !receipt || receipt.status === 'unknown') {
+      const value = startupReceiptFacts(
+        await options.delivery.status(current.submissionId, current.payloadHash),
+        current.submissionId,
       );
+      if (pending === current && !sending) receipt = value;
+      return present(value);
+    }
     return present(receipt);
   }
 

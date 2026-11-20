@@ -10363,6 +10363,7 @@ test('the built startup report form requires exact review and keeps uncertain se
   let refuseSend;
   let failContext = false;
   let repair;
+  let refuseRepair;
   let failOpening = true;
   let allowRecovery = false;
   let contextValue = { enabled: true, recipient: 'n8n', pending: null };
@@ -10402,8 +10403,9 @@ test('the built startup report form requires exact review and keeps uncertain se
         return contextValue;
       }
       if (action === 'repair')
-        return new Promise((resolve) => {
+        return new Promise((resolve, reject) => {
           repair = resolve;
+          refuseRepair = reject;
         });
       if (action === 'recover') {
         assert.equal(input.confirm, true);
@@ -10526,15 +10528,42 @@ test('the built startup report form requires exact review and keeps uncertain se
   await settle(() => send);
   send({ submissionId: reportId, status: 'partial', canRetryAttachments: true });
   await settle(() => button('Send the report again') && !button('Send the report again').disabled);
+  contextValue.pending = { submissionId: reportId, status: 'partial', canRetryAttachments: false };
+  button('Send the report again').click();
+  await settle(() => refuseRepair);
+  refuseRepair(new page.window.Error('The original report bytes are no longer available.'));
+  await settle(() => button('New report') && !button('New report').disabled);
+  assert.ok(page.window.document.body.textContent.includes('Sent without the diagnostic report.'));
+  assert.equal(button('Send the report again'), undefined);
+  assert.equal(requests.filter(([action]) => action === 'repair').length, 1);
+  contextValue.pending = { submissionId: reportId, status: 'partial', canRetryAttachments: true };
+  statusValue = contextValue.pending;
+  button('Check status').click();
+  await settle(() => button('Send the report again') && !button('Send the report again').disabled);
+  repair = undefined;
+  refuseRepair = undefined;
+  failContext = true;
+  button('Send the report again').click();
+  await settle(() => refuseRepair);
+  refuseRepair(new page.window.Error('Synthetic repair transport failure.'));
+  await settle(() => button('Check status') && !button('Check status').disabled);
+  assert.equal(button('New report'), undefined);
+  assert.equal(button('Send the report again'), undefined);
+  assert.ok(page.window.document.body.textContent.includes('The send result is unknown.'));
+  failContext = false;
+  button('Check status').click();
+  await settle(() => button('Send the report again') && !button('Send the report again').disabled);
+  repair = undefined;
   button('Send the report again').click();
   button('Send the report again')?.click();
   await settle(() => repair);
-  assert.equal(requests.filter(([action]) => action === 'repair').length, 1);
+  assert.equal(requests.filter(([action]) => action === 'repair').length, 3);
   assert.equal(requests.find(([action]) => action === 'repair')[1], reportId);
   repair({ submissionId: reportId, status: 'unknown' });
   await settle(() => button('Check status') && !button('Check status').disabled);
   assert.equal(button('Send the report again'), undefined);
   assert.equal(requests.filter(([action]) => action === 'send').length, 3);
+  statusValue = { submissionId: reportId, status: 'submitted' };
   button('Check status').click();
   await settle(() => page.window.document.body.textContent.includes('Your report was sent.'));
   button('Close').click();
@@ -10780,6 +10809,7 @@ test('startup report helper keeps prose out of facts and returns bounded local f
 test('startup report facts survive retry and disk failure without keeping diagnostic prose', async (t) => {
   const calls = [];
   let attempts = 0;
+  let retryFailure;
   const privateText =
     'synthetic-private-owner@example.test /Applications/Synthetic Owner/private-contract';
   const f = await runningDesktop(t, async () => assert.fail('The failed engine is not needed.'), {
@@ -10789,6 +10819,7 @@ test('startup report facts survive retry and disk failure without keeping diagno
     allowStart: true,
     prepareRuntime: async () => {
       attempts++;
+      if (attempts === 2) retryFailure = startupStatusFacts(f.status()).failure;
       throw Object.assign(new Error(privateText), { code: 'EACCES', syscall: 'open' });
     },
     startupFeedbackAction: async (message) => {
@@ -10802,6 +10833,7 @@ test('startup report facts survive retry and disk failure without keeping diagno
   await f.prepare({ retry: true }).catch(() => {});
   await f.prepare({ retry: true }).catch(() => {});
   assert.equal(attempts, 2);
+  assert.equal(retryFailure, undefined);
   assert.equal(f.children.length, 0);
   f.knownSecrets.add('/');
   f.knownSecrets.add('@');

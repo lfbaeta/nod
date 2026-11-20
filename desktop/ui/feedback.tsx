@@ -211,8 +211,15 @@ export function StartupFeedback({
                 void run(async () => {
                   const id = receipt.submissionId;
                   setReceipt({ ...receipt, status: 'unknown', canRetryAttachments: false });
-                  const value = (await desktop.startupFeedback('repair', id)) as FeedbackReceipt;
-                  if (active.current) setReceipt(value);
+                  try {
+                    const value = (await desktop.startupFeedback('repair', id)) as FeedbackReceipt;
+                    if (active.current) setReceipt(value);
+                  } catch (cause) {
+                    try {
+                      await reconcileAttempt(id);
+                    } catch {}
+                    throw cause;
+                  }
                 })
               }
             >

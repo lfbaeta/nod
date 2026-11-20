@@ -7834,7 +7834,7 @@ test('startup reports require review and keep exact redacted content through sen
   assert.equal(submitted.length, 0);
   await assert.rejects(service.send(randomUUID()), /Review the report again/);
   const first = await service.review({
-    feedback: 'Synthetic startup does not finish.',
+    feedback: '  Synthetic startup does not finish.\n\n',
     includeReport: true,
   });
   assert.equal(submitted.length, 0);
@@ -7872,6 +7872,7 @@ test('startup reports require review and keep exact redacted content through sen
   await Promise.race([dispatched, sending]);
   assert.equal(submitted.length, 1);
   assert.equal(Buffer.from(submitted[0].report!.data, 'base64').toString(), current.content);
+  assert.equal(first.feedback, '  Synthetic startup does not finish.\n\n');
   assert.equal(submitted[0].feedback, first.feedback);
   const duplicate = service.send(current.reviewId);
   await assert.rejects(
@@ -7909,6 +7910,86 @@ test('startup reports require review and keep exact redacted content through sen
   });
   await assert.rejects(restarted.send(second.reviewId), /Review the report again/);
   assert.notEqual(third.reviewId, second.reviewId);
+});
+
+test('startup status keeps its original submission while a newer send runs or finishes', async (t) => {
+  const { createStartupFeedback } = await import('../src/server/startup-feedback.ts');
+  for (const finishNewSend of [false, true]) {
+    await t.test(finishNewSend ? 'new send finished' : 'new send in flight', async (t) => {
+      const root = await mkdtemp(join(tmpdir(), 'nod-startup-status-race-'));
+      t.after(() => rm(root, { recursive: true, force: true }));
+      let releaseStatus!: (value: import('../src/shared/feedback.ts').FeedbackReceipt) => void;
+      let statusStarted!: () => void;
+      const checking = new Promise<void>((resolve) => {
+        statusStarted = resolve;
+      });
+      let releaseSend!: (value: import('../src/shared/feedback.ts').FeedbackReceipt) => void;
+      let sendStarted!: () => void;
+      const sending = new Promise<void>((resolve) => {
+        sendStarted = resolve;
+      });
+      let submits = 0;
+      const service = createStartupFeedback({
+        dataRoot: root,
+        context: {
+          appVersion: null,
+          appRelease: null,
+          appModified: null,
+          platform: null,
+          development: false,
+          source: 'desktop',
+        },
+        status: { phase: 'error' },
+        delivery: {
+          configured: true,
+          recipient: 'n8n',
+          async submit(envelope) {
+            if (++submits === 1)
+              return { submissionId: envelope.submissionId, status: 'submitted' };
+            sendStarted();
+            return new Promise((resolve) => {
+              releaseSend = resolve;
+            });
+          },
+          async status() {
+            statusStarted();
+            return new Promise((resolve) => {
+              releaseStatus = resolve;
+            });
+          },
+        },
+      });
+      const first = await service.review({
+        feedback: 'Synthetic first report.',
+        includeReport: false,
+      });
+      await service.send(first.reviewId);
+      const oldStatus = service.status();
+      await checking;
+      const next = await service.review({
+        feedback: 'Synthetic next report.',
+        includeReport: true,
+      });
+      const newSend = service.send(next.reviewId);
+      await sending;
+      if (finishNewSend) {
+        releaseSend({ submissionId: next.reviewId, status: 'partial' });
+        await newSend;
+      }
+      releaseStatus({ submissionId: first.reviewId, status: 'rejected' });
+      assert.deepEqual(await oldStatus, { submissionId: first.reviewId, status: 'rejected' });
+      if (!finishNewSend) {
+        releaseSend({ submissionId: next.reviewId, status: 'partial' });
+        await newSend;
+      }
+      assert.deepEqual((await service.context()).pending, {
+        submissionId: next.reviewId,
+        status: 'partial',
+        canRetryAttachments: true,
+      });
+      assert.equal(submits, 2);
+    });
+  }
 });
 
 test('startup reports omit unavailable event snapshots and refuse invalid input or failed durable saves', async (t) => {
@@ -7957,6 +8038,7 @@ test('startup reports omit unavailable event snapshots and refuse invalid input 
   assert.equal(report.context.platform, null);
   await assert.rejects(service.review({ feedback: 'x', includeReport: true, extra: true }));
   await assert.rejects(service.review({ feedback: '', includeReport: true }));
+  await assert.rejects(service.review({ feedback: ' \n\t', includeReport: true }));
   const disabled = createStartupFeedback({
     ...options,
     delivery: { ...options.delivery, configured: false },
@@ -8108,6 +8190,7 @@ test(
 test('startup reports never open log paths and use only current desktop events', async (t) => {
   const { createStartupFeedback } = await import('../src/server/startup-feedback.ts');
   const filesystem = (await import('node:fs/promises')).default;
+  const directFilesystem = (await import('node:fs')).default;
   const { syncBuiltinESMExports } = await import('node:module');
   const { mkdir, writeFile } = filesystem;
   const root = await mkdtemp(join(tmpdir(), 'nod-startup-no-log-read-'));
@@ -8121,8 +8204,20 @@ test('startup reports never open log paths and use only current desktop events',
     await mkdir(join(dataRoot, 'logs'));
     await writeFile(join(dataRoot, 'logs', 'startup.log'), 'Synthetic unrelated private file\n');
   } else await symlink(outside, join(dataRoot, 'logs'));
-  const opened: string[] = [];
-  const original = filesystem.open;
+  const accessed: string[] = [];
+  const restorations: Array<() => void> = [];
+  function trackReads(surface: object, names: string[]) {
+    for (const name of names) {
+      const original = Reflect.get(surface, name);
+      Reflect.set(surface, name, (...args: unknown[]) => {
+        accessed.push(String(args[0]));
+        return Reflect.apply(original, surface, args);
+      });
+      restorations.push(() => {
+        Reflect.set(surface, name, original);
+      });
+    }
+  }
   const options = {
     dataRoot,
     secrets: [],
@@ -8152,13 +8247,23 @@ test('startup reports never open log paths and use only current desktop events',
     },
   };
   try {
-    filesystem.open = (async (
-      path: Parameters<typeof original>[0],
-      ...args: Parameters<typeof original> extends [unknown, ...infer Rest] ? Rest : never
-    ) => {
-      opened.push(String(path));
-      return original(path, ...args);
-    }) as typeof original;
+    const methods = [
+      'open',
+      'readFile',
+      'readdir',
+      'opendir',
+      'readlink',
+      'realpath',
+      'stat',
+      'lstat',
+      'access',
+    ];
+    trackReads(filesystem, methods);
+    trackReads(directFilesystem, [
+      ...methods,
+      ...methods.map((name) => `${name}Sync`),
+      'createReadStream',
+    ]);
     syncBuiltinESMExports();
     const service = createStartupFeedback(options);
     const snapshot = await service.review({ feedback: 'Synthetic failure.', includeReport: true });
@@ -8180,11 +8285,15 @@ test('startup reports never open log paths and use only current desktop events',
     assert.equal(empty.startupLog.status, 'unavailable');
     assert.deepEqual(empty.startupLog.entries, []);
     assert.ok(
-      !opened.some((path) => /[\\/]logs(?:[\\/]|$)/.test(path)),
-      'Preparing a startup report must not open any log path.',
+      !accessed.some((path) =>
+        [join(dataRoot, 'logs'), outside].some(
+          (root) => path === root || path.startsWith(root + '/') || path.startsWith(root + '\\'),
+        ),
+      ),
+      'Preparing a startup report must not access a log path or its outside target.',
     );
   } finally {
-    filesystem.open = original;
+    for (const restore of restorations.reverse()) restore();
     syncBuiltinESMExports();
   }
 });
