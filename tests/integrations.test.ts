@@ -3135,6 +3135,8 @@ test(
       'returns late',
       'returns during expiry',
       'cancelled late',
+      'returns late after a restart',
+      'cancelled late after a restart',
       'connected',
     ] as const)
       await t.test(ending, async (t) => {
@@ -3156,6 +3158,7 @@ test(
               : [],
           );
         const f = await appsFixture(t, {}, { analytics: (event) => captured.push(event) });
+        let app: Pick<typeof f.app, 'inject'> = f.app;
         const started = await f.app.inject({
           method: 'POST',
           url: '/api/apps/gmail/connect',
@@ -3165,7 +3168,7 @@ test(
         assert.equal(expiries.length, 1);
         const callback = new URL(f.callbacks.at(-1)!);
         callback.searchParams.set('account', [...f.accounts.keys()].at(-1)!);
-        const finish = () => f.app.inject({ url: callback.pathname + callback.search });
+        const finish = () => app.inject({ url: callback.pathname + callback.search });
         if (ending === 'connected') {
           assert.equal(
             new URL((await finish()).headers.location!).searchParams.get('connection'),
@@ -3188,10 +3191,11 @@ test(
           await recording;
           assert.deepEqual(changes(), expired);
         }
-        if (ending === 'cancelled late')
+        if (ending.endsWith('after a restart')) app = await f.restart();
+        if (ending.startsWith('cancelled late'))
           assert.equal(
             (
-              await f.app.inject({
+              await app.inject({
                 method: 'POST',
                 url: '/api/apps/setup-cancel',
                 payload: {
@@ -5288,7 +5292,7 @@ async function appsFixture(
       return JSON.parse(String(body));
     },
   };
-  const service = await createIntegrations(pool, {
+  const options: Parameters<typeof createIntegrations>[1] = {
     mailCheck: async (emails) => emails.map(() => false),
     ...listing,
     ownerId: 'local-development',
@@ -5300,8 +5304,15 @@ async function appsFixture(
         wakes.push(id);
       }),
     settle: async () => settles++,
-  });
+  };
+  const service = await createIntegrations(pool, options);
   service.registerRoutes(app);
+  async function restart() {
+    const restarted = Fastify();
+    (await createIntegrations(pool, options)).registerRoutes(restarted);
+    t.after(() => restarted.close());
+    return restarted;
+  }
   t.after(async () => {
     await app.close();
     await pool.end();
@@ -5338,6 +5349,7 @@ async function appsFixture(
     wakes,
     settles: () => settles,
     callbacks,
+    restart,
   };
 }
 
