@@ -2628,7 +2628,6 @@ async function initializeApplication(
             admit: async (asks) => {
               if (asks && request.subagent) throw new Error('A subagent cannot ask the owner.');
             },
-            expectedChatRevision: verdict.chatRevision,
             signal,
             run: async () => 'run',
           });
@@ -2641,7 +2640,6 @@ async function initializeApplication(
         if (request.subagent) return 'refused';
         const result = await approvals.request(turn, 'NOD_browser', args, {
           signal,
-          expectedChatRevision: verdict.chatRevision,
           details: { reason: verdict.reason },
           prepareConfirmation,
         });
@@ -2712,7 +2710,6 @@ async function initializeApplication(
             signal,
             allowed: !verdict.confirm,
             ...(verdict.confirm ? {} : { basis: verdict.basis }),
-            expectedChatRevision: verdict.chatRevision,
             admit,
             details: verdict.confirm ? { reason: verdict.reason } : {},
           });
@@ -2725,7 +2722,6 @@ async function initializeApplication(
             signal,
             allowed: !verdict.confirm,
             ...(verdict.confirm ? {} : { basis: verdict.basis }),
-            expectedChatRevision: verdict.chatRevision,
             admit,
             details: {
               current: await ledger.limits(),
@@ -2790,7 +2786,6 @@ async function initializeApplication(
             signal,
             allowed: !verdict.confirm,
             ...(verdict.confirm ? {} : { basis: verdict.basis }),
-            expectedChatRevision: verdict.chatRevision,
             admit,
             instructionChange: verdict.instructionChange,
             expectedRevision: prepared?.revision,
@@ -2831,7 +2826,6 @@ async function initializeApplication(
             signal,
             allowed: !verdict.confirm,
             ...(verdict.confirm ? {} : { basis: verdict.basis }),
-            expectedChatRevision: verdict.chatRevision,
             admit,
             details: verdict.confirm ? { reason: verdict.reason } : {},
           });
@@ -2993,8 +2987,6 @@ async function initializeApplication(
           await options.admit?.(verdict.confirm);
           return approvals.request(turn, action, prepared, {
             allowed: !verdict.confirm,
-            expectedChatRevision:
-              verdict.confirm || verdict.basis.kind !== 'read' ? verdict.chatRevision : undefined,
             signal: options.signal,
             run: async () => {
               const result = await computerUse.execute(turn, action, prepared, options.signal);
@@ -3038,7 +3030,6 @@ async function initializeApplication(
             ...(verdict.confirm ? {} : { basis: verdict.basis }),
             signal: options.signal,
             admit: options.admit,
-            expectedChatRevision: verdict.chatRevision,
             details: {
               ...(typeof args.path === 'string' ? { requestedPath: args.path } : {}),
               accessScope:
@@ -3202,8 +3193,6 @@ async function initializeApplication(
         const result = await approvals.request(turn, action, prepared, {
           allowed: !verdict.confirm,
           admit: options.admit,
-          expectedChatRevision:
-            verdict.confirm || verdict.basis.kind !== 'read' ? verdict.chatRevision : undefined,
           signal: options.signal,
           validate: async (client) => {
             if (verifiedInstructionRevision)

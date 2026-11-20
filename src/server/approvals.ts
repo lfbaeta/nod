@@ -354,7 +354,6 @@ export async function createApprovals(
       admit?: (asks: boolean) => Promise<void>;
       validate?: (client: PoolClient) => Promise<void>;
       expectedRevision?: number;
-      expectedChatRevision?: string;
       basis?: TrustBasis;
       instructionChange?: InstructionChange;
     } = {},
@@ -801,18 +800,15 @@ export async function createApprovals(
       options.signal?.throwIfAborted();
       return { cached: false as const, approval, question, source: inspected.source };
     };
-    const proposal =
-      options.expectedChatRevision !== undefined
-        ? await transaction(
-            async (client) => {
-              if ((await lockThread(client)).id !== turn.threadId)
-                throw conflict('This conversation is no longer active.');
-              return withTurnLock(turn.turnId, saveProposal, client);
-            },
-            pool,
-            options.signal,
-          )
-        : await withTurnLock(turn.turnId, saveProposal);
+    const proposal = await transaction(
+      async (client) => {
+        if ((await lockThread(client)).id !== turn.threadId)
+          throw conflict('This conversation is no longer active.');
+        return withTurnLock(turn.turnId, saveProposal, client);
+      },
+      pool,
+      options.signal,
+    );
     if (proposal.cached) return proposal.result;
     if ('question' in proposal) {
       if ('source' in proposal && proposal.source) changed('asked', action, proposal.source);

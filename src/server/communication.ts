@@ -379,8 +379,7 @@ export function createCommunication(options: {
         proposal.channel,
       ).catch((error: unknown) => {
         signal?.throwIfAborted();
-        if (scheduleConfirmation(proposal.details ? { details: proposal.details } : {}))
-          throw error;
+        if (proposal.details && 'scheduleDefinition' in proposal.details) throw error;
         return undefined;
       });
       if (drafted && 'action' in drafted && typeof drafted.action === 'string')
