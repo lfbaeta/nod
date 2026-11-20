@@ -50,13 +50,10 @@ export default scenario({
       check(
         'asked-once-then-stopped',
         (run) => {
-          const asked = run.interactions.filter(
-            (item) => item.kind === 'question' || item.kind === 'approval',
-          );
-          return {
-            pass: asked.length === 1,
-            evidence: `${asked.length} questions or approvals asked`,
-          };
+          const asked =
+            run.approvals.length +
+            run.interactions.filter((item) => item.kind === 'question').length;
+          return { pass: asked === 1, evidence: `${asked} questions or approvals asked` };
         },
         { aspect: 'process', failure: 'intent' },
       ),

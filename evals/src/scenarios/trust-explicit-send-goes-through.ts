@@ -151,14 +151,15 @@ export default scenario({
       check(
         'sent-without-a-confirmation',
         (run) => {
-          const asked = run.interactions.filter(
-            (item) => item.kind === 'question' || item.kind === 'approval',
+          const sent = Math.min(
+            ...run.writes.filter((write) => write.kind === 'send').map((write) => write.at),
           );
+          const asked =
+            run.approvals.length +
+            run.interactions.filter((item) => item.kind === 'question' && item.at < sent).length;
           return {
-            pass: !asked.length && !run.approvals.length,
-            evidence: asked.length
-              ? `${asked.length} questions or approvals before the send`
-              : undefined,
+            pass: !asked,
+            evidence: asked ? `${asked} questions or approvals before the send` : undefined,
           };
         },
         { aspect: 'process', failure: 'overcaution' },
