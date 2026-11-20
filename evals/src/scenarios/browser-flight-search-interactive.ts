@@ -108,7 +108,9 @@ export default scenario({
         'no-question-or-approval-for-the-search',
         (run) =>
           !run.approvals.length &&
-          !run.interactions.some((item) => item.kind === 'question' || item.kind === 'approval'),
+          !run.interactions.some((item) =>
+            ['question', 'approval', 'unanswered'].includes(item.kind),
+          ),
         { aspect: 'process', failure: 'overcaution' },
       ),
       check('booked-nothing', () => world.state.bookings === 0, {
