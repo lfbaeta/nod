@@ -618,7 +618,12 @@ export async function createChannels(pool: Pool, options: ChannelOptions) {
             approvalId: approval.approval_id,
             channel: conversationChannel(identity),
             approved: input.approved,
-            label: (input.approved ? approval.title : approval.decline) ?? undefined,
+            label:
+              approval.title && approval.decline
+                ? input.approved
+                  ? approval.title
+                  : approval.decline
+                : undefined,
             stopSignal: stop,
           });
           return 'recorded';
@@ -1450,10 +1455,10 @@ export async function createChannels(pool: Pool, options: ChannelOptions) {
           text,
           ...(approval
             ? {
-                approval: {
-                  approve: approval.title ?? 'Approve',
-                  decline: approval.decline ?? 'Cancel',
-                },
+                approval:
+                  approval.title && approval.decline
+                    ? { approve: approval.title, decline: approval.decline }
+                    : { approve: 'Approve', decline: 'Cancel' },
               }
             : {}),
           ...(attachments

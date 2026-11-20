@@ -2770,12 +2770,13 @@ test(
             assert.equal(schema?.additionalProperties, false);
             return drafts === 1
               ? { text: 'Save the synthetic development rule?' }
-              : { text: `Save this rule: ${rules}`, action: 'Save rule' };
+              : { text: `Save this rule: ${rules}`, action: 'Save rule', decline: 'Keep my rules' };
           };
           try {
             const turn = await propose('notification_preferences_update', { rules });
             const [approval] = await approvalsFor(turn);
             assert.equal(approval.status, 'pending');
+            assert.equal(approval.decline, 'Keep my rules');
             assert.equal(drafts, 2);
             assert.equal(
               (await pool.query('SELECT rules FROM preferences WHERE owner_id=$1', [ownerId]))
