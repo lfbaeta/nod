@@ -474,10 +474,7 @@ export function createFeedbackRedactor(options: { secrets: string[]; profile: Pe
         if (++count > 100) return '[structured data omitted]';
         const property = Object.getOwnPropertyDescriptor(input, key);
         if (!property) continue;
-        if (key.length > 200) {
-          result['[oversized key omitted]'] = '[omitted]';
-          continue;
-        }
+        if (key.length > 200) return '[structured data omitted]';
         if (
           /%[0-9a-f]{2}|\\(?:u[0-9a-f]{4}|["\\/bfnrt])/i.test(key) ||
           key.trimStart().startsWith('"')

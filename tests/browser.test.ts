@@ -3473,6 +3473,30 @@ test('feedback redaction checks original text and structure before masking', asy
       privateParts: [],
       kept: ['"status":503', '"field98":98'],
     },
+    {
+      id: 'oversized-encoded-name-key',
+      input: { value: opaque, ['n%61me' + '-'.repeat(195)]: 'Authorization' },
+      privateParts: [opaque],
+      kept: ['[structured data omitted]'],
+    },
+    {
+      id: 'oversized-encoded-media-key',
+      input: { data: opaque, ['t%79pe' + '-'.repeat(195)]: 'image' },
+      privateParts: [opaque],
+      kept: ['[structured data omitted]'],
+    },
+    {
+      id: 'safe-key-below-length-limit',
+      input: { status: 503, ['x'.repeat(199)]: 'Useful technical value' },
+      privateParts: [],
+      kept: ['"status":503', 'Useful technical value'],
+    },
+    {
+      id: 'safe-key-at-length-limit',
+      input: { status: 503, ['x'.repeat(200)]: 'Useful technical value' },
+      privateParts: [],
+      kept: ['"status":503', 'Useful technical value'],
+    },
     { id: 'tuple-literal', input: tuple, secrets: ['Author'], privateParts: [opaque] },
     {
       id: 'json-tuple-literal',
