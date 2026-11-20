@@ -328,7 +328,7 @@ test('command output removes whole secrets before taking a bounded tail', async 
   assert.equal(records[5]?.output, '{"name":"password","value":"[redacted]"}');
 });
 
-test('partial delivery continues across browser and app reads in chat and saved tasks', async () => {
+test('partial delivery continues across app reads in chat and browser reads in saved tasks', async () => {
   for (const task of [false, true]) {
     const delivered: string[] = [];
     const first = 'The public plan costs EUR 12 per seat. The account price is not checked yet.';

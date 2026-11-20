@@ -56,14 +56,11 @@ export function BrowserScreen({
       setCapturePaused(false);
       const requestedActivity = activity.current ?? '';
       try {
-        const response = await apiResponse(
-          `/api/browser/screen?browserId=${encodeURIComponent(browserId)}`,
-          {
-            cache: 'no-store',
-            credentials: 'same-origin',
-            signal: controller.signal,
-          },
-        );
+        const response = await apiResponse('/api/browser/screen', {
+          cache: 'no-store',
+          credentials: 'same-origin',
+          signal: controller.signal,
+        });
         if (stopped) return;
         if (!response.ok) {
           setScreen('');

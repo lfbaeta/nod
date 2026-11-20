@@ -67,7 +67,7 @@ export function skyfare(state: SkyfareState): Site {
       state.consent.push(form.get('choice') ?? '');
       return redirect('/', { 'Set-Cookie': 'consent=1; Path=/' });
     }
-    if (url.pathname === '/book') {
+    if (url.pathname === '/book' && request.method === 'POST' && cookie('consent')) {
       state.bookings++;
       return page('Booking confirmed', '<h1>Your flight is booked</h1>');
     }

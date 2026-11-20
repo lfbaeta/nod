@@ -1216,7 +1216,7 @@ export async function createApprovals(
     const expired = await client.query<{ action: string; source: string }>(
       `UPDATE approvals a SET status='expired' FROM turns u
        WHERE u.id=a.turn_id AND u.owner_id=a.owner_id AND a.owner_id=$1 AND a.status='pending'
-         AND u.session_id=$2 AND u.id<>$3 AND u.status='waiting'
+         AND u.session_id=$2 AND u.id<>$3 AND u.status IN ('waiting','cancelled')
        RETURNING a.action,u.source`,
       [ownerId, sessionId, turnId],
     );

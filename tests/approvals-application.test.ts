@@ -2107,6 +2107,18 @@ test(
           });
       });
 
+      await t.test('a reply to a task that is not an answer closes its open approval', async () => {
+        const held = await propose('click', { selector: '@e7' }, 'browser');
+        const [card] = await approvalsFor(held);
+        assert.equal(card?.status, 'pending');
+        const reply = await request('POST', '/api/messages', {
+          text: `Use the savings account instead ${randomUUID()}.`,
+          replyToMessageId: card.confirmation_message_id,
+        });
+        assert.equal(reply.statusCode, 200, reply.body);
+        assert.equal((await approvalsFor(held))[0]?.status, 'expired');
+      });
+
       await t.test(
         'a labeled click keeps its replay command out of wording and waits for approval',
         async () => {
