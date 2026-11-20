@@ -1448,7 +1448,7 @@ async function initializeApplication(
   };
   const replayBrowserStep = async (
     args: Record<string, unknown>,
-    provenance: { threadId: string; turnId: string },
+    provenance: { threadId: string; turnId: string; signal?: AbortSignal },
   ) => {
     const command = args.command as Omit<BrowserAction, 'action'> & {
       action: BrowserAction['action'] | 'upload';
@@ -1485,27 +1485,36 @@ async function initializeApplication(
       formSent(current.submits) !== formSent(args.submits)
     )
       throw notRun();
+    if (provenance.signal?.aborted) throw notRun();
     try {
       const page =
         command.action === 'upload'
-          ? await computer.upload(browserId, {
-              selector: String(command.selector),
-              name: basename(String(command.path)),
-              bytes: await workspace.readArtifact(
-                provenance.threadId,
-                String(command.path),
-                fileBytes,
-              ),
-              expectOrigin,
-              expectUrl: String(args.page),
-              ...(args.target ? { expectTarget: String(args.target) } : {}),
-            })
-          : await computer.act(browserId, {
-              ...(command as BrowserAction),
-              expectOrigin,
-              expectUrl: String(args.page),
-              ...(args.target ? { expectTarget: String(args.target) } : {}),
-            });
+          ? await computer.upload(
+              browserId,
+              {
+                selector: String(command.selector),
+                name: basename(String(command.path)),
+                bytes: await workspace.readArtifact(
+                  provenance.threadId,
+                  String(command.path),
+                  fileBytes,
+                ),
+                expectOrigin,
+                expectUrl: String(args.page),
+                ...(args.target ? { expectTarget: String(args.target) } : {}),
+              },
+              provenance.signal,
+            )
+          : await computer.act(
+              browserId,
+              {
+                ...(command as BrowserAction),
+                expectOrigin,
+                expectUrl: String(args.page),
+                ...(args.target ? { expectTarget: String(args.target) } : {}),
+              },
+              provenance.signal,
+            );
       return { url: page.url, page: page.text };
     } catch (error) {
       if (error instanceof BrowserActionError && error.code === 'browser_target_changed')

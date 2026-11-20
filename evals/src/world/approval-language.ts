@@ -127,7 +127,10 @@ export function approvalLanguageScenario(name: string) {
     calibration: 'pending',
     seconds: 300,
     timeZone: 'Europe/Berlin',
-    user: { approvalReplies: [frozen.reply], answers: [{ when: /\?/, say: frozen.reply }] },
+    user: {
+      approvalReplies: [frozen.reply],
+      answers: [{ when: /lena@meridian\.example\.org|Meridian 427/i, say: frozen.reply }],
+    },
     world(clock) {
       return {
         apps: createApps(owner, {

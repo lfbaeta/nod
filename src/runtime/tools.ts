@@ -925,7 +925,7 @@ export function nodTools(
     if (
       !page.submits &&
       !page.dialog &&
-      ['click', 'press', 'select'].includes(step.action) &&
+      ['click', 'press'].includes(step.action) &&
       page.controls?.length === 1 &&
       inputRoles.has(page.controls[0]!.role) &&
       !(step.action === 'press' && isEnterKey(step.key))
