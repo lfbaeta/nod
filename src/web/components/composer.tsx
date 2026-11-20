@@ -210,11 +210,6 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     },
   });
   useEffect(() => {
-    if (!editor || editor.isDestroyed) return;
-    if (touch) editor.view.dom.setAttribute('enterkeyhint', 'enter');
-    else editor.view.dom.removeAttribute('enterkeyhint');
-  }, [editor, touch]);
-  useEffect(() => {
     if (editor && !editor.isDestroyed) editor.view.dispatch(editor.state.tr);
   }, [editor, placeholder]);
   function focus() {
@@ -1086,7 +1081,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
         <EditorFormatting editor={editor} underlineShortcut={false} />
         <span className="sr-only" id="composer-keyboard-hint">
           {touch
-            ? `Return for a new line or list item. Use the send button, or ${mac ? 'Command' : 'Control'} plus Return, to send.`
+            ? `Return for a new line or list item. Use the send button${mac ? ', or Command plus Return,' : ''} to send.`
             : 'Enter to send. Shift or Alt plus Enter for a new line or list item.'}
         </span>
         <div className="composer-tools">
