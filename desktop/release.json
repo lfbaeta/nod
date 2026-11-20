@@ -3,5 +3,8 @@
   "previousTag": "nod-v0.9.0",
   "source": "517d7f5d96fe52b3ccacc5c7ce65560dabbff07a",
   "highlights": "## More room for your work\n\nDrag the edge of the sidebar to change its width, or hide it for more space. Nod remembers your choice.\n\n## See what your schedules are doing\n\nOpen a scheduled run to see its current activity and completed steps. Each completed step appears once.\n\n## Also in this release\n\n- **Draft review:** If you ask to review a draft before it is sent, that review stays required after edits.\n- **Startup help:** Send a startup report even when chat cannot open.\n- **Telegram:** Approve or decline requests with buttons in Telegram.\n- **Connections:** Rename custom MCP connections. Failed model connections keep the service's reason.\n- **Privacy:** Bug reports mask more personal details. Review the report before you send it.\n- **Mac updates:** Update checks wait until an update already in progress finishes.",
-  "video": null
+  "video": {
+    "url": "https://github.com/user-attachments/assets/8be1aa61-3119-4c1f-9c64-bdd333b07a00",
+    "releaseSha256": "691a8291464e48f10e51d7f44b5b31c8719bfa902f2fdaa4f865b99a0436a0ad"
+  }
 }
