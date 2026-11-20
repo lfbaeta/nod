@@ -77,7 +77,10 @@ export interface ModelAccess {
   reserve?(
     maximumUsd: number | null | (() => number | null),
   ): Promise<(spentUsd: number | null) => Promise<void>>;
-  prepareRequest?(modelId: string, automatic: boolean): Promise<(error?: string) => Promise<void>>;
+  prepareRequest?(
+    modelId: string,
+    automatic: boolean,
+  ): Promise<(error?: string, status?: number) => Promise<void>>;
   needsReconnect?(credential?: ModelCredential): Promise<void>;
 }
 

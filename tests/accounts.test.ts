@@ -3746,6 +3746,11 @@ describe('model connections', { skip: !process.env.TEST_DATABASE_URL }, () => {
       await new Promise((resolve) => setImmediate(resolve));
       const issue = owner.view().selectionIssue;
       assert.match(issue!.reason, /Synthetic new credential failure/);
+      await completePrevious('HTTP 401; Synthetic expired key.', 401);
+      assert.equal(
+        owner.view().connections.find((row) => row.id === connectionId)!.status,
+        'connected',
+      );
       await completePrevious();
       assert.deepEqual(owner.current.issue, issue);
       const current = await owner.resolve();
@@ -4230,7 +4235,7 @@ describe('model connections', { skip: !process.env.TEST_DATABASE_URL }, () => {
     await assert.rejects(owner.resolve());
   });
 
-  test('a model request failure that Pi does not retry pauses automatic requests to that model, tries again after a growing wait, and clears on success', async (t) => {
+  test('a model request failure that Pi does not retry pauses automatic requests to that model, tries again after a growing wait, clears on success, and a rejected key needs reconnecting', async (t) => {
     const f = await fixture(t);
     const { createPiMemoryCurator } = await import('../src/providers/pi/memory-curator.ts');
     const { createPiModelRuntime } = await import('../src/providers/pi/models.ts');
@@ -4313,6 +4318,7 @@ describe('model connections', { skip: !process.env.TEST_DATABASE_URL }, () => {
     );
     assert.match(service.current.issue!.reason, /requires more credits/);
     assert.deepEqual(service.view().selectionIssue, service.current.issue);
+    assert.equal(service.view().connections[0]!.status, 'connected');
     assert.equal(await allowed(), false);
     assert.equal(await allowed(second), true);
     assert.equal(service.paused({ kind: 'schedule', schedule: first }), true);
@@ -4388,6 +4394,15 @@ describe('model connections', { skip: !process.env.TEST_DATABASE_URL }, () => {
     assert.equal(calls, 9);
     assert.equal(service.view().connections[0]!.issue, undefined);
     assert.equal(service.current.issue, undefined);
+
+    reply = () => Response.json({ error: { message: 'API key expired.' } }, { status: 401 });
+    assert.equal((await ask()).stopReason, 'error');
+    assert.equal(calls, 10);
+    assert.equal(service.view().connections[0]!.status, 'reconnect');
+    assert.match(service.current.issue!.reason, /API key expired/);
+    assert.equal(service.configured, false);
+    await assert.rejects(ask(), /add it again/);
+    assert.equal(calls, 10);
   });
 
   test('model setup chooses capable defaults, preserves explicit choices and requires valid cloud accounts', async (t) => {

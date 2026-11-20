@@ -534,7 +534,7 @@ export function createModelService(options: {
           throw new ConnectionError(
             `${modelProviderNames[row.provider]} failed the last request to ${modelId} (${failure.reason}). Automatic requests to this model are paused until a request succeeds. Check this connection in ${appPages['/settings/models']} or ask again to make a new request.`,
           );
-        return async (error) => {
+        return async (error, status) => {
           if (!tag || closed) return;
           if (
             !error &&
@@ -579,6 +579,8 @@ export function createModelService(options: {
                   .trim()
                   .slice(0, 300),
               };
+              if (status === 401 && !saved.managed && saved.status === 'connected')
+                saved.status = 'reconnect';
             });
             await reload();
           } catch (error) {

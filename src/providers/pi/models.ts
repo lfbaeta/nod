@@ -1228,7 +1228,7 @@ export async function createPiModelRuntime(
     let phase: ModelRequestFacts['requestPhase'] = 'prepare';
     let status: number | undefined;
     let transportCause: string | undefined;
-    let completeRequest: ((error?: string) => Promise<void>) | undefined;
+    let completeRequest: ((error?: string, status?: number) => Promise<void>) | undefined;
     let settleBudget: ((spentUsd: number | null) => Promise<void>) | undefined;
     const silence = new AbortController();
     let silenceTimer: ReturnType<typeof setTimeout> | undefined;
@@ -1456,6 +1456,7 @@ export async function createPiModelRuntime(
           )
             await completeRequest?.(
               message.stopReason === 'error' ? message.errorMessage : undefined,
+              status,
             );
         }
         if (event.type === 'done' || event.type === 'error') {
