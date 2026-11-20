@@ -17,7 +17,7 @@ Nod keeps quick answers, simple lookups and status questions in chat. It starts 
 | "For the flights, only direct routes." | Updates task A.                  |
 | "How are the flights going?"           | Reports task A's status in chat. |
 
-The main chat stays available while tasks work. Each task keeps its goal and history, and its start message is its acknowledgement. Reply to a task's message to correct it or add a related update; a question about its progress is answered in chat. In the web and desktop apps, each message a task posts quotes your message it belongs to: your latest message to that task, or else the one that started it. Select the quote to jump to that message.
+The main chat stays available while tasks work. Each task keeps its goal and history, and its start message is its acknowledgement. Reply to a task's message to correct it or add a related update; a question about its progress is answered in chat. In the web and desktop apps, each message a task posts quotes your message it belongs to: your latest message that task had picked up when it posted, or else the one that started it. Select the quote to jump to that message.
 
 Tasks share one [workspace](/use/workspace/#one-workspace-for-all-tasks) and owner memory. Each task has its own working folder and saved session. See [Task sessions](/how-it-works/task-sessions/) for the architecture.
 

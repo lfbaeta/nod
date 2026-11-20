@@ -36,7 +36,7 @@ import {
 import type { ConnectedApp } from '../src/ports/integrations.ts';
 import type { MemoryCurator } from '../src/ports/memory-curator.ts';
 import { ObjectStoreConflict, type PrivateObjectStore } from '../src/ports/object-storage.ts';
-import { createAgentRuntime } from '../src/runtime/index.ts';
+import { createAgentRuntime, webTarget } from '../src/runtime/index.ts';
 import { compactOwnerContext, firstInstruction, ownerContext } from '../src/runtime/prompt.ts';
 import { createPreferencesStore } from '../src/server/preferences.ts';
 import type { ThreadDependencies } from '../src/server/thread.ts';
@@ -14163,6 +14163,18 @@ test('the onboarding brief masks each link and keeps the fields after it', async
   const brief = masked(JSON.stringify(quoted));
   assert.deepEqual(JSON.parse(brief), { note: 'Open [link] then reply', next: 'kept' });
   assert.ok(!brief.includes('zzz'));
+});
+
+test('a web search label keeps a known secret out even when operators or quotes split it', async () => {
+  const { createTextRedactor } = await import('../src/server/redaction.ts');
+  const redact = createTextRedactor(['synthetic alpha beta']);
+  const label = webTarget(
+    'web_search',
+    { query: 'password:"synthetic alpha beta" forecast' },
+    redact,
+  );
+  assert.deepEqual(label, { detail: 'forecast' });
+  assert.doesNotMatch(JSON.stringify(label), /alpha|beta/);
 });
 
 test(

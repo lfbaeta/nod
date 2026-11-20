@@ -140,7 +140,7 @@ const delimitedTools = new Set([
   'source_check',
   'codemode',
 ]);
-function webTarget(name: string, params: unknown, redact: (text: string) => string) {
+export function webTarget(name: string, params: unknown, redact: (text: string) => string) {
   const input = (params ?? {}) as Record<string, unknown>;
   const first = (one: unknown, many: unknown) =>
     [one, ...(Array.isArray(many) ? many : [])].find(
@@ -149,7 +149,9 @@ function webTarget(name: string, params: unknown, redact: (text: string) => stri
   if (name === 'web_search') {
     const query = first(input.query, input.queries);
     if (!query) return {};
-    const text = redact(query.replace(/(^|\s)-?(?:[a-z]+:|site\.)\S+/gi, ' ').replace(/["“”]/g, ''))
+    const text = redact(query)
+      .replace(/(^|\s)-?(?:[a-z]+:|site\.)\S+/gi, ' ')
+      .replace(/["“”]/g, '')
       .replace(/\s+/g, ' ')
       .trim();
     if (!text) return {};
