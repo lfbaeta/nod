@@ -2761,7 +2761,6 @@ function context(directory: string): RuntimeContext {
       url: '/api/artifacts/fixture',
     }),
     requestCredential: async () => ({ filled: true }),
-    checkWorkspaceCommand: async () => ({ record: async () => {} }),
     integration: async () => ({}),
     manage: async () => ({}),
   };
