@@ -301,6 +301,14 @@ test('app scaffolding refuses replacement and requires contributors to complete 
     JSON.stringify(bundledApps.get('linear')!.contract),
   );
   await checkAppContract(loadAppCatalog(directory).get('synthetic-app')!);
+  app.connection.scopes = Array.from(
+    { length: 11 },
+    (_, index) => `https://www.googleapis.com/auth/synthetic${index}.readonly`,
+  );
+  await writeFile(appPath, JSON.stringify(app));
+  assert.throws(() => loadAppCatalog(directory), {
+    message: /^App synthetic-app: invalid app\.json: [\s\S]*500 characters/,
+  });
 });
 
 const communityAccessCases: Array<{
@@ -502,8 +510,37 @@ test('app access paths reject inconsistent API reads and more than 16 CLI fields
     '/x:y/../../z',
     'http://evil.synthetic-nod.dev/x',
     '//evil.synthetic-nod.dev/x',
+    '..%2fx',
+    '%2e%2e%2fx',
+    'a/%2e%2e%2f%2e%2e%2fx',
+    'a%2F..%2F..%2Fx',
+    '%252e%252e/x',
+    '%252e%252e%252fx',
+    '%25%32%65%25%32%65/x',
+    '%25252e%25252e/x',
+    '..%5cx',
+    '%5c..%5cx',
+    'a%255c..%255cx',
+    '../v1%2Fx',
+    '%2e%2e/v1%2fx',
+    'a/%2e%2e/x',
+    'a/.%2e/x',
+    '..;/x',
+    '..%3f/x',
+    '..%23/x',
   ])
     assert.throws(() => appRequestUrl(path.endpoint, escape), /saved API address/);
+  for (const encoded of [
+    'projects/my-group%2Fmy-project/issues',
+    '@scope%2fname',
+    'items/50%25off',
+    'search;v=1',
+  ])
+    assert.equal(
+      appRequestUrl(path.endpoint, encoded),
+      `https://api.synthetic-nod.dev/v1/${encoded}`,
+    );
+  assert.throws(() => appRequestUrl(path.endpoint, 'files/100%'), /invalid % escape/);
 });
 
 test(
