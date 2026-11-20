@@ -36,6 +36,12 @@ export function secretField(key: string) {
   return secretKey.test(key.replace(/[^a-z0-9]/gi, ''));
 }
 
+function validBasic(token: string) {
+  const decoded = Buffer.from(token, 'base64');
+  const encoded = decoded.toString('base64');
+  return decoded.includes(58) && (token === encoded || token === encoded.replace(/=+$/u, ''));
+}
+
 export function secretTextSpans(input: string) {
   const spans: RedactionSpan[] = [];
   const whole = (pattern: RegExp, replacement = hidden) =>
@@ -65,12 +71,7 @@ export function secretTextSpans(input: string) {
     input,
     basicToken,
     (match) => {
-      const decoded = Buffer.from(match[1], 'base64');
-      const encoded = decoded.toString('base64');
-      if (
-        decoded.includes(58) &&
-        (match[1] === encoded || match[1] === encoded.replace(/=+$/u, ''))
-      )
+      if (validBasic(match[1]))
         addRedactionSpan(spans, match.index, match.index + match[0].length, hidden);
     },
     true,
@@ -110,13 +111,7 @@ export function redactSecretText(value: string): string {
   return value
     .replace(privateKeyBlock, hidden)
     .replace(bearerToken, hidden)
-    .replace(basicToken, (match, token: string) => {
-      const decoded = Buffer.from(token, 'base64');
-      const encoded = decoded.toString('base64');
-      return decoded.includes(58) && (token === encoded || token === encoded.replace(/=+$/u, ''))
-        ? hidden
-        : match;
-    })
+    .replace(basicToken, (match, token: string) => (validBasic(token) ? hidden : match))
     .replace(privateHeader, hidden)
     .replace(new RegExp(tokenShapes, 'g'), hidden)
     .replace(privateRoute, '$1[redacted]')

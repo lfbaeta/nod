@@ -3435,8 +3435,14 @@ test('feedback redaction checks original text and structure before masking', asy
     },
     {
       id: 'invalid-encoded-carrier',
-      input: `${opaque}%ZZ`,
+      input: `${opaque}%41%ZZ`,
       privateParts: [opaque],
+    },
+    {
+      id: 'percentage-keeps-technical-text',
+      input: 'Upload 45% done; HTTP 503',
+      privateParts: [],
+      kept: ['Upload 45% done; HTTP 503'],
     },
     {
       id: 'encoded-depth-limit',
@@ -3597,6 +3603,20 @@ test('feedback redaction advances Unicode overlaps and resets recursive checks b
     redactor.text('%41 '.repeat(130) + encoded);
     assert.equal(JSON.stringify(redactor.value(input)), expected);
   }
+});
+
+test('feedback redaction omits a value when personal matching reaches its bound', async () => {
+  const { createFeedbackRedactor } = await import('../src/server/feedback-redaction.ts');
+  const { createPersonalDataRedactor } = await import('../src/server/personal-data.ts');
+  const profile = { names: ['aaa'] };
+  const input = 'aaa '.repeat(5000) + 'Technical tail';
+  const redactor = createFeedbackRedactor({ secrets: [], profile });
+  let output = '';
+  assert.doesNotThrow(() => {
+    output = redactor.text(input);
+  });
+  assert.equal(output, '[unreadable data omitted]');
+  assert.ok(createPersonalDataRedactor(profile)(input).endsWith('Technical tail'));
 });
 
 test('feedback redaction omits values when classification metadata is a getter', async () => {

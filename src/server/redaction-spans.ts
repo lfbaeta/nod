@@ -35,7 +35,7 @@ export function redactionMatches(
 
 export function renderRedactionSpans(input: string, spans: RedactionSpan[]) {
   const merged: RedactionSpan[] = [];
-  for (const span of spans.sort((a, b) => a.start - b.start || b.end - a.end)) {
+  for (const span of [...spans].sort((a, b) => a.start - b.start || b.end - a.end)) {
     const previous = merged.at(-1);
     if (!previous || span.start >= previous.end) merged.push({ ...span });
     else {

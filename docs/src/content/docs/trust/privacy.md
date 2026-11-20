@@ -163,7 +163,7 @@ A bug report Nod drafts in chat sends Nod's written summary as you see it, witho
 
 Your Nod runtime redacts the report before it goes to the recipient the dialog names. It masks the names, addresses, account identifiers, file paths and links it recognizes, and keeps technical values such as versions, error types and status codes. Redaction can miss personal details, so review the report before you send it.
 
-Nod checks the original text and field names before it masks them. It omits encoded or structured text when it cannot keep that text safe. Text that exceeds a check limit is also omitted.
+Nod checks the original text and field names before it masks them. It omits encoded or structured text when it cannot keep that text safe.
 
 See [Report contents and limits](/deploy/troubleshooting/#report-contents-and-limits).
 

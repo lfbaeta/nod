@@ -152,7 +152,7 @@ export function createFeedbackRedactor(options: { secrets: string[]; profile: Pe
         tail ? '[url]' : '[host]',
       );
     });
-    redactionMatches(input, /[^\s<>"']*%[^\s<>"']*/g, (match) => {
+    redactionMatches(input, /[^\s<>"']*%[0-9a-f]{2}[^\s<>"']*/gi, (match) => {
       const encoded = match[0];
       let sensitive = true;
       if (
