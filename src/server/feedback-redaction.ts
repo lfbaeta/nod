@@ -272,6 +272,10 @@ export function createFeedbackRedactor(options: { secrets: string[]; profile: Pe
       let uriDepth = 0;
       while (true) {
         const trimmed = current.trim();
+        if (views.length > 1 && (trimmed.startsWith('{') || trimmed.startsWith('['))) {
+          labels.set(input, null);
+          return null;
+        }
         const json = trimmed.startsWith('"');
         if (!json && !/%[0-9a-f]{2}/i.test(current)) {
           labels.set(input, views);

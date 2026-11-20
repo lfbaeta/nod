@@ -3388,6 +3388,33 @@ test('feedback redaction checks original text and structure before masking', asy
       privateParts: [opaque],
     },
     {
+      id: 'decoded-object-tuple-label',
+      input: [encodeURIComponent('{"password":"PrivateInnerValue"}'), opaque],
+      privateParts: [opaque, 'PrivateInnerValue'],
+    },
+    {
+      id: 'decoded-array-tuple-label',
+      input: [encodeURIComponent('["token","public"]'), opaque],
+      privateParts: [opaque],
+    },
+    {
+      id: 'decoded-object-media-label',
+      input: { type: encodeURIComponent('{"type":"image"}'), data: opaque },
+      privateParts: [opaque],
+    },
+    {
+      id: 'raw-structured-entry-is-not-a-tuple-label',
+      input: ['{"password":"PrivateInnerValue"}', 'Public scalar detail'],
+      privateParts: ['PrivateInnerValue'],
+      kept: ['Public scalar detail'],
+    },
+    {
+      id: 'raw-bracketed-entry-keeps-public-tail',
+      input: ['[notice]', 'Public scalar detail'],
+      privateParts: [],
+      kept: ['[notice]', 'Public scalar detail'],
+    },
+    {
       id: 'metadata-uri-depth-limit',
       input: [
         Array.from({ length: 3 }).reduce<string>(
