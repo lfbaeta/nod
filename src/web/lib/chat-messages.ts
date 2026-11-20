@@ -101,24 +101,25 @@ export function suggestedTaskView(
       (message) => message.id === item.messageId && message.turnId === sent.turnId,
     ),
   );
+  const turn = sent.turnId ? state.turns.find((item) => item.id === sent.turnId) : undefined;
+  const waitingReason =
+    turn?.status === 'waiting' ? knownWaitingReason(turn.waitingReason) : undefined;
   if (tasks.length) {
     if (tasks.every((item) => item.status === 'done')) return { status: 'done' };
     if (tasks.some((item) => item.status === 'failed' || item.status === 'cancelled'))
       return { status: 'idle' };
-    if (tasks.some((item) => item.status === 'needs_you')) return { status: 'needs_you' };
+    if (tasks.some((item) => item.status === 'needs_you'))
+      return waitingReason ? { status: 'needs_you', waitingReason } : { status: 'needs_you' };
     return {
       status: tasks.some((item) => item.status === 'queued' || item.status === 'working')
         ? 'working'
         : 'waiting',
     };
   }
-  const turn = sent.turnId ? state.turns.find((item) => item.id === sent.turnId) : undefined;
   if (!turn) return { status: persistedIds.has(sent.id) ? 'sent' : 'working' };
   if (turn.status === 'succeeded') return { status: 'sent' };
-  if (turn.status === 'waiting') {
-    const waitingReason = knownWaitingReason(turn.waitingReason);
+  if (turn.status === 'waiting')
     return waitingReason ? { status: 'needs_you', waitingReason } : { status: 'needs_you' };
-  }
   return { status: turn.status === 'failed' || turn.status === 'cancelled' ? 'idle' : 'working' };
 }
 
