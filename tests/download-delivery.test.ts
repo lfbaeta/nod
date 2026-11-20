@@ -416,6 +416,13 @@ test(
           assert.ok(runtime, 'A turn must use its assigned synthetic runtime.');
           return runtime.runTurn({
             ...context,
+            taskContext: context.taskContext ?? {
+              id: context.turnId,
+              title: 'Synthetic download',
+              brief: 'Deliver the synthetic download.',
+              doneWhen: 'The download is delivered.',
+              revision: 1,
+            },
             reply(...args) {
               const operation = context.reply(...args);
               publicationOperations.push(operation);
