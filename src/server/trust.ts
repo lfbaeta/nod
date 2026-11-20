@@ -1,8 +1,7 @@
 import { logFailure } from './failure-log.ts';
-import type { Pool, PoolClient } from 'pg';
+import type { Pool } from 'pg';
 import type { DecisionModel, DecisionQuestion, ModelReview } from '../ports/decisions.ts';
-import { withTurnLock, lockThread, type TurnRef } from './thread.ts';
-import { transaction } from './transaction.ts';
+import { withTurnLock, type TurnRef } from './thread.ts';
 import { turnOrigin, type ApprovalRepeat } from './approvals.ts';
 import { trustBasis, type TrustBasis, type TrustWords } from './trust-basis.ts';
 import {
@@ -14,14 +13,12 @@ import {
   validateScheduledInstructions,
   instructionMessages,
   instructionSourceMessageIds,
-  messageReviewPolicy,
   type InstructionChange,
   type InstructionRevision,
   type OwnerInstructions,
 } from './owner-instructions.ts';
 
-import { createTrustReview, ClearedMessageReviewError } from './trust-review.ts';
-import { retainedDraftInstructions } from './draft-instructions.ts';
+import { createTrustReview } from './trust-review.ts';
 
 export type TrustReason = 'background' | 'schedule' | 'unrequested' | 'rule';
 
@@ -79,7 +76,6 @@ export function createTrust(options: {
         chatRevision?: string;
         instructionChange?: InstructionChange;
         instructionRevision: InstructionRevision;
-        validate(client: PoolClient): Promise<void>;
       }
     | {
         confirm: true;
@@ -87,7 +83,6 @@ export function createTrust(options: {
         chatRevision?: string;
         instructionChange?: InstructionChange;
         instructionRevision: InstructionRevision;
-        validate(client: PoolClient): Promise<void>;
       }
   > {
     signal?.throwIfAborted();
@@ -95,21 +90,12 @@ export function createTrust(options: {
     if (!origin) throw new Error('This turn is no longer running.');
     const instruction = origin.scheduleInstruction;
     const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    const context = async (database: Pick<Pool, 'query'> = pool) => {
+    const context = async () => {
       if (origin.source === 'schedule')
-        await validateScheduledInstructions(database, ownerId, instruction);
-      if (database !== pool)
-        await database.query(
-          'INSERT INTO preferences(owner_id) VALUES($1) ON CONFLICT DO NOTHING',
-          [ownerId],
-        );
+        await validateScheduledInstructions(pool, ownerId, instruction);
       const preferences = (
-        await database.query<{
-          notification_rule: string;
-          rules: string;
-          time_zone: string | null;
-        }>(
-          `SELECT notification_rule,rules,time_zone FROM preferences WHERE owner_id=$1${database === pool ? '' : ' FOR SHARE'}`,
+        await pool.query<{ notification_rule: string; rules: string; time_zone: string | null }>(
+          'SELECT notification_rule,rules,time_zone FROM preferences WHERE owner_id=$1',
           [ownerId],
         )
       ).rows[0];
@@ -118,7 +104,7 @@ export function createTrust(options: {
       const rules = preferences?.rules.trim();
       const task = origin.taskId
         ? (
-            await database.query<{ revision: number }>(
+            await pool.query<{ revision: number }>(
               'SELECT revision FROM tasks WHERE id=$1 AND owner_id=$2',
               [origin.taskId, ownerId],
             )
@@ -126,12 +112,12 @@ export function createTrust(options: {
         : undefined;
       const chatRevision =
         origin.source === 'user' && !origin.taskId
-          ? await ownerChatRevision(database, ownerId, turn.threadId)
+          ? await ownerChatRevision(pool, ownerId, turn.threadId)
           : undefined;
       const said =
         origin.source === 'user'
           ? await captureOwnerInstructions(
-              database,
+              pool,
               ownerId,
               turn.threadId,
               origin.messageIds,
@@ -140,31 +126,9 @@ export function createTrust(options: {
               turn.turnId,
             )
           : undefined;
-      const drafts = await retainedDraftInstructions(
-        database,
-        ownerId,
-        turn.threadId,
-        origin.taskId,
-        database !== pool,
-      );
-      if (
-        action === 'GMAIL_SEND_DRAFT' &&
-        typeof args.draft_id === 'string' &&
-        !drafts.some(
-          (draft) => draft.draftId === args.draft_id && draft.connectionId === args.connectionId,
-        )
-      )
-        drafts.push({
-          draftId: args.draft_id,
-          connectionId: String(args.connectionId),
-          target: {},
-          messages: [],
-          unavailable: true,
-        });
       const words: TrustWords = {
         timeZone: preferences?.time_zone ?? 'UTC',
         ...said?.words,
-        ...(drafts?.length ? { messageDrafts: drafts } : {}),
         ...(origin.source === 'schedule' && instruction
           ? {
               scheduledInstructions: instruction.messages,
@@ -295,56 +259,21 @@ export function createTrust(options: {
       if (JSON.stringify(args) !== encodedArgs)
         throw new Error('The proposed action changed while it was being checked.');
     };
-    const validate = async (client: PoolClient) => {
-      const latest = await context(client);
-      unchanged();
-      if (JSON.stringify(latest) !== JSON.stringify(captured))
-        throw Object.assign(
-          new Error(
-            'The owner instructions or draft sources changed while this action was being checked.',
-          ),
-          { notRun: true },
-        );
-    };
-    const validateLocked = () =>
-      transaction(
-        async (client) => {
-          if ((await lockThread(client)).id !== turn.threadId)
-            throw Object.assign(new Error('The instruction conversation is no longer active.'), {
-              notRun: true,
-            });
-          return withTurnLock(turn.turnId, validate, client);
-        },
-        pool,
-        signal,
-      );
     const instructions =
-      `${messageReviewPolicy}\n` +
-      (rules || 'currentRules' in args
+      rules || 'currentRules' in args
         ? `${checkInstructions}\n${rulesInstructions}`
-        : checkInstructions);
+        : checkInstructions;
     let failed = false;
-    let clearedFailure = false;
     const answer = replacementNeedsApproval
       ? { run: false }
       : await review(instructions, input, signal).catch((error: unknown) => {
           failed = true;
-          clearedFailure = error instanceof ClearedMessageReviewError;
           logFailure('trust_check_failed', error);
-          if (
-            !clearedFailure &&
-            action !== 'GMAIL_SEND_EMAIL' &&
-            (error as { reviewRequired?: unknown } | undefined)?.reviewRequired === true
-          )
-            throw error;
           if (action === 'NOD_workspace_command') throw error;
           return undefined;
         });
     signal?.throwIfAborted();
     unchanged();
-    if (clearedFailure) {
-      await validateLocked();
-    }
     const reviewedBasis = trustBasis(answer, {
       ...words,
       action: { name: action, arguments: args },
@@ -363,30 +292,22 @@ export function createTrust(options: {
         code: reviewedBasis ? 'superseded' : verdict === true ? 'basis_rejected' : 'no_answer',
       });
     if (basis) {
-      await validateLocked();
-      return { confirm: false, basis, validate, ...revision, ...instructionChange };
+      const latest = await context();
+      await withTurnLock(turn.turnId, async () => undefined);
+      unchanged();
+      if (JSON.stringify(latest) !== JSON.stringify(captured))
+        throw new Error('The owner instructions changed while this action was being checked.');
+      return { confirm: false, basis, ...revision, ...instructionChange };
     }
     if (
-      action !== 'GMAIL_SEND_EMAIL' &&
-      (answer as { reviewRequired?: unknown } | undefined)?.reviewRequired === true
-    )
-      throw Object.assign(
-        new Error(
-          'Nod cannot show and verify the complete message for the required review. No action was run.',
-        ),
-        { notRun: true },
-      );
-    if (
       ['schedule', 'event'].includes(origin.source) &&
-      ((answer as { run?: unknown } | undefined)?.run !== false ||
-        (answer as { reviewUnavailable?: unknown } | undefined)?.reviewUnavailable === true)
+      (answer as { run?: unknown } | undefined)?.run !== false
     )
       throw new Error(
         "The trust check couldn't decide this action, so it didn't run and the owner wasn't asked. Nothing was sent or changed. You can try again.",
       );
     return {
       confirm: true,
-      validate,
       ...revision,
       ...instructionChange,
       reason:
