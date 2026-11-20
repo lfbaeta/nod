@@ -9,9 +9,15 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import type { Pool } from 'pg';
 import { Compile } from 'typebox/compile';
+import { validateToolArguments } from '@earendil-works/pi-ai';
 import { unified } from 'unified';
 import remarkParse from 'remark-parse';
-import { appConfirmation, ContextLimitError, ModelRequestError } from '../src/ports/agent.ts';
+import {
+  appConfirmation,
+  ContextLimitError,
+  ModelRequestError,
+  ToolFailureError,
+} from '../src/ports/agent.ts';
 import type {
   Agent,
   AgentEvent,
@@ -1537,6 +1543,76 @@ test('an unchecked mail body stays private and the result names how many were wi
   assert.match(unavailable.contentWithheld.message, /Mail checks are unavailable\./);
   const checked = await privateEmailResult(thread.data.messages[0], async () => [false]);
   assert.deepEqual(checked, thread.data.messages[0]);
+});
+
+test('skill actions keep their required fields and refuse fields from other actions', async () => {
+  const managed: Array<{ action: string; args: unknown }> = [];
+  await fixture(
+    async (tools) => {
+      const skill = tools.get('skills')!;
+      const valid: Array<Record<string, string>> = [
+        { action: 'list' },
+        { action: 'read', name: 'schedules-and-watches' },
+        {
+          action: 'save',
+          name: 'synthetic-procedure',
+          description: 'A verified synthetic procedure.',
+          body: 'Read the synthetic record.',
+        },
+        {
+          action: 'patch',
+          name: 'synthetic-procedure',
+          old: 'Read the synthetic record.',
+          new: 'Read the revised synthetic record.',
+        },
+      ];
+      for (const args of valid)
+        await skill.execute(
+          validateToolArguments(skill, {
+            type: 'toolCall',
+            id: randomUUID(),
+            name: skill.name,
+            arguments: args,
+          }),
+        );
+      assert.deepEqual(
+        managed.map(({ action }) => action),
+        ['skill_save', 'skill_patch'],
+      );
+      const invalid = [
+        {},
+        { action: 'schedule_create', args: {} },
+        ...valid.flatMap((args, index) => [
+          ...Object.keys(args).map((key) =>
+            Object.fromEntries(Object.entries(args).filter(([name]) => name !== key)),
+          ),
+          { ...args, extra: true },
+          { ...args, action: valid[(index + 1) % valid.length]!.action },
+        ]),
+      ];
+      for (const args of invalid) {
+        let parsed;
+        try {
+          parsed = validateToolArguments(skill, {
+            type: 'toolCall',
+            id: randomUUID(),
+            name: skill.name,
+            arguments: args,
+          });
+        } catch {
+          continue;
+        }
+        await assert.rejects(skill.execute(parsed), /Invalid skills input/);
+      }
+      assert.equal(managed.length, 2);
+    },
+    {
+      manage: async (action, args) => {
+        managed.push({ action, args });
+        return { saved: true };
+      },
+    },
+  );
 });
 
 test('skill reads cannot escape the trusted library or load workspace instructions', async () => {
@@ -3471,6 +3547,11 @@ test('repeated input, sign-in and action review failures stop while source text 
       'The action review model is unavailable. Synthetic provider failure.',
     ],
     ['apps', 'Nod could not write an accurate confirmation for this action, so it did not run.'],
+    [
+      'bash',
+      'The workspace command did not run. Trust could not verify permission for all of its effects.',
+    ],
+    ['bash', 'The workspace command did not run because its Trust check failed: HTTP 503.'],
   ]) {
     let calls = 0;
     await assert.rejects(
@@ -3483,7 +3564,8 @@ test('repeated input, sign-in and action review failures stop while source text 
           if (options.shouldStop([{ name, error: reason }])) break;
         }
       }),
-      /failed five times/,
+      (error: unknown) =>
+        error instanceof ToolFailureError && /failed five times/.test(error.message),
     );
     assert.equal(calls, 5);
   }

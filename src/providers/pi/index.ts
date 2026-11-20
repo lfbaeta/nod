@@ -56,7 +56,7 @@ import {
 import { threadIdentity } from '../../ports/thread-identity.ts';
 import { createPiUsageTracker, piUsageMetrics, usageId } from './usage.ts';
 import { agentModels } from '../../shared/model-defaults.ts';
-import type { ModelSelection } from '../../shared/models.ts';
+import { modelPricingSignature, type ModelSelection } from '../../shared/models.ts';
 import { createSandbox, workspaceOutputs } from './sandbox.ts';
 import { untrustedBlock } from '../../shared/untrusted.ts';
 import { draft2020Schema } from '../../shared/json-schema.ts';
@@ -681,14 +681,17 @@ export function createPiAgent(options: {
         ...sandboxTools.map((definition): ToolDefinition => ({
           ...definition,
           execute: async (id, params, signal, onUpdate, context) => {
+            params = structuredClone(params);
             const result = await input.runTool(
               definition.name,
               params,
-              async () => {
-                const output = await definition.execute(id, params, signal, onUpdate, context);
+              async (operation = signal) => {
+                const callSignal =
+                  operation && signal ? AbortSignal.any([signal, operation]) : operation;
+                const output = await definition.execute(id, params, callSignal, onUpdate, context);
                 const bounded = id.includes('/')
                   ? output
-                  : await boundedOutput(definition.name, async () => output, signal);
+                  : await boundedOutput(definition.name, async () => output, callSignal);
                 if (definition.name !== 'bash') return bounded;
                 const exitCode = (output.structuredContent as { exit_code?: unknown } | undefined)
                   ?.exit_code;
@@ -1157,6 +1160,10 @@ export function createPiAgent(options: {
       let compaction:
         { id: string; started: number; error?: string; requests: AssistantMessage[] } | undefined;
       const auxiliarySeen = new Set(manager.getEntries().map((entry) => entry.id));
+      const usagePricing = (usage: { provider: string; model: string } | undefined) => {
+        const target = usage && runtime.getModel(usage.provider, usage.model);
+        return modelPricingSignature(target?.cost, target?.api);
+      };
       const observeUsage = createPiUsageTracker({
         sessionId: manager.getSessionId(),
         provider: model.provider,
@@ -1196,6 +1203,7 @@ export function createPiAgent(options: {
                   status: error ? 'failed' : event.aborted ? 'cancelled' : 'succeeded',
                   durationMs: message?.durationMs ?? performance.now() - compaction.started,
                   ...piUsageMetrics(message?.usage),
+                  pricingSignature: usagePricing(message),
                 },
               });
           compaction = undefined;
@@ -1219,6 +1227,7 @@ export function createPiAgent(options: {
               status: 'succeeded',
               durationMs: 0,
               ...piUsageMetrics(event.entry.usage),
+              pricingSignature: usagePricing(event.entry),
             },
           });
         }
@@ -1279,7 +1288,7 @@ export function createPiAgent(options: {
             settings.applyOverrides({ compaction: { keepRecentTokens: 0 } });
           }
           const usage = observeUsage(event.message);
-          if (usage) input.onEvent(usage);
+          if (usage) input.onEvent({ ...usage, pricingSignature: usagePricing(event.message) });
           if (event.message.stopReason === 'error')
             input.onEvent({
               type: 'error',

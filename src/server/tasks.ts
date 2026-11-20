@@ -17,6 +17,8 @@ import {
   insertAssistantMessage,
   lockThread,
   resumeTurn,
+  clearChatContext,
+  chatClearedMessage,
   wakeThreadAt,
   withTurnLock,
   type TurnRef,
@@ -33,6 +35,7 @@ import {
   withdrawnSql,
   workKindSql,
   workOriginSql,
+  taskMessageSql,
 } from './turn-chain.ts';
 import { resemblesTaskAcknowledgement } from '../shared/task-ack.ts';
 import { bareConfirmationAnswer } from './owner-instructions.ts';
@@ -329,7 +332,7 @@ export function createTasks(options: {
        LEFT JOIN messages parent ON parent.id=m.reply_to_message_id AND parent.owner_id=m.owner_id AND parent.thread_id=m.thread_id
        LEFT JOIN turns pt ON pt.id=parent.turn_id AND pt.owner_id=parent.owner_id
        WHERE t.owner_id=$1 AND u.thread_id=$2 AND m.id=$3
-         AND (t.message_id=m.id OR mt.task_id=t.id OR m.reply_to_message_id=t.message_id OR pt.task_id=t.id) ORDER BY t.updated_at DESC LIMIT 1`,
+         AND ${taskMessageSql} ORDER BY t.updated_at DESC LIMIT 1`,
         [ownerId, threadId, messageId],
       )
     ).rows[0];
@@ -927,16 +930,21 @@ export function createTasks(options: {
 
   async function chatCommand(
     client: PoolClient,
-    command: 'tasks' | 'status' | 'stop',
+    command: 'tasks' | 'status' | 'stop' | 'clear',
     replyToMessageId?: string,
     hasReply = Boolean(replyToMessageId),
+    channel = 'web',
   ): Promise<{
     threadId: string;
-    replies: Array<{ text: string; replyToMessageId?: string; presentation: ChannelPresentation }>;
+    replies: Array<{ text: string; replyToMessageId?: string; presentation?: ChannelPresentation }>;
     afterCommit?: () => Promise<void>;
   }> {
     const capture = snapshotAnalytics(options.analytics);
     const thread = await lockThread(client);
+    if (command === 'clear') {
+      await clearChatContext(thread.id, randomUUID(), { channel, client, acknowledge: false });
+      return { threadId: thread.id, replies: [{ text: chatClearedMessage }] };
+    }
     const timeZone = (
       await client.query<{ time_zone: string | null }>(
         'SELECT time_zone FROM preferences WHERE owner_id=$1',
