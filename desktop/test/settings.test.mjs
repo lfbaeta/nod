@@ -10471,11 +10471,28 @@ test('the built startup report form requires exact review and keeps uncertain se
   button('Send report').click();
   button('Send report')?.click();
   await settle(() => send);
-  send({ submissionId: reportId, status: 'unknown' });
+  send({ submissionId: reportId, status: 'unknown', httpStatus: 403, messageOmitted: true });
   await settle(() => button('Check status') && !button('Check status').disabled);
+  assert.match(
+    page.window.document.querySelector('[role=\"dialog\"] [role=\"status\"]').textContent,
+    /HTTP 403/,
+  );
   assert.equal(button('Send report'), undefined);
   assert.equal(requests.filter(([action]) => action === 'send').length, 1);
   assert.equal(requests.find(([action]) => action === 'send')[1], reportId);
+  statusValue = { submissionId: reportId, status: 'unknown', httpStatus: 200 };
+  button('Check status').click();
+  await settle(
+    () =>
+      page.window.document
+        .querySelector('[role="dialog"] [role="status"]')
+        .textContent.includes('HTTP 200') && !button('Check status').disabled,
+  );
+  assert.ok(page.window.document.body.textContent.includes('The send result is unknown'));
+  assert.ok(!page.window.document.body.textContent.includes('Your report was sent.'));
+  assert.equal(button('Send report'), undefined);
+  assert.equal(requests.filter(([action]) => action === 'send').length, 1);
+  statusValue = { submissionId: reportId, status: 'submitted' };
   button('Check status').click();
   await settle(() => page.window.document.body.textContent.includes('Your report was sent.'));
   assert.ok(button('New report'));
@@ -10650,6 +10667,27 @@ test('the built startup report form requires exact review and keeps uncertain se
   assert.ok(!page.window.document.body.textContent.includes('Your report was sent.'));
   assert.equal(requests.filter(([action]) => action === 'send').length, beforeReconcile);
   assert.equal(button('Send report'), undefined);
+  button('Review').click();
+  await settle(() => button('Send report'));
+  send = undefined;
+  button('Send report').click();
+  await settle(() => send);
+  send({
+    submissionId: reportId,
+    status: 'rejected',
+    httpStatus: 429,
+    reason: 'rate_limited',
+    message: 'Please try again in a minute.',
+  });
+  await settle(() => button('Edit report') && !button('Edit report').disabled);
+  const rejection = page.window.document.querySelector(
+    '[role="dialog"] [role="status"]',
+  ).textContent;
+  assert.match(rejection, /rejected.*HTTP 429/);
+  assert.match(rejection, /Please try again in a minute/);
+  assert.equal(button('Check status'), undefined);
+  assert.equal(button('Send report'), undefined);
+  assert.equal(requests.filter(([action]) => action === 'send').length, beforeReconcile + 1);
   button('Close').click();
   await settle(() => closes === 2 && !page.window.document.querySelector('[role="dialog"]'));
   assert.equal(retries, 0);

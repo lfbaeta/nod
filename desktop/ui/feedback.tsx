@@ -35,6 +35,7 @@ export function StartupFeedback({
   const [error, setError] = useState('');
   const pending = useRef(false);
   const active = useRef(true);
+  const httpStatus = receipt?.httpStatus ? ` (HTTP ${receipt.httpStatus})` : '';
 
   useEffect(() => {
     void run(loadContext);
@@ -174,9 +175,8 @@ export function StartupFeedback({
               : receipt.status === 'partial'
                 ? 'Sent without the diagnostic report.'
                 : receipt.status === 'rejected'
-                  ? receipt.message ||
-                    `The collector rejected the report${receipt.httpStatus ? ` (HTTP ${receipt.httpStatus})` : ''}. You can edit it and try again.`
-                  : 'The send result is unknown. Check its status before sending another report.'}
+                  ? `The collector rejected the report${httpStatus}. ${receipt.message || 'You can edit it and try again.'}`
+                  : `The send result is unknown${httpStatus}. Check its status before sending another report.`}
           </p>
         )}
         {error && <p role="alert">{error}</p>}
