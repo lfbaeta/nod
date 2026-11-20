@@ -13,6 +13,33 @@ Releases from before the rename to Nod are the `desktop-v*` [GitHub releases](ht
 
 ### Fixes
 
+- **models:** Keep the HTTP status and reason when Google Vertex AI model discovery fails. [#1227](https://github.com/n8n-io/nod/pull/1227) (71a46bf)
+- **apps:** Refuse control characters in app display names. [#1075](https://github.com/n8n-io/nod/pull/1075) (a85e234)
+- **desktop:** Only update the title bar overlay on windows that have one. [#1158](https://github.com/n8n-io/nod/pull/1158) (edca30b)
+- **trust:** Treat a saved sign-in use as never a read. [#1266](https://github.com/n8n-io/nod/pull/1266) (376cc1c)
+- **schedules:** Reject time zones the rest of the app cannot format. [#1159](https://github.com/n8n-io/nod/pull/1159) (d9e73c7)
+- **apps:** Name a missing MCP server instead of reporting a wrong type. [#1094](https://github.com/n8n-io/nod/pull/1094) (33c3014)
+- **memory:** Keep notes that differ only in Devanagari vowel signs. [#1219](https://github.com/n8n-io/nod/pull/1219) (0b26ed0)
+- **apps:** Refuse connected CLI arguments with a null byte. [#1082](https://github.com/n8n-io/nod/pull/1082) (62c0cd8)
+- **trust:** Never treat opening a file or signing in as a read. [#1265](https://github.com/n8n-io/nod/pull/1265) (8ac789f)
+- **docs:** Keep list items and quoted paragraphs apart in docs search. [#1173](https://github.com/n8n-io/nod/pull/1173) (f2fdefb)
+- **onboarding:** Ignore the Enter that confirms an IME composition in Something else. [#1211](https://github.com/n8n-io/nod/pull/1211) (0e24a6e)
+- **desktop:** Keep comparisons and underscored names in notification previews. [#1216](https://github.com/n8n-io/nod/pull/1216) (ca6278d)
+- **desktop:** Pass AWS\_BEDROCK\_FORCE\_HTTP1 to the engine. [#1144](https://github.com/n8n-io/nod/pull/1144) (f11599a)
+- **onboarding:** Keep the brief after a link when masking links. [#1212](https://github.com/n8n-io/nod/pull/1212) (9962948)
+- **browser:** Ignore mouse side buttons in browser handoff. [#1214](https://github.com/n8n-io/nod/pull/1214) (d9dbaf0)
+- **apps:** Send Content-Type on connected API requests only with a body. [#1080](https://github.com/n8n-io/nod/pull/1080) (9967b93)
+- **local-files:** Keep a byte order mark when Nod edits a text file. [#1172](https://github.com/n8n-io/nod/pull/1172) (bd44ee8)
+- **speech:** Show the ElevenLabs reason when voices fail to load. [#1160](https://github.com/n8n-io/nod/pull/1160) (fcaeb4e)
+- **desktop:** Show the engine's status and reason when the Welcome choice is refused. [#1233](https://github.com/n8n-io/nod/pull/1233) (f37c323)
+- **schedules:** Keep an emoji whole when a run track title is shortened. [#1097](https://github.com/n8n-io/nod/pull/1097) (7f99b2d)
+- **apps:** Keep the connection service reason in the pause after a refused upload, enrollment or connect request. [#1221](https://github.com/n8n-io/nod/pull/1221) (1f4694a)
+- **channels:** Keep the HTTP status when a Telegram attachment download is refused. [#1232](https://github.com/n8n-io/nod/pull/1232) (b4eefe6)
+- **apps:** Keep the HTTP status when a connected app's file download is refused. [#1228](https://github.com/n8n-io/nod/pull/1228) (d3c449d)
+- **apps:** Trim pasted connector tokens again. [#1073](https://github.com/n8n-io/nod/pull/1073) (f3411a9)
+- **models:** Keep the service's reason when a model key's model list can't be loaded. [#1220](https://github.com/n8n-io/nod/pull/1220) (5795268)
+- **evals:** Re-prove the gate and keep it from going stale. [#1255](https://github.com/n8n-io/nod/pull/1255) (8e5df67)
+- **models:** Ask to reconnect when a provider rejects the key on a request. [#1250](https://github.com/n8n-io/nod/pull/1250) (8e8bbdf)
 - **models:** Preserve compatible server discovery errors. [#1247](https://github.com/n8n-io/nod/pull/1247) (96c86cc)
 - **desktop:** Preserve queued restart requests while installer runs. [commit](https://github.com/n8n-io/nod/commit/ba0700b708c2581e9ef41225a718940a2739791f) (ba0700b)
 - **workspace:** Explain how to check a named script. [#1241](https://github.com/n8n-io/nod/pull/1241) (b8bbf38)
@@ -53,12 +80,24 @@ Releases from before the rename to Nod are the `desktop-v*` [GitHub releases](ht
 
 ### Documentation
 
+- **deploy:** Clarify public server bundle availability. [#1254](https://github.com/n8n-io/nod/pull/1254) (54f55a1)
+- Use the current names for renamed controls. [#1217](https://github.com/n8n-io/nod/pull/1217) (4ca90ba)
+- **get-started:** List Windows for source installs. [#1174](https://github.com/n8n-io/nod/pull/1174) (e8baf47)
+- Match release and CI facts to the code. [#1171](https://github.com/n8n-io/nod/pull/1171) (f8ed6f6)
+- **use:** Say automatic preparation is off by default and other apps are not polled. [#1157](https://github.com/n8n-io/nod/pull/1157) (71d2ed6)
+- **apps:** List OAuth sign-in for HTTP API access paths. [#1092](https://github.com/n8n-io/nod/pull/1092) (80bc626)
 - **desktop:** State the conditional first update check delay. [commit](https://github.com/n8n-io/nod/commit/4f36298d8e78c466dbe8f1fb4177031cd0f4a524) (4f36298)
 - **desktop:** Show where to switch servers (LAB-1414). [#1192](https://github.com/n8n-io/nod/pull/1192) (5c15757)
 
-<details>
-<summary>Maintenance (5 changes)</summary>
+### Other changes
 
+- Restyle the sidebars and replace collapse-to-icons with hide and resize. [#1267](https://github.com/n8n-io/nod/pull/1267) (554581e)
+
+<details>
+<summary>Maintenance (7 changes)</summary>
+
+- **url-guards:** Refuse a name when any of its DNS answers is private. [#1035](https://github.com/n8n-io/nod/pull/1035) (ea79f1a)
+- **trust:** Cut the trust layer to real commitments only. [#1251](https://github.com/n8n-io/nod/pull/1251) (74661c6)
 - **desktop:** Cover shared installer waits and restart checks. [commit](https://github.com/n8n-io/nod/commit/e0dd545a6c4c8d468a488f7b3554ede684e39514) (e0dd545)
 - **ci:** Record native app sign-in diagnostics. [#1245](https://github.com/n8n-io/nod/pull/1245) (b6686bb)
 - **desktop:** Verify update waits through the startup path. [commit](https://github.com/n8n-io/nod/commit/ce2733f72a9c10bb9226d986df7536cae1e72be1) (ce2733f)
@@ -67,12 +106,12 @@ Releases from before the rename to Nod are the `desktop-v*` [GitHub releases](ht
 
 </details>
 
-[Full changelog](https://github.com/n8n-io/nod/compare/nod-v0.9.0...517d7f5d96fe52b3ccacc5c7ce65560dabbff07a)
+[Full changelog](https://github.com/n8n-io/nod/compare/nod-v0.9.0...71a46bf5499efd6e24a5a8d33dd2d4b8a92f3079)
 
 <details>
 <summary>Build details</summary>
 
-Source: `517d7f5d96fe52b3ccacc5c7ce65560dabbff07a`
+Source: `71a46bf5499efd6e24a5a8d33dd2d4b8a92f3079`
 Previous release: `nod-v0.9.0`
 
 </details>

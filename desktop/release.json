@@ -1,10 +1,10 @@
 {
   "version": "0.9.1",
   "previousTag": "nod-v0.9.0",
-  "source": "517d7f5d96fe52b3ccacc5c7ce65560dabbff07a",
-  "highlights": "## More room for your work\n\nDrag the edge of the sidebar to change its width, or hide it for more space. Nod remembers your choice.\n\n## See what your schedules are doing\n\nOpen a scheduled run to see its current activity and completed steps. Each completed step appears once.\n\n## Also in this release\n\n- **Draft review:** If you ask to review a draft before it is sent, that review stays required after edits.\n- **Startup help:** Send a startup report even when chat cannot open.\n- **Telegram:** Approve or decline requests with buttons in Telegram.\n- **Connections:** Rename custom MCP connections. Failed model connections keep the service's reason.\n- **Privacy:** Bug reports mask more personal details. Review the report before you send it.\n- **Mac updates:** Update checks wait until an update already in progress finishes.",
+  "source": "71a46bf5499efd6e24a5a8d33dd2d4b8a92f3079",
+  "highlights": "## ✋ Nod asks less\n\nNod now aims to ask only before steps that commit you to something. That means sending, posting, booking, paying, deleting or changing your account. Searching, comparing, picking dates or passengers and filling in forms go ahead without a question.\n\nTry telling Nod: “Find the cheapest flight from Berlin to Lisbon next Friday for two adults. Don’t book anything.” Nod searches and reports back. It asks before it books or pays.\n\nWant a check first? Say “ask me before you send it.” Nod shows you the exact action and waits for your yes.\n\n## 📅 See what your schedules are doing\n\nOpen a scheduled run to see its current activity and completed steps. Each completed step appears once.\n\n## Also in this release\n\n- **Telegram:** Approve or decline requests with buttons in Telegram.\n- **Models:** When a provider rejects your key, Nod asks you to reconnect. Failed connections keep the service’s reason.\n- **Connections:** Rename custom MCP connections.\n- **Chat:** Paste a link over selected text to turn it into a link.\n- **Startup help:** Send a startup report even when chat cannot open.\n- **Privacy:** Bug reports mask more personal details. Review the report before you send it.\n- **Mac updates:** Update checks wait until an update already in progress finishes.",
   "video": {
-    "url": "https://github.com/user-attachments/assets/8be1aa61-3119-4c1f-9c64-bdd333b07a00",
-    "releaseSha256": "691a8291464e48f10e51d7f44b5b31c8719bfa902f2fdaa4f865b99a0436a0ad"
+    "url": "https://github.com/user-attachments/assets/18835c1c-118f-41a8-91c5-f93cac6cc871",
+    "releaseSha256": "c080d28500d1d3a8be116dd54383bf93adb8ebbad0d23df165743e1a59e18d55"
   }
 }

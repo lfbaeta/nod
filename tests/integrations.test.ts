@@ -198,7 +198,7 @@ test('app folders reject escaped paths, incomplete contracts, and unsupported se
       (value) => {
         value.mcpServers.linear = { type: 'stdio', command: 'node' };
       },
-      /streamable-http/,
+      /selected server must use streamable-http/,
     ],
     [
       'server',
@@ -206,7 +206,7 @@ test('app folders reject escaped paths, incomplete contracts, and unsupported se
       (value) => {
         value.connection.server = 'missing';
       },
-      /selected server/,
+      /mcp\.json has no server named missing\./,
     ],
     [
       'placeholder',
@@ -1047,6 +1047,15 @@ test('published app schemas reject unsupported definitions with the runtime vali
     },
     (value: any) => {
       value.displayName = ' Leading space';
+    },
+    (value: any) => {
+      value.displayName = 'Fixture\nApp';
+    },
+    (value: any) => {
+      value.displayName = 'Fixture\u202eApp';
+    },
+    (value: any) => {
+      value.displayName = 'Fixture\u2028App';
     },
     (value: any) => {
       value.requirements = ['   '];
@@ -10041,6 +10050,7 @@ test(
       let cliCalls = 0;
       let cliExitCode: number | undefined;
       const cliRuns: unknown[] = [];
+      const authorizations: string[] = [];
       let blocked: 'http' | 'listTools' | 'callTool' | 'cli' | undefined;
       let entered = () => {};
       const waitForAbort = async (method: typeof blocked, signal?: AbortSignal) => {
@@ -10058,8 +10068,9 @@ test(
         grantVault,
         transport: {
           validateEndpoint: async (endpoint) => endpoint,
-          http: async (_endpoint, _headers, method, _body, signal) => {
+          http: async (_endpoint, headers, method, _body, signal) => {
             await waitForAbort('http', signal);
+            authorizations.push(headers.Authorization);
             assert.equal(method, 'GET');
             return { status: 200, body: { items: [] } };
           },
@@ -10478,6 +10489,15 @@ test(
         ),
         /install source/,
       );
+      await assert.rejects(
+        discovered.execute(
+          'CONNECTED_CLI',
+          { connectionId, pathId: cliPath, argv: ['list', 'synthetic\u0000value'] },
+          ref,
+          new AbortController().signal,
+        ),
+        { name: 'ZodError' },
+      );
       await assert.rejects(discovered.reconnect('legacy-cli', legacyId), /set up this CLI again/);
       assert.equal(cliCalls, 1);
       await discovered.disconnect(legacyId, 'legacy-cli');
@@ -10508,7 +10528,7 @@ test(
         app.inject({
           method: 'POST',
           url: `/api/apps/discovery/${proposalId}/complete`,
-          payload: { token: 'synthetic-new-token', accountName: 'Replacement account' },
+          payload: { token: ' synthetic-new-token\n', accountName: 'Replacement account' },
         });
       const account = async () =>
         (await integrations.connectedApps(owner, true)).find(
@@ -10517,6 +10537,7 @@ test(
       const replacedAccount = await account();
       assert.ok(replacedAccount);
       assert.equal((await complete()).statusCode, 200);
+      assert.equal(authorizations.at(-1), 'Bearer synthetic-new-token');
       assert.equal((await complete()).statusCode, 404);
       assert.equal((await grantVault.read(connectionId)).value, 'synthetic-new-token');
       assert.notEqual(await account(), replacedAccount);
@@ -11234,6 +11255,15 @@ test(
         }),
         { name: 'ZodError' },
       );
+      for (const name of [
+        'Fixture\ncloud',
+        'Fixture\u202ecloud',
+        'Fixture\u0007cloud',
+        'Fixture\u2029cloud',
+      ])
+        await assert.rejects(discovered.propose({ service: 'fixture-cloud', name, paths: [cli] }), {
+          name: 'ZodError',
+        });
       const proposal = await discovered.propose({
         service: 'fixture-cloud',
         name: 'Fixture cloud',
@@ -11252,7 +11282,15 @@ test(
         FIXTURE_ACCESS_KEY_ID: 'synthetic-key-id',
         FIXTURE_SECRET_ACCESS_KEY: 'synthetic-secret-key',
       };
-      assert.equal((await complete(values)).statusCode, 200);
+      assert.equal(
+        (
+          await complete({
+            FIXTURE_ACCESS_KEY_ID: ' synthetic-key-id',
+            FIXTURE_SECRET_ACCESS_KEY: 'synthetic-secret-key\n',
+          })
+        ).statusCode,
+        200,
+      );
       const saved = await pool.query<{ id: string; paths: Array<{ id: string }> }>(
         'SELECT id,paths FROM discovered_connections WHERE owner_id=$1',
         [owner],
@@ -11276,7 +11314,7 @@ test(
           await app.inject({
             method: 'POST',
             url: `/api/apps/discovery/${singleId}/complete`,
-            payload: { token: { FIXTURE_TOKEN: 'synthetic-tool-token' }, accountName: 'Tool' },
+            payload: { token: { FIXTURE_TOKEN: '\tsynthetic-tool-token ' }, accountName: 'Tool' },
           })
         ).statusCode,
         200,
@@ -11353,6 +11391,18 @@ test(
         return new Response(Buffer.from(`echo ${mixedCaseEncoded}`), {
           headers: { 'content-type': 'application/octet-stream' },
         });
+      if (String(input) === 'https://fixture.example/api/items/1/archive') {
+        const type = new Headers(init?.headers).get('content-type');
+        return init?.body === undefined && type
+          ? Response.json(
+              {
+                code: 'FST_ERR_CTP_EMPTY_JSON_BODY',
+                message: `Body cannot be empty when content-type is set to '${type}'`,
+              },
+              { status: 400 },
+            )
+          : Response.json({ archived: true, type, body: init?.body ?? null });
+      }
       if (init?.method === 'GET') return new Response(null, { status: 405 });
       const message = JSON.parse(String(init?.body));
       if (message.id === undefined) return new Response(null, { status: 202 });
@@ -11461,6 +11511,29 @@ test(
         error: 'The file was withheld because it contains the connection credential.',
       },
     });
+    for (const method of ['POST', 'PUT', 'PATCH', 'DELETE'])
+      assert.deepEqual(
+        await discovered.execute('CONNECTED_HTTP', {
+          connectionId,
+          pathId: httpPath,
+          method,
+          path: 'items/1/archive',
+        }),
+        { status: 200, body: { archived: true, type: null, body: null } },
+      );
+    assert.deepEqual(
+      await discovered.execute('CONNECTED_HTTP', {
+        connectionId,
+        pathId: httpPath,
+        method: 'POST',
+        path: 'items/1/archive',
+        body: { reason: 'done' },
+      }),
+      {
+        status: 200,
+        body: { archived: true, type: 'application/json', body: '{"reason":"done"}' },
+      },
+    );
     const input = {
       query: 'roadmap',
       page_url: 'https://www.notion.so/team/synthetic-page',
@@ -12839,6 +12912,25 @@ test('connection service refusals pause the install from Retry-After or a growin
   stale.open(1);
   assert.deepEqual(await Promise.all(before), ['refused', 'refused']);
   assert.equal(waited(), 60);
+});
+
+test('a refused file upload keeps the connection service reason in the pause', async (t) => {
+  const service = await connectionServiceFixture(t);
+  service.reply(() => Response.json({ error: 'installation_busy' }, { status: 503 }));
+  const session = await service.provider.createSession('fixture-owner', {
+    gmail: 'ca_fixture_wait',
+  });
+  await assert.rejects(
+    session.upload!(
+      'GMAIL_SEND_EMAIL',
+      { name: 'synthetic.bin', mimeType: 'application/octet-stream', bytes: Uint8Array.of(1) },
+      undefined,
+      'ca_fixture_wait',
+    ),
+    /installation_busy\. HTTP 503\./,
+  );
+  assert.equal(service.provider.connectionBackoff!()?.status, 503);
+  assert.equal(service.provider.connectionBackoff!()?.code, 'installation_busy');
 });
 
 test(
