@@ -14,7 +14,11 @@ const secretAssignment = new RegExp(
   'gi',
 );
 
-const privateKeyBlock = /-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?-----END [^-]*PRIVATE KEY-----/g;
+const privateKeyStart = '-----BEGIN [^-]*PRIVATE KEY-----';
+const privateKeyBlock = new RegExp(
+  privateKeyStart + String.raw`[\s\S]*?-----END [^-]*PRIVATE KEY-----`,
+  'g',
+);
 const bearerToken = /\bBearer\s+[A-Za-z0-9+/_.=:~-]+/gi;
 const basicToken = /\bBasic\s+([A-Za-z0-9+/_.=:-]+)/gi;
 const privateHeader =
@@ -25,7 +29,7 @@ const privateQuery =
 const privateUserInfo = /(https?:\/\/)[^\s/@]+:[^\s/@]+@/gi;
 const base64Data = /\bdata:[^,\s]+;base64,[A-Za-z0-9+/=]+/g;
 
-const tokenShapes = String.raw`\b(?:sk-(?:proj-|ant-)?[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{12,}|(?:AKIA|ASIA)[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{30,}|glpat-[A-Za-z0-9_-]{20,}|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)\b|-----BEGIN [^-]*PRIVATE KEY-----`;
+const tokenShapes = String.raw`\b(?:sk-(?:proj-|ant-)?[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{12,}|(?:AKIA|ASIA)[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{30,}|glpat-[A-Za-z0-9_-]{20,}|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)\b|${privateKeyStart}`;
 export const secretToken = new RegExp(tokenShapes);
 
 export function secretField(key: string) {
@@ -35,26 +39,42 @@ export function secretField(key: string) {
 export function secretTextSpans(input: string) {
   const spans: RedactionSpan[] = [];
   const whole = (pattern: RegExp, replacement = hidden) =>
-    redactionMatches(input, pattern, (match) =>
-      addRedactionSpan(spans, match.index, match.index + match[0].length, replacement),
+    redactionMatches(
+      input,
+      pattern,
+      (match) => addRedactionSpan(spans, match.index, match.index + match[0].length, replacement),
+      true,
     );
   const suffix = (pattern: RegExp, trailing = 0) =>
-    redactionMatches(input, pattern, (match) =>
-      addRedactionSpan(
-        spans,
-        match.index + match[1].length,
-        match.index + match[0].length - trailing,
-        hidden,
-      ),
+    redactionMatches(
+      input,
+      pattern,
+      (match) =>
+        addRedactionSpan(
+          spans,
+          match.index + match[1].length,
+          match.index + match[0].length - trailing,
+          hidden,
+        ),
+      true,
     );
-  whole(privateKeyBlock);
+  const keyStart = new RegExp(privateKeyStart).exec(input);
+  if (keyStart) addRedactionSpan(spans, keyStart.index, input.length, hidden);
   whole(bearerToken);
-  redactionMatches(input, basicToken, (match) => {
-    const decoded = Buffer.from(match[1], 'base64');
-    const encoded = decoded.toString('base64');
-    if (decoded.includes(58) && (match[1] === encoded || match[1] === encoded.replace(/=+$/u, '')))
-      addRedactionSpan(spans, match.index, match.index + match[0].length, hidden);
-  });
+  redactionMatches(
+    input,
+    basicToken,
+    (match) => {
+      const decoded = Buffer.from(match[1], 'base64');
+      const encoded = decoded.toString('base64');
+      if (
+        decoded.includes(58) &&
+        (match[1] === encoded || match[1] === encoded.replace(/=+$/u, ''))
+      )
+        addRedactionSpan(spans, match.index, match.index + match[0].length, hidden);
+    },
+    true,
+  );
   whole(privateHeader);
   whole(new RegExp(tokenShapes, 'g'));
   suffix(privateRoute);

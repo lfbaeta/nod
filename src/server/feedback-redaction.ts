@@ -211,24 +211,29 @@ export function createFeedbackRedactor(options: { secrets: string[]; profile: Pe
     }
     const quotedLocations: Array<{ start: number; end: number }> = [];
     const location = (pattern: RegExp, replacement: string, quoted = false) =>
-      redactionMatches(input, pattern, (match) => {
-        const start = match.index;
-        const end = start + match[0].length;
-        if (!quoted && quotedLocations.some((span) => start >= span.start && start < span.end))
-          return;
-        if (quoted) quotedLocations.push({ start, end });
-        if (
-          frames.some(
-            (frame) =>
-              frame.replacement !== '[path]' &&
-              start >= frame.start &&
-              (end <= frame.end || /^:\d+:\d+[),;]*$/.test(input.slice(frame.end, end))),
+      redactionMatches(
+        input,
+        pattern,
+        (match) => {
+          const start = match.index;
+          const end = start + match[0].length;
+          if (!quoted && quotedLocations.some((span) => start >= span.start && start < span.end))
+            return;
+          if (quoted) quotedLocations.push({ start, end });
+          if (
+            frames.some(
+              (frame) =>
+                frame.replacement !== '[path]' &&
+                start >= frame.start &&
+                (end <= frame.end || /^:\d+:\d+[),;]*$/.test(input.slice(frame.end, end))),
+            )
           )
-        )
-          return;
-        const position = stack ? (match[0].match(/:\d+:\d+[),;]*$/)?.[0] ?? '') : '';
-        addRedactionSpan(spans, start, end - position.length, replacement);
-      });
+            return;
+          const position = stack ? (match[0].match(/:\d+:\d+[),;]*$/)?.[0] ?? '') : '';
+          addRedactionSpan(spans, start, end - position.length, replacement);
+        },
+        true,
+      );
     location(/(["'])(?:https?|wss?|ftp|file):\/\/[^\r\n]*?\1/gi, '[url]', true);
     location(/(["'])(?:[A-Za-z]:[\\/]|~?\/)[^\r\n]*?\1/g, '[path]', true);
     location(/\b(?:https?|wss?|ftp|file):\/\/[^\r\n]+/gi, '[url]');

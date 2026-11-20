@@ -3198,6 +3198,8 @@ test('feedback redaction checks original text and structure before masking', asy
   const password = JSON.stringify({ password: opaque });
   const unicode = '{"pass\\u0077ord":"PrivateOpaqueValue"}';
   const tuple = ['Authorization', opaque];
+  const keyHeader = ['-----BEGIN', 'PRIVATE', 'KEY-----'].join(' ');
+  const keyFooter = ['-----END', 'PRIVATE', 'KEY-----'].join(' ');
   const cases: Probe[] = [
     { id: 'path-control', input: path, privateParts: ['Synthetic Owner', 'PrivateLedger'] },
     {
@@ -3331,6 +3333,45 @@ test('feedback redaction checks original text and structure before masking', asy
       privateParts: [opaque],
     },
     { id: 'cookie-control', input: `Cookie: ${opaque}`, privateParts: [opaque] },
+    {
+      id: 'overlapping-bearer-prefix',
+      input: `Bearer Bearer ${opaque}`,
+      privateParts: [opaque],
+    },
+    {
+      id: 'overlapping-basic-prefix',
+      input: 'Basic Basic ' + Buffer.from('synthetic-user:synthetic-password').toString('base64'),
+      privateParts: [Buffer.from('synthetic-user:synthetic-password').toString('base64')],
+    },
+    {
+      id: 'quoted-then-unquoted-url',
+      input: `"https://public.invalid" https://${opaque}/path`,
+      privateParts: [opaque],
+    },
+    {
+      id: 'overlapping-key-blocks',
+      input: [
+        keyHeader,
+        'SyntheticAlpha',
+        keyHeader,
+        'SyntheticBeta',
+        keyFooter,
+        'SyntheticGamma',
+        keyFooter,
+      ].join('\n'),
+      privateParts: ['SyntheticAlpha', 'SyntheticBeta', 'SyntheticGamma'],
+    },
+    {
+      id: 'unclosed-key-block',
+      input: `HTTP 503: ${keyHeader}\n${opaque}`,
+      privateParts: [opaque],
+      kept: ['HTTP 503'],
+    },
+    {
+      id: 'quoted-then-unquoted-path',
+      input: '"/home/Synthetic Owner/first.txt" /Users/PrivateOwner/PrivateLedger.docx',
+      privateParts: ['Synthetic Owner', 'PrivateOwner', 'PrivateLedger'],
+    },
     { id: 'cookie-name', input: `Cookie: ${opaque}`, names: ['Cookie'], privateParts: [opaque] },
     { id: 'cookie-literal', input: `Cookie: ${opaque}`, secrets: ['Cook'], privateParts: [opaque] },
     { id: 'json-payload-name', input: payload, names: ['payload'], privateParts: [opaque] },
