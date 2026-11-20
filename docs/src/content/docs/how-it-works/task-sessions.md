@@ -41,7 +41,7 @@ Each session runs one turn at a time. Different sessions run in parallel. There 
 
 ## One task ledger
 
-The `tasks` table is the source of truth for task state. Task messages, web cards and Telegram status replies show that state; they are not separate task records. The model writes every task message from that state, in the conversation's language: the language of the owner's latest message, in chat or to a task, even when the task was requested in another language. See [Agent runtime](/how-it-works/agent-runtime/).
+The `tasks` table is the source of truth for task state. Task messages, web cards and Telegram status replies show that state; they are not separate task records. The model writes every task message from that state, in the conversation language described in [Agent runtime](/how-it-works/agent-runtime/), even when the task was requested in another language.
 
 | Record        | Owns                                                                                                                              |
 | ------------- | --------------------------------------------------------------------------------------------------------------------------------- |
