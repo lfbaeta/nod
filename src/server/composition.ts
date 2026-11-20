@@ -154,6 +154,7 @@ import {
   instructionSourceMessageIds,
   type InstructionRevision,
 } from './owner-instructions.ts';
+import { captureDraftInstructions, completeDraftInstructions } from './draft-instructions.ts';
 import { localArtifacts } from './artifacts.ts';
 import { memoryFileName, memoryMarkdown } from '../shared/memory-export.ts';
 import { createChannels } from './channels.ts';
@@ -1554,8 +1555,79 @@ async function initializeApplication(
       });
     return feedbackDrafts;
   };
+  const withDraftLock = <T>(
+    turn: TurnRef,
+    signal: AbortSignal | undefined,
+    write: (client: import('pg').PoolClient) => Promise<T>,
+  ) =>
+    transaction(
+      async (client) => {
+        if ((await lockThread(client)).id !== turn.threadId)
+          throw Object.assign(new Error('The instruction conversation is no longer active.'), {
+            notRun: true,
+          });
+        return withTurnLock(signal ? { turnId: turn.turnId, signal } : turn.turnId, write, client);
+      },
+      pool,
+      signal,
+    );
+  const beginDraft = async (
+    action: string,
+    args: Record<string, unknown>,
+    turn: TurnRef,
+    signal?: AbortSignal,
+  ) => {
+    if (!['GMAIL_CREATE_EMAIL_DRAFT', 'GMAIL_UPDATE_DRAFT'].includes(action)) return;
+    const origin = await turnOrigin(turn.turnId);
+    if (!origin) throw new Error('The draft turn is no longer available.');
+    const connectionId = String(args.connectionId ?? '');
+    return withDraftLock(turn, signal, async (client) => {
+      const binding = await integrations.binding(connectionId, client);
+      if (!binding) throw new Error('The Gmail account is no longer available for this draft.');
+      return {
+        id: await captureDraftInstructions(
+          client,
+          ownerId,
+          turn,
+          origin,
+          connectionId,
+          binding,
+          args,
+        ),
+        binding,
+      };
+    });
+  };
+  const finishDraft = async (
+    pending: { id: string } | undefined,
+    action: string,
+    args: Record<string, unknown>,
+    turn: TurnRef,
+    result: unknown,
+    binding: string | undefined,
+    signal?: AbortSignal,
+  ) => {
+    if (pending)
+      await withDraftLock(turn, signal, (client) =>
+        completeDraftInstructions(client, ownerId, pending.id, result, args.draft_id),
+      );
+    if (['GMAIL_DELETE_DRAFT', 'GMAIL_SEND_DRAFT'].includes(action))
+      await withDraftLock(turn, signal, (client) =>
+        client.query(
+          'DELETE FROM draft_instructions WHERE owner_id=$1 AND thread_id=$2 AND connection_id=$3 AND draft_id=$4 AND binding=$5',
+          [ownerId, turn.threadId, args.connectionId, args.draft_id, binding],
+        ),
+      );
+  };
   const approvals = await createApprovals(
     async (action, args, provenance) => {
+      if (action === 'GMAIL_SEND_DRAFT')
+        throw Object.assign(
+          new Error(
+            'Nod cannot verify the complete saved Gmail draft from this confirmation. Prepare the complete message before asking to send it.',
+          ),
+          { notRun: true },
+        );
       if (
         action !== 'NOD_read_source' &&
         (
@@ -1656,7 +1728,9 @@ async function initializeApplication(
                         const verifiedBinding =
                           typeof savedBinding === 'string' ? savedBinding : undefined;
                         if (
-                          (action === 'CONNECTED_HTTP' || action === 'CONNECTED_MCP_CALL') &&
+                          (action === 'CONNECTED_HTTP' ||
+                            action === 'CONNECTED_MCP_CALL' ||
+                            action === 'GMAIL_SEND_EMAIL') &&
                           !verifiedBinding
                         )
                           throw Object.assign(
@@ -1665,13 +1739,17 @@ async function initializeApplication(
                             ),
                             { notRun: true },
                           );
-                        if (action === 'GMAIL_DELETE_MESSAGE' || action === 'GMAIL_DELETE_DRAFT') {
+                        if (
+                          action === 'GMAIL_DELETE_MESSAGE' ||
+                          action === 'GMAIL_DELETE_DRAFT' ||
+                          action === 'GMAIL_SEND_EMAIL'
+                        ) {
                           const currentBinding = await integrations
                             .binding(String(args.connectionId ?? ''))
                             .catch((error: unknown) => {
                               throw Object.assign(
                                 new Error(
-                                  `Nod could not check the selected Gmail account for deletion: ${safeIntegrationFailure(error)}`,
+                                  `Nod could not check the selected Gmail account: ${safeIntegrationFailure(error)}`,
                                 ),
                                 { notRun: true },
                               );
@@ -1900,6 +1978,19 @@ async function initializeApplication(
                                 );
                               })
                           : args;
+                        const draft = await beginDraft(action, ready, turn, provenance.signal);
+                        let gmailSender: string | undefined;
+                        if (action === 'GMAIL_SEND_EMAIL') {
+                          const sender = (
+                            provenance.details?.account as { identity?: unknown } | undefined
+                          )?.identity;
+                          if (typeof sender !== 'string' || !sender.trim())
+                            throw Object.assign(
+                              new Error('The Gmail confirmation has no verified sender identity.'),
+                              { notRun: true },
+                            );
+                          gmailSender = sender;
+                        }
                         const result = await integrations.executeApproved(
                           ownerId,
                           action,
@@ -1908,12 +1999,23 @@ async function initializeApplication(
                           provenance.signal,
                           action === 'GMAIL_DELETE_MESSAGE' ||
                             action === 'GMAIL_DELETE_DRAFT' ||
+                            action === 'GMAIL_SEND_EMAIL' ||
                             action === 'CONNECTED_MCP_CALL' ||
                             action === 'CONNECTED_HTTP' ||
                             isCalendarEventChange(action)
                             ? verifiedBinding
-                            : undefined,
+                            : draft?.binding,
                           validateCalendar,
+                          gmailSender,
+                        );
+                        await finishDraft(
+                          draft,
+                          action,
+                          ready,
+                          turn,
+                          result,
+                          verifiedBinding ?? draft?.binding,
+                          provenance.signal,
                         );
                         await ledger.action(
                           provenance.turnId,
@@ -2217,10 +2319,9 @@ async function initializeApplication(
         : adapters.classificationCurator
           ? ledger.curator(adapters.classificationCurator)
           : curator;
-  const trust = createTrust({
-    pool,
-    ownerId,
-    review: async (instructions, input, signal, question) => {
+  const trustReviewFor =
+    (selected: MemoryCurator): ModelReview =>
+    async (instructions, input, signal, question) => {
       if (question) {
         const values = question.choices.map(({ value }) => JSON.stringify(value)).join(', ');
         instructions +=
@@ -2228,10 +2329,17 @@ async function initializeApplication(
             ? `\nReply with only JSON containing exactly two properties: ${JSON.stringify(question.name)} set to one of ${values}, and "probability" set to a number from 0 to 1 expressing confidence in that label.`
             : `\nReply with only JSON with one property, ${JSON.stringify(question.name)}. Its value must be one of: ${values}.`;
       }
-      return trustCurator.configured
-        ? trustCurator.curate({ task: 'review', instructions, input }, signal)
+      return selected.configured
+        ? selected.curate({ task: 'review', instructions, input }, signal)
         : undefined;
-    },
+    };
+  const trustReview = trustReviewFor(trustCurator);
+  trustReview.select = async (signal) =>
+    trustReviewFor(trustCurator.select ? await trustCurator.select(signal) : trustCurator);
+  const trust = createTrust({
+    pool,
+    ownerId,
+    review: trustReview,
     ...(adapters.trustModel === 'decision' && adapters.trustDecisions
       ? { decisions: ledger.decisions(adapters.trustDecisions) }
       : {}),
@@ -2583,6 +2691,7 @@ async function initializeApplication(
         const allowed = await approvals.request(turn, 'NOD_workspace_command', input, {
           allowed: true,
           basis: verdict.basis,
+          validate: verdict.validate,
           expectedChatRevision: verdict.basis.kind === 'read' ? undefined : verdict.chatRevision,
           signal,
           run: async () => true,
@@ -2724,6 +2833,7 @@ async function initializeApplication(
             admit: async (asks) => {
               if (asks && request.subagent) throw new Error('A subagent cannot ask the owner.');
             },
+            validate: verdict.validate,
             expectedChatRevision: verdict.chatRevision,
             signal,
             run: async () => 'run',
@@ -2737,6 +2847,7 @@ async function initializeApplication(
         if (request.subagent) return 'refused';
         const result = await approvals.request(turn, 'NOD_browser', args, {
           signal,
+          validate: verdict.validate,
           expectedChatRevision: verdict.chatRevision,
           details: { reason: verdict.reason },
           prepareConfirmation,
@@ -2808,6 +2919,7 @@ async function initializeApplication(
             signal,
             allowed: !verdict.confirm,
             ...(verdict.confirm ? {} : { basis: verdict.basis }),
+            validate: verdict.validate,
             expectedChatRevision: verdict.chatRevision,
             admit,
             details: verdict.confirm ? { reason: verdict.reason } : {},
@@ -2821,6 +2933,7 @@ async function initializeApplication(
             signal,
             allowed: !verdict.confirm,
             ...(verdict.confirm ? {} : { basis: verdict.basis }),
+            validate: verdict.validate,
             expectedChatRevision: verdict.chatRevision,
             admit,
             details: {
@@ -2890,21 +3003,22 @@ async function initializeApplication(
             admit,
             instructionChange: verdict.instructionChange,
             expectedRevision: prepared?.revision,
-            validate: prepared?.before
-              ? async (client) => {
-                  const current = (
-                    await client.query(
-                      'SELECT revision FROM schedules WHERE id=$1 AND owner_id=$2 FOR SHARE',
-                      [input.id, ownerId],
-                    )
-                  ).rows[0];
-                  if (current?.revision !== prepared.revision)
-                    throw Object.assign(
-                      new Error('The schedule changed. Review it before asking again.'),
-                      { statusCode: 409 },
-                    );
-                }
-              : undefined,
+            validate: async (client) => {
+              await verdict.validate(client);
+              if (prepared?.before) {
+                const current = (
+                  await client.query(
+                    'SELECT revision FROM schedules WHERE id=$1 AND owner_id=$2 FOR SHARE',
+                    [input.id, ownerId],
+                  )
+                ).rows[0];
+                if (current?.revision !== prepared.revision)
+                  throw Object.assign(
+                    new Error('The schedule changed. Review it before asking again.'),
+                    { statusCode: 409 },
+                  );
+              }
+            },
             details: {
               ...(targetModel ? { targetModel } : {}),
               ...(verdict.confirm ? { reason: verdict.reason } : {}),
@@ -2927,6 +3041,7 @@ async function initializeApplication(
             signal,
             allowed: !verdict.confirm,
             ...(verdict.confirm ? {} : { basis: verdict.basis }),
+            validate: verdict.validate,
             expectedChatRevision: verdict.chatRevision,
             admit,
             details: verdict.confirm ? { reason: verdict.reason } : {},
@@ -3089,6 +3204,7 @@ async function initializeApplication(
           await options.admit?.(verdict.confirm);
           return approvals.request(turn, action, prepared, {
             allowed: !verdict.confirm,
+            validate: verdict.validate,
             expectedChatRevision:
               verdict.confirm || verdict.basis.kind !== 'read' ? verdict.chatRevision : undefined,
             signal: options.signal,
@@ -3134,6 +3250,7 @@ async function initializeApplication(
             ...(verdict.confirm ? {} : { basis: verdict.basis }),
             signal: options.signal,
             admit: options.admit,
+            validate: verdict.validate,
             expectedChatRevision: verdict.chatRevision,
             details: {
               ...(typeof args.path === 'string' ? { requestedPath: args.path } : {}),
@@ -3152,7 +3269,9 @@ async function initializeApplication(
               ? integrations.prepare(ownerId, action, args, turn, options.signal)
               : integrations.prepare(ownerId, action, args);
         const resolved =
-          isLocalFilesAction(action) || action === 'CONNECTED_HTTP' ? await prepare() : undefined;
+          isLocalFilesAction(action) || action === 'CONNECTED_HTTP' || action.startsWith('GMAIL_')
+            ? await prepare()
+            : undefined;
         const http =
           action === 'CONNECTED_HTTP'
             ? await discovered.approvalDetails(action, resolved!, options.signal)
@@ -3163,7 +3282,12 @@ async function initializeApplication(
         let targetBinding: string | undefined;
         let verifiedCalendarRevision: string | undefined;
         let verifiedInstructionRevision: InstructionRevision | undefined;
+        let gmailSender: string | undefined;
         const prepareConfirmation = async () => {
+          if (action === 'GMAIL_SEND_DRAFT')
+            throw new Error(
+              'Nod cannot show and bind the complete saved Gmail draft for approval. Prepare the complete message before asking to send it.',
+            );
           connected ??=
             action === 'CONNECTED_MCP_CALL'
               ? await discovered.approvalDetails(action, prepared, options.signal)
@@ -3188,21 +3312,36 @@ async function initializeApplication(
               };
           let verifiedDraftMessageId: string | undefined;
           const deletingDraft = action === 'GMAIL_DELETE_DRAFT';
+          if (action === 'GMAIL_DELETE_MESSAGE' || deletingDraft || action === 'GMAIL_SEND_EMAIL') {
+            if (typeof prepared.connectionId !== 'string')
+              throw new Error('Nod cannot identify the selected Gmail account.');
+            targetBinding = await integrations.binding(prepared.connectionId);
+            if (!targetBinding)
+              throw new Error('The selected Gmail account is no longer available.');
+            let boundAccountId: unknown;
+            try {
+              boundAccountId = JSON.parse(targetBinding)[0];
+            } catch {}
+            if (!account?.accountId || account.accountId !== boundAccountId)
+              throw new Error(
+                action === 'GMAIL_SEND_EMAIL'
+                  ? 'The selected Gmail account changed before confirmation.'
+                  : 'The selected Gmail account changed before deletion was proposed.',
+              );
+            if (action === 'GMAIL_SEND_EMAIL') {
+              if (!account.accountEmail?.trim())
+                throw new Error(
+                  'Nod cannot verify the sender address for this Gmail confirmation.',
+                );
+              gmailSender = account.accountEmail;
+            }
+          }
           if (action === 'GMAIL_DELETE_MESSAGE' || deletingDraft) {
             const itemId = deletingDraft ? prepared.draft_id : prepared.message_id;
             const item = deletingDraft ? 'draft' : 'message';
             const connectionId = prepared.connectionId;
             if (typeof itemId !== 'string' || !itemId.trim() || typeof connectionId !== 'string')
               throw new Error(`Nod cannot identify the Gmail ${item} proposed for deletion.`);
-            targetBinding = await integrations.binding(connectionId);
-            if (!targetBinding)
-              throw new Error('The selected Gmail account is no longer available for deletion.');
-            let boundAccountId: unknown;
-            try {
-              boundAccountId = JSON.parse(targetBinding)[0];
-            } catch {}
-            if (!account?.accountId || account.accountId !== boundAccountId)
-              throw new Error('The selected Gmail account changed before deletion was proposed.');
             const readAction = deletingDraft
               ? 'GMAIL_GET_DRAFT'
               : 'GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID';
@@ -3278,6 +3417,7 @@ async function initializeApplication(
           }
           return {
             ...(verdict.confirm ? { reason: verdict.reason } : {}),
+            ...(action === 'GMAIL_SEND_EMAIL' ? { completeMessageReview: true } : {}),
             ...(account
               ? {
                   account: {
@@ -3304,6 +3444,28 @@ async function initializeApplication(
           validate: async (client) => {
             if (verifiedInstructionRevision)
               await validateInstructionRevision(client, ownerId, verifiedInstructionRevision);
+            await verdict.validate(client);
+            if (
+              targetBinding &&
+              (await integrations.binding(String(prepared.connectionId), client)) !== targetBinding
+            )
+              throw Object.assign(
+                new Error('The selected Gmail account changed before confirmation.'),
+                { notRun: true },
+              );
+            if (gmailSender) {
+              const current = (
+                await client.query<{ account_email: string | null }>(
+                  'SELECT account_email FROM app_connections WHERE owner_id=$1 AND id=$2 FOR SHARE',
+                  [ownerId, prepared.connectionId],
+                )
+              ).rows[0];
+              if (current?.account_email !== gmailSender)
+                throw Object.assign(
+                  new Error('The Gmail sender address changed before confirmation.'),
+                  { notRun: true },
+                );
+            }
             if (
               connected &&
               (await discovered.binding(String(prepared.connectionId), client)) !==
@@ -3317,15 +3479,26 @@ async function initializeApplication(
               );
           },
           run: async () => {
+            const draft = await beginDraft(action, prepared, turn, options.signal);
+            const binding =
+              connected?.verifiedBinding ??
+              targetBinding ??
+              draft?.binding ??
+              (['GMAIL_DELETE_DRAFT', 'GMAIL_SEND_DRAFT'].includes(action)
+                ? await integrations.binding(String(prepared.connectionId))
+                : undefined);
+            if (['GMAIL_DELETE_DRAFT', 'GMAIL_SEND_DRAFT'].includes(action) && !binding)
+              throw new Error('The Gmail account is no longer available for this draft action.');
             const result = await integrations.execute(
               ownerId,
               action,
               prepared,
               turn,
               options.signal,
-              connected?.verifiedBinding ?? targetBinding,
+              binding,
               !verdict.confirm && verdict.basis.kind === 'read' ? readWork : 'action',
             );
+            await finishDraft(draft, action, prepared, turn, result, binding, options.signal);
             await ledger.action(
               turn.turnId,
               action,
