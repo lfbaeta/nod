@@ -3721,6 +3721,23 @@ test('only calibrated scenarios that passed every one of at least five attempts 
   await rm(root, { recursive: true, force: true });
 });
 
+test('every gate scenario still matches the version that earned its place', async () => {
+  const members = JSON.parse(
+    await readFile(new URL('../gate.json', import.meta.url), 'utf8'),
+  ) as Record<string, { fingerprint: string }>;
+  const stale = Object.entries(members)
+    .filter(
+      ([id, member]) =>
+        !scenarios.some((item) => item.id === id) || fingerprint(id) !== member.fingerprint,
+    )
+    .map(([id]) => id);
+  assert.deepEqual(
+    stale,
+    [],
+    `These gate scenarios changed since they were proven, so the gate would skip them: ${stale.join(', ')}. Run them at least five times and promote the run, or remove them from evals/gate.json in this change.`,
+  );
+});
+
 test('local file checks fail a missing move and any change or trash of the owner files', async () => {
   const world = tidyDownloads.world({ now: Date.now });
   const untouched = Object.fromEntries(
