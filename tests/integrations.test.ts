@@ -3769,6 +3769,7 @@ test(
         taskkill: process.platform === 'win32' ? 'not-started' : 'not-windows',
         taskkillExitCode: null as number | null,
         processAlreadyClosed: false,
+        processExitObserved: false,
         processClosed: false,
         bridgeClosed: false,
         appClosed: false,
@@ -3795,18 +3796,31 @@ test(
         let match = 'invalid';
         try {
           const url = new URL(target.url);
+          const bridge = new URL(bridgeUrl);
           match =
             target.url === bridgeUrl
               ? 'exact-bridge'
-              : url.origin === new URL(bridgeUrl).origin
-                ? 'bridge-origin'
-                : url.protocol === 'about:'
-                  ? 'about'
-                  : ['edge:', 'chrome:', 'devtools:'].includes(url.protocol)
-                    ? 'browser-internal'
-                    : ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)
-                      ? 'other-loopback'
-                      : 'other';
+              : url.href.split('#', 1)[0] === bridge.href && url.href !== bridge.href
+                ? 'bridge-fragment'
+                : url.origin === bridge.origin &&
+                    url.pathname === bridge.pathname &&
+                    url.username === bridge.username &&
+                    url.password === bridge.password &&
+                    url.search !== bridge.search
+                  ? 'bridge-query'
+                  : url.protocol === 'https:' &&
+                      bridge.protocol === 'http:' &&
+                      url.host === bridge.host
+                    ? 'bridge-https-host-port'
+                    : url.origin === bridge.origin
+                      ? 'bridge-origin'
+                      : url.protocol === 'about:'
+                        ? 'about'
+                        : ['edge:', 'chrome:', 'devtools:'].includes(url.protocol)
+                          ? 'browser-internal'
+                          : ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)
+                            ? 'other-loopback'
+                            : 'other';
         } catch {}
         diagnostics.debugger.targetTypes[type] = (diagnostics.debugger.targetTypes[type] ?? 0) + 1;
         diagnostics.debugger.targetMatches[match] =
@@ -3903,8 +3917,12 @@ fetch('/v2/connect/verify',{method:'POST',headers:{'Content-Type':'application/j
       try {
         diagnostics.cleanup.processAlreadyClosed = diagnostics.launch.closed;
         if (child) {
+          const exited =
+            diagnostics.launch.closed || child.exitCode !== null || child.signalCode !== null;
+          diagnostics.cleanup.processExitObserved = exited;
           if (process.platform === 'win32') {
             if (diagnostics.launch.closed) diagnostics.cleanup.taskkill = 'skipped-closed';
+            else if (exited) diagnostics.cleanup.taskkill = 'skipped-exited';
             else if (child.pid) {
               diagnostics.cleanup.taskkill = 'attempted';
               diagnostics.cleanup.taskkillExitCode = spawnSync(
@@ -3918,7 +3936,7 @@ fetch('/v2/connect/verify',{method:'POST',headers:{'Content-Type':'application/j
               ).status;
             } else diagnostics.cleanup.taskkill = 'no-pid';
           }
-          if (!diagnostics.launch.closed) child.kill('SIGKILL');
+          if (!exited) child.kill('SIGKILL');
           await new Promise<void>((resolve) => {
             const timer = setTimeout(resolve, 3000);
             void childClosed?.then(() => {
