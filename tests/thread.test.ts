@@ -13437,6 +13437,47 @@ test(
   },
 );
 
+test('feedback original spans remove private data before journal persistence and reload', async (t) => {
+  const { createFeedbackLog } = await import('../src/server/feedback-log.ts');
+  const { createFeedbackRedactor } = await import('../src/server/feedback-redaction.ts');
+  const root = await mkdtemp(join(tmpdir(), 'feedback-original-spans-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const redactor = createFeedbackRedactor({
+    secrets: ['/', '@', 'Author'],
+    profile: { names: [] },
+  });
+  const options = { dataRoot: root, ownerId: 'synthetic-owner', sanitize: redactor.value };
+  const log = await createFeedbackLog(options);
+  t.after(() => log.close());
+  log.record('failure', {
+    status: 503,
+    reason: 'Engine request failed',
+    message: '/Users/Synthetic Owner/PrivateLedger.docx',
+    detail: 'PrivateMailbox%40synthetic.invalid',
+    headers: ['Authorization', 'PrivateOpaqueValue'],
+  });
+  const snapshot = await log.snapshot();
+  assert.equal(snapshot.entries.length, 1);
+  assert.equal((snapshot.entries[0].data as { status: number }).status, 503);
+  const parent = join(root, 'feedback-logs');
+  const [directory] = await readdir(parent);
+  const persisted = await readFile(join(parent, directory, 'journal-0.jsonl'), 'utf8');
+  for (const privatePart of [
+    'Synthetic Owner',
+    'PrivateLedger',
+    'PrivateMailbox',
+    'synthetic.invalid',
+    'PrivateOpaqueValue',
+  ]) {
+    assert.ok(!persisted.includes(privatePart), privatePart);
+    assert.ok(!JSON.stringify(snapshot).includes(privatePart), privatePart);
+  }
+  await log.close();
+  const reopened = await createFeedbackLog(options);
+  t.after(() => reopened.close());
+  assert.deepEqual((await reopened.snapshot()).entries, snapshot.entries);
+});
+
 test('feedback journal redacts before persistence, survives restart, rotates and expires within its owner', async (t) => {
   const { createFeedbackLog } = await import('../src/server/feedback-log.ts');
   const { createRedactor } = await import('../src/server/redaction.ts');
