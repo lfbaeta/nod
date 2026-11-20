@@ -26,7 +26,7 @@ import { execFile } from 'node:child_process';
 import { createServer as createHttpsServer } from 'node:https';
 import { createServer } from 'node:net';
 import { homedir, tmpdir } from 'node:os';
-import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { getCACertificates, setDefaultCACertificates } from 'node:tls';
 import { promisify } from 'node:util';
@@ -52,8 +52,18 @@ import { createMacEncryption } from '../main/mac-encryption.mjs';
 import { waitFor } from '../runtime/index.mjs';
 import { appOpenPath } from '../main/app-links.mjs';
 import { trustSystemCertificates } from '../main/system-certificates.mjs';
+import { createStartupFeedbackClient } from '../main/feedback-client.mjs';
 import appPages from '../../src/shared/app-pages.json' with { type: 'json' };
 import posthogHost from '../../src/shared/posthog-host.json' with { type: 'json' };
+import { environmentSecrets } from '../../src/shared/environment-secrets.mjs';
+import { createLiteralMasker } from '../../src/shared/literal-masks.mjs';
+import {
+  startupStatusFacts,
+  startupEventFacts,
+  startupErrorFacts,
+  startupFailureMessage,
+  StartupFeedbackError,
+} from '../../src/shared/startup-feedback-facts.mjs';
 
 test('setup resources cannot read other origins or local files', () => {
   assert.equal(setupResource('nod-setup://app/index.html?firstSetup=true'), 'index.html');
@@ -495,13 +505,16 @@ async function runningDesktop(
     webPreferences = { quietHoursEnabled: false },
     createFiles = createArtifactFiles,
     openFile = open,
+    appendDiagnostic = appendFile,
     environment = {},
     platform = process.platform === 'win32' ? 'win32' : 'darwin',
     packaged = false,
+    resourcesPath,
     existingProfileRoot = false,
     buildMetadata,
     nativeMetadataRead = () => {},
     nativeAnalyticsResponse = () => Response.json({ status: 'Ok' }),
+    startupFeedbackAction = async () => null,
     trustCertificates = () => {},
     version = '0.0.0-test',
     argv = [],
@@ -584,7 +597,14 @@ async function runningDesktop(
     readFileSync: (path) =>
       JSON.stringify(path.endsWith('posthog-host.json') ? posthogHost : appPages),
     appOpenPath,
+    Buffer,
     trustSystemCertificates: trustCertificates,
+    createStartupFeedbackClient,
+    environmentSecrets,
+    createLiteralMasker,
+    startupStatusFacts,
+    startupEventFacts,
+    startupErrorFacts,
     app: {
       on: (name, listener) => appEvents.on(name, listener),
       once: (name, listener) => appEvents.once(name, listener),
@@ -628,7 +648,7 @@ async function runningDesktop(
       platform,
       argv,
       env: typeof environment === 'function' ? environment(dirname(storage.path)) : environment,
-      resourcesPath: dirname(storage.path),
+      resourcesPath: resourcesPath ?? dirname(storage.path),
       versions: { electron: '0.0.0' },
       getSystemVersion: () => '0.0.0',
     },
@@ -674,7 +694,7 @@ async function runningDesktop(
     pathToFileURL,
     homedir,
     mkdir,
-    appendFile,
+    appendFile: appendDiagnostic,
     readFile: (file, ...args) =>
       buildMetadata && file === fileURLToPath(new URL('../package.json', import.meta.url))
         ? Promise.resolve(nativeMetadataRead()).then(() =>
@@ -775,6 +795,25 @@ async function runningDesktop(
     },
     utilityProcess: {
       fork(file, args, options) {
+        if (/[\\/]feedback\.mjs$/.test(file)) {
+          const helper = Object.assign(new EventEmitter(), { file, args, options, sent: [] });
+          helper.postMessage = (message) => {
+            helper.sent.push(message);
+            Promise.resolve()
+              .then(() => startupFeedbackAction(message))
+              .then(
+                (value) => helper.emit('message', { id: message.id, value }),
+                (error) => helper.emit('message', { id: message.id, error: error.message }),
+              );
+          };
+          helper.kill = () => {
+            helper.killed = true;
+            helper.emit('exit', 0);
+          };
+          helpers.push(helper);
+          setImmediate(() => helper.emit('message', { ready: true }));
+          return helper;
+        }
         if (/[\\/]onepassword\.mjs$/.test(file)) {
           const helper = Object.assign(new EventEmitter(), { file, args, options, sent: [] });
           helper.postMessage = (message, transfer) => helper.sent.push({ message, transfer });
@@ -932,6 +971,12 @@ async function runningDesktop(
   const source = (await readFile(new URL('../main/main.mjs', import.meta.url), 'utf8'))
     .replaceAll('\r\n', '\n')
     .replace(/^import[\s\S]*?;\n/gm, '')
+    .replace(/^const \{ environmentSecrets \} = await import\([\s\S]*?\);\n/m, '')
+    .replace(/^const \{ createLiteralMasker \} = await import\([\s\S]*?\);\n/m, '')
+    .replace(
+      /^const \{ startupStatusFacts, startupEventFacts, startupErrorFacts \} = await import\([\s\S]*?\);\n/m,
+      '',
+    )
     .replaceAll(
       'import.meta.url',
       JSON.stringify(new URL('../main/main.mjs', import.meta.url).href),
@@ -986,6 +1031,10 @@ async function runningDesktop(
       showSettings,
       replayOnboarding,
       showFeedback,
+      writeDiagnostic,
+      bounded,
+      engineRoot,
+      knownSecrets,
       saveEngineDownload,
       setReady: (ready) => { status.phase = ready ? 'ready' : 'starting'; },
       status: () => status,
@@ -1677,7 +1726,12 @@ test('Windows onboarding waits for storage before unlocking credentials and expo
       (error) => error === installation,
     );
     assert.equal(f.status().error, installation.message);
-    assert.ok(f.status().details.includes(installation.stack));
+    assert.ok(f.status().details.includes(`Error: ${installation.message}`));
+    const frame = /settings\.test\.mjs:\d+:\d+/.exec(installation.stack)?.[0];
+    assert.ok(frame);
+    assert.ok(f.status().details.includes(frame));
+    assert.ok(!f.status().details.includes(f.engineRoot));
+    assert.ok(!f.status().details.includes(f.engineRoot.replaceAll('\\', '/')));
     assert.ok(f.status().details.includes(installation.code));
     assert.ok(f.status().details.includes(installation.details));
     assert.ok(!f.status().details.includes(cause));
@@ -1928,6 +1982,9 @@ test('native startup recovery keeps current status and serializes retry, prerequ
         getPreferences: async () => ({ theme: 'light' }),
         getSettings: async () => ({}),
         status: () => initial.promise,
+        openStartupFeedback: async () => {
+          calls.push(['report']);
+        },
         prepare(options) {
           calls.push(['prepare', options]);
           return options ? retry.promise : Promise.resolve({ phase: 'starting' });
@@ -1977,10 +2034,7 @@ test('native startup recovery keeps current status and serializes retry, prerequ
       await settle(() => button('Report bug') && !button('Report bug').disabled);
       button('Report bug').click();
       await settle(() => calls.length === 2);
-      assert.deepEqual(JSON.parse(JSON.stringify(calls[1])), [
-        'prepare',
-        { retry: true, report: true },
-      ]);
+      assert.deepEqual(JSON.parse(JSON.stringify(calls[1])), ['report']);
       await settle(() =>
         page.window.document
           .querySelector('[role="alert"]')
@@ -2009,10 +2063,10 @@ test('native startup recovery keeps current status and serializes retry, prerequ
           !button('Choose runtime file').disabled &&
           page.window.document.querySelector('[role="alert"]'),
       );
-      assert.equal(calls.filter(([name]) => name === 'prepare').length, 2);
+      assert.equal(calls.filter(([name]) => name === 'prepare').length, 1);
       assert.ok(page.window.document.querySelector('[role="alert"]'));
       button('Choose runtime file').click();
-      await settle(() => calls.filter(([name]) => name === 'prepare').length === 3);
+      await settle(() => calls.filter(([name]) => name === 'prepare').length === 2);
       assert.deepEqual(calls.at(-1), ['prepare', undefined]);
       await settle(() => !page.window.document.querySelector('[role="alert"]'));
     });
@@ -10190,4 +10244,919 @@ test('background checks cap the retry wait and retry on wake after a failure', a
   t.mock.timers.tick(1);
   await settle();
   assert.equal(calls, before + 1);
+});
+
+test('startup bug reports open without the engine and refuse other renderer frames', async (t) => {
+  const calls = [];
+  const f = await runningDesktop(t, async () => assert.fail('The failed engine is not needed.'), {
+    initialState: 'idle',
+    environment: {
+      NOD_FEEDBACK_TOKEN: 'synthetic-feedback-token',
+      OPENAI_API_KEY: 'synthetic-model-key',
+    },
+    startupFeedbackAction: async (message) => {
+      calls.push(message);
+      return message.action === 'context'
+        ? { enabled: true, recipient: 'n8n', pending: null }
+        : null;
+    },
+  });
+  t.after(() => f.quit(() => {}));
+  f.showFeedback();
+  for (
+    let attempt = 0;
+    attempt < 100 &&
+    !f.windows.some((window) => window.sent.some(([name]) => name === 'nod:startup-feedback:open'));
+    attempt++
+  )
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  const window = f.windows.find((window) =>
+    window.sent.some(([name]) => name === 'nod:startup-feedback:open'),
+  );
+  assert.ok(window);
+  assert.equal(f.children.length, 0);
+  assert.equal(f.helpers.length, 0);
+  const event = { sender: window.webContents, senderFrame: window.webContents.mainFrame };
+  const action = f.handlers.get('nod:startup-feedback:action');
+  assert.throws(
+    () => action({ ...event, senderFrame: { ...event.senderFrame } }, 'context'),
+    /unavailable/,
+  );
+  assert.throws(() => action({ ...event, sender: {} }, 'context'), /unavailable/);
+  assert.throws(() => action(event, 'initialize', {}), /unavailable/);
+  assert.equal((await action(event, 'context')).recipient, 'n8n');
+  assert.equal(f.children.length, 0);
+  assert.equal(f.helpers.length, 1);
+  assert.equal(f.helpers[0].options.env.NOD_FEEDBACK_TOKEN, 'synthetic-feedback-token');
+  assert.equal(f.helpers[0].options.env.OPENAI_API_KEY, undefined);
+  assert.equal(f.helpers[0].options.stdio, 'ignore');
+  assert.deepEqual(
+    calls.map((call) => call.action),
+    ['initialize', 'context'],
+  );
+  await action(event, 'review', { feedback: 'Synthetic failure.', includeReport: false });
+  assert.deepEqual(
+    calls.slice(-2).map((call) => call.action),
+    ['snapshot', 'review'],
+  );
+  await f.handlers.get('nod:startup-feedback:close')(event);
+  assert.throws(() => action(event, 'send', randomUUID()), /unavailable/);
+});
+
+test('startup report helper exits refuse unfinished work and ignore old replies after restart', async () => {
+  const children = [];
+  const client = createStartupFeedbackClient({
+    file: 'synthetic-feedback.mjs',
+    environment: {},
+    input: async () => ({}),
+    fork() {
+      const child = Object.assign(new EventEmitter(), { sent: [] });
+      child.postMessage = (value) => {
+        child.sent.push(value);
+        if (value.action === 'initialize')
+          setImmediate(() => child.emit('message', { id: value.id, value: null }));
+      };
+      child.kill = () => {
+        child.killed = true;
+        child.emit('exit', 0);
+      };
+      children.push(child);
+      setImmediate(() => child.emit('message', { ready: true }));
+      return child;
+    },
+  });
+  const first = client.request('send', randomUUID());
+  const rejected = assert.rejects(first, /stopped before the action finished/);
+  while (!children[0]?.sent.some((value) => value.action === 'send'))
+    await new Promise((resolve) => setImmediate(resolve));
+  const old = children[0];
+  const oldRequest = old.sent.at(-1);
+  old.emit('exit', 1);
+  await rejected;
+  const next = client.request('status');
+  while (!children[1]?.sent.some((value) => value.action === 'status'))
+    await new Promise((resolve) => setImmediate(resolve));
+  old.emit('message', { id: oldRequest.id, value: { status: 'submitted' } });
+  const current = children[1].sent.at(-1);
+  children[1].emit('message', { id: current.id, value: { status: 'unknown' } });
+  assert.equal((await next).status, 'unknown');
+  assert.deepEqual(
+    children[1].sent.map((value) => value.action),
+    ['initialize', 'status'],
+  );
+  client.close();
+  assert.equal(children[1].killed, true);
+});
+
+test('the built startup report form requires exact review and keeps uncertain sends from repeating', async (t) => {
+  const output = await mkdtemp(join(tmpdir(), 'nod-native-report-'));
+  t.after(() => rm(output, { recursive: true, force: true }));
+  await buildDesktopUI(output);
+  const page = new JSDOM(await readFile(join(output, 'index.html'), 'utf8'), {
+    url: 'file:///synthetic/setup.html?firstSetup=false',
+    runScripts: 'outside-only',
+  });
+  t.after(() => page.window.close());
+  const requests = [];
+  let open;
+  let send;
+  let refuseSend;
+  let failContext = false;
+  let repair;
+  let refuseRepair;
+  let failOpening = true;
+  let allowRecovery = false;
+  let contextValue = { enabled: true, recipient: 'n8n', pending: null };
+  let retries = 0;
+  let closes = 0;
+  const reportId = randomUUID();
+  let statusValue = { submissionId: reportId, status: 'submitted' };
+  const opening = deferred();
+  page.window.nodDesktop = {
+    ready: async () => {},
+    onStatus() {},
+    onPreferences() {},
+    getPreferences: async () => ({ theme: 'light' }),
+    getSettings: async () => ({}),
+    status: async () => ({ phase: 'error', error: 'Synthetic repeated startup failure' }),
+    prepare: async () => {
+      retries++;
+    },
+    onStartupFeedback(listener) {
+      open = listener;
+    },
+    openStartupFeedback: async () => {
+      if (failOpening) {
+        failOpening = false;
+        throw new page.window.Error('Synthetic report form failure.');
+      }
+      open();
+      await opening.promise;
+    },
+    closeStartupFeedback: async () => {
+      closes++;
+    },
+    startupFeedback: async (action, input) => {
+      requests.push([action, input]);
+      if (action === 'context') {
+        if (failContext) throw new page.window.Error('Synthetic context transport failure.');
+        return contextValue;
+      }
+      if (action === 'repair')
+        return new Promise((resolve, reject) => {
+          repair = resolve;
+          refuseRepair = reject;
+        });
+      if (action === 'recover') {
+        assert.equal(input.confirm, true);
+        if (!allowRecovery)
+          throw new page.window.Error('EIO: Synthetic status preservation failed.');
+        contextValue = { enabled: true, recipient: 'n8n', pending: null };
+        return null;
+      }
+      if (action === 'review')
+        return {
+          reviewId: reportId,
+          feedback: input.feedback,
+          content: input.includeReport ? '{"synthetic":true}' : null,
+          recipient: 'n8n',
+        };
+      if (action === 'send')
+        return new Promise((resolve, reject) => {
+          send = resolve;
+          refuseSend = reject;
+        });
+      if (action === 'status') return statusValue;
+      assert.fail(action);
+    },
+  };
+  page.window.eval(await readFile(join(output, 'setup.js'), 'utf8'));
+  const settle = async (predicate) => {
+    for (let attempt = 0; attempt < 150 && !predicate(); attempt++)
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.ok(predicate());
+  };
+  const button = (name) =>
+    [...page.window.document.querySelectorAll('button')].find(
+      (value) => value.textContent === name,
+    );
+  await settle(() => button('Report bug'));
+  button('Report bug').click();
+  await settle(() => page.window.document.querySelector('.ob-native-error[role="alert"]'));
+  assert.ok(page.window.document.body.textContent.includes('Synthetic report form failure.'));
+  assert.ok(!page.window.document.body.textContent.includes('Trying again'));
+  button('Report bug').click();
+  await settle(
+    () =>
+      button('Review') && !page.window.document.querySelector('[role="dialog"] [aria-busy="true"]'),
+  );
+  assert.equal(retries, 0);
+  assert.ok(!page.window.document.body.textContent.includes('Trying again'));
+  opening.resolve();
+  assert.equal(button('Send report'), undefined);
+  const textarea = page.window.document.querySelector('#startup-feedback-text');
+  Object.getOwnPropertyDescriptor(page.window.HTMLTextAreaElement.prototype, 'value').set.call(
+    textarea,
+    'Synthetic startup failure.',
+  );
+  textarea.dispatchEvent(new page.window.Event('input', { bubbles: true }));
+  await settle(() => !button('Review').disabled);
+  button('Review').click();
+  await settle(() => button('Send report'));
+  assert.equal(
+    page.window.document.querySelector('#startup-feedback-report').value,
+    '{"synthetic":true}',
+  );
+  assert.equal(requests.filter(([action]) => action === 'send').length, 0);
+  button('Send report').click();
+  button('Send report')?.click();
+  await settle(() => send);
+  send({ submissionId: reportId, status: 'unknown', httpStatus: 403, messageOmitted: true });
+  await settle(() => button('Check status') && !button('Check status').disabled);
+  assert.match(
+    page.window.document.querySelector('[role=\"dialog\"] [role=\"status\"]').textContent,
+    /HTTP 403/,
+  );
+  assert.equal(button('Send report'), undefined);
+  assert.equal(requests.filter(([action]) => action === 'send').length, 1);
+  assert.equal(requests.find(([action]) => action === 'send')[1], reportId);
+  statusValue = { submissionId: reportId, status: 'unknown', httpStatus: 200 };
+  button('Check status').click();
+  await settle(
+    () =>
+      page.window.document
+        .querySelector('[role="dialog"] [role="status"]')
+        .textContent.includes('HTTP 200') && !button('Check status').disabled,
+  );
+  assert.ok(page.window.document.body.textContent.includes('The send result is unknown'));
+  assert.ok(!page.window.document.body.textContent.includes('Your report was sent.'));
+  assert.equal(button('Send report'), undefined);
+  assert.equal(requests.filter(([action]) => action === 'send').length, 1);
+  statusValue = { submissionId: reportId, status: 'submitted' };
+  button('Check status').click();
+  await settle(() => page.window.document.body.textContent.includes('Your report was sent.'));
+  assert.ok(button('New report'));
+  button('New report').click();
+  await settle(
+    () =>
+      button('Review') &&
+      page.window.document.querySelector('#startup-feedback-text')?.value === '',
+  );
+  assert.equal(button('Review').disabled, true);
+  assert.equal(requests.filter(([action]) => action === 'send').length, 1);
+  const description = page.window.document.querySelector('#startup-feedback-text');
+  Object.getOwnPropertyDescriptor(page.window.HTMLTextAreaElement.prototype, 'value').set.call(
+    description,
+    'Synthetic report without an attachment.',
+  );
+  description.dispatchEvent(new page.window.Event('input', { bubbles: true }));
+  page.window.document.querySelector('.startup-feedback-choice input').click();
+  await settle(() => !button('Review').disabled);
+  button('Review').click();
+  await settle(() => button('Send report'));
+  assert.equal(page.window.document.querySelector('#startup-feedback-report'), null);
+  assert.ok(
+    !page.window.document.body.textContent.includes('Check your description and the report.'),
+  );
+  assert.ok(page.window.document.body.textContent.includes('Check your description.'));
+  send = undefined;
+  button('Send report').click();
+  await settle(() => send);
+  send({ submissionId: reportId, status: 'partial' });
+  await settle(() =>
+    page.window.document.body.textContent.includes('Sent without the diagnostic report.'),
+  );
+  assert.equal(requests.filter(([action]) => action === 'send').length, 2);
+  assert.equal(button('Send the report again'), undefined);
+  button('New report').click();
+  await settle(() => page.window.document.querySelector('#startup-feedback-text')?.value === '');
+  const repairedDescription = page.window.document.querySelector('#startup-feedback-text');
+  Object.getOwnPropertyDescriptor(page.window.HTMLTextAreaElement.prototype, 'value').set.call(
+    repairedDescription,
+    'Synthetic report with attachment.',
+  );
+  repairedDescription.dispatchEvent(new page.window.Event('input', { bubbles: true }));
+  page.window.document.querySelector('.startup-feedback-choice input').click();
+  await settle(() => !button('Review').disabled);
+  button('Review').click();
+  await settle(() => button('Send report'));
+  send = undefined;
+  button('Send report').click();
+  await settle(() => send);
+  send({ submissionId: reportId, status: 'partial', canRetryAttachments: true });
+  await settle(() => button('Send the report again') && !button('Send the report again').disabled);
+  contextValue.pending = { submissionId: reportId, status: 'partial', canRetryAttachments: false };
+  button('Send the report again').click();
+  await settle(() => refuseRepair);
+  refuseRepair(new page.window.Error('The original report bytes are no longer available.'));
+  await settle(() => button('New report') && !button('New report').disabled);
+  assert.ok(page.window.document.body.textContent.includes('Sent without the diagnostic report.'));
+  assert.equal(button('Send the report again'), undefined);
+  assert.equal(requests.filter(([action]) => action === 'repair').length, 1);
+  contextValue.pending = { submissionId: reportId, status: 'partial', canRetryAttachments: true };
+  statusValue = contextValue.pending;
+  button('Check status').click();
+  await settle(() => button('Send the report again') && !button('Send the report again').disabled);
+  repair = undefined;
+  refuseRepair = undefined;
+  failContext = true;
+  button('Send the report again').click();
+  await settle(() => refuseRepair);
+  refuseRepair(new page.window.Error('Synthetic repair transport failure.'));
+  await settle(() => button('Check status') && !button('Check status').disabled);
+  assert.equal(button('New report'), undefined);
+  assert.equal(button('Send the report again'), undefined);
+  assert.ok(page.window.document.body.textContent.includes('The send result is unknown.'));
+  failContext = false;
+  button('Check status').click();
+  await settle(() => button('Send the report again') && !button('Send the report again').disabled);
+  repair = undefined;
+  button('Send the report again').click();
+  button('Send the report again')?.click();
+  await settle(() => repair);
+  assert.equal(requests.filter(([action]) => action === 'repair').length, 3);
+  assert.equal(requests.find(([action]) => action === 'repair')[1], reportId);
+  repair({ submissionId: reportId, status: 'unknown' });
+  await settle(() => button('Check status') && !button('Check status').disabled);
+  assert.equal(button('Send the report again'), undefined);
+  assert.equal(requests.filter(([action]) => action === 'send').length, 3);
+  statusValue = { submissionId: reportId, status: 'submitted' };
+  button('Check status').click();
+  await settle(() => page.window.document.body.textContent.includes('Your report was sent.'));
+  button('Close').click();
+  await settle(() => closes === 1 && !page.window.document.querySelector('[role="dialog"]'));
+  contextValue = {
+    enabled: true,
+    recipient: 'n8n',
+    pending: null,
+    recovery: { message: 'Synthetic invalid saved status.', canPreserve: true },
+  };
+  button('Report bug').click();
+  await settle(() => button('Start a new report') && !button('Start a new report').disabled);
+  assert.ok(
+    page.window.document.body.textContent.includes(
+      'The previous report may already have been sent.',
+    ),
+  );
+  const recoveredDescription = page.window.document.querySelector('#startup-feedback-text');
+  Object.getOwnPropertyDescriptor(page.window.HTMLTextAreaElement.prototype, 'value').set.call(
+    recoveredDescription,
+    'Synthetic recovered report.',
+  );
+  recoveredDescription.dispatchEvent(new page.window.Event('input', { bubbles: true }));
+  assert.equal(button('Review').disabled, true);
+  assert.equal(button('Send report'), undefined);
+  button('Start a new report').click();
+  await settle(() =>
+    page.window.document.body.textContent.includes('EIO: Synthetic status preservation failed.'),
+  );
+  assert.equal(button('Review').disabled, true);
+  assert.equal(button('Send report'), undefined);
+  allowRecovery = true;
+  button('Start a new report').click();
+  await settle(() => !button('Review').disabled);
+  assert.equal(button('Send report'), undefined);
+  assert.equal(requests.filter(([action]) => action === 'recover').length, 2);
+  button('Review').click();
+  await settle(() => button('Send report'));
+  assert.equal(requests.filter(([action]) => action === 'send').length, 3);
+  send = undefined;
+  contextValue.notSentSubmissionId = reportId;
+  button('Send report').click();
+  await settle(() => send);
+  refuseSend(new page.window.Error('Review the report again before sending it.'));
+  await settle(() => button('Review') && !button('Review').disabled);
+  assert.equal(button('Send report'), undefined);
+  assert.equal(recoveredDescription.value, 'Synthetic recovered report.');
+  button('Review').click();
+  await settle(() => button('Send report'));
+  send = undefined;
+  const olderId = randomUUID();
+  contextValue.pending = { submissionId: olderId, status: 'submitted' };
+  delete contextValue.notSentSubmissionId;
+  failContext = true;
+  button('Send report').click();
+  await settle(() => send);
+  refuseSend(new page.window.Error('Synthetic uncertain send transport failure.'));
+  await settle(() => button('Check status') && !button('Check status').disabled);
+  assert.equal(button('Review'), undefined);
+  assert.equal(button('Send report'), undefined);
+  statusValue = { submissionId: olderId, status: 'submitted' };
+  button('Check status').click();
+  await settle(() =>
+    page.window.document.body.textContent.includes('Synthetic context transport failure.'),
+  );
+  assert.ok(!page.window.document.body.textContent.includes('Your report was sent.'));
+  assert.equal(button('Review'), undefined);
+  assert.equal(button('New report'), undefined);
+  assert.equal(button('Send report'), undefined);
+  failContext = false;
+  button('Check status').click();
+  await settle(() =>
+    page.window.document.body.textContent.includes('belongs to a different report'),
+  );
+  assert.ok(!page.window.document.body.textContent.includes('Your report was sent.'));
+  assert.equal(button('Review'), undefined);
+  assert.equal(button('New report'), undefined);
+  assert.equal(button('Send report'), undefined);
+  const beforeReconcile = requests.filter(([action]) => action === 'send').length;
+  failContext = false;
+  contextValue.notSentSubmissionId = reportId;
+  button('Check status').click();
+  await settle(() => button('Review') && !button('Review').disabled);
+  assert.ok(!page.window.document.body.textContent.includes('Your report was sent.'));
+  assert.equal(requests.filter(([action]) => action === 'send').length, beforeReconcile);
+  assert.equal(button('Send report'), undefined);
+  button('Review').click();
+  await settle(() => button('Send report'));
+  send = undefined;
+  button('Send report').click();
+  await settle(() => send);
+  send({
+    submissionId: reportId,
+    status: 'rejected',
+    httpStatus: 429,
+    reason: 'rate_limited',
+    message: 'Please try again in a minute.',
+  });
+  await settle(() => button('Edit report') && !button('Edit report').disabled);
+  const rejection = page.window.document.querySelector(
+    '[role="dialog"] [role="status"]',
+  ).textContent;
+  assert.match(rejection, /rejected.*HTTP 429/);
+  assert.match(rejection, /Please try again in a minute/);
+  assert.equal(button('Check status'), undefined);
+  assert.equal(button('Send report'), undefined);
+  assert.equal(requests.filter(([action]) => action === 'send').length, beforeReconcile + 1);
+  button('Close').click();
+  await settle(() => closes === 2 && !page.window.document.querySelector('[role="dialog"]'));
+  assert.equal(retries, 0);
+});
+
+test('startup report helper can retry a transient input or initialize failure', async (t) => {
+  for (const stage of ['input', 'initialize']) {
+    await t.test(stage, async () => {
+      const children = [];
+      let inputs = 0;
+      const client = createStartupFeedbackClient({
+        file: 'synthetic-feedback.mjs',
+        environment: {},
+        input: async () => {
+          inputs++;
+          if (stage === 'input' && inputs === 1)
+            throw new Error('Synthetic transient input failure');
+          return {};
+        },
+        fork() {
+          const child = Object.assign(new EventEmitter(), { sent: [] });
+          const attempt = children.length;
+          child.postMessage = (value) => {
+            child.sent.push(value);
+            setImmediate(() =>
+              child.emit('message', {
+                id: value.id,
+                ...(stage === 'initialize' && attempt === 0
+                  ? { error: 'Synthetic transient initialize failure' }
+                  : { value: { status: 'ready' } }),
+              }),
+            );
+          };
+          child.kill = () => {
+            child.killed = true;
+            child.emit('exit', 0);
+          };
+          children.push(child);
+          setImmediate(() => child.emit('message', { ready: true }));
+          return child;
+        },
+      });
+      await assert.rejects(client.request('context'), /Synthetic transient/);
+      assert.equal(children[0].killed, true);
+      assert.equal((await client.request('context')).status, 'ready');
+      assert.equal(children.length, 2);
+      assert.deepEqual(
+        children[1].sent.map((value) => value.action),
+        ['initialize', 'context'],
+      );
+      client.close();
+    });
+  }
+});
+
+test('a closed startup helper timer cannot stop its replacement', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const children = [];
+  const client = createStartupFeedbackClient({
+    file: 'synthetic-feedback.mjs',
+    environment: {},
+    input: async () => ({}),
+    fork() {
+      const child = Object.assign(new EventEmitter(), { sent: [] });
+      child.postMessage = (value) => {
+        child.sent.push(value);
+        setImmediate(() => child.emit('message', { id: value.id, value: { status: 'ready' } }));
+      };
+      child.kill = () => {
+        child.killed = true;
+        child.emit('exit', 0);
+      };
+      children.push(child);
+      return child;
+    },
+  });
+  const first = client.request('context');
+  const rejected = assert.rejects(first, /stopped before the action finished/);
+  client.close();
+  await rejected;
+  t.mock.timers.tick(1000);
+  const second = client.request('context');
+  t.mock.timers.tick(29_000);
+  assert.equal(children[1].killed, undefined);
+  children[1].emit('message', { ready: true });
+  assert.equal((await second).status, 'ready');
+  client.close();
+});
+
+test('startup report helper keeps prose out of facts and returns bounded local failures', async (t) => {
+  const { createStartupFeedback } = await import('../../src/server/startup-feedback.ts');
+  const root = await mkdtemp(join(tmpdir(), 'nod-fact-helper-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const secret = 'synthetic-private-helper-value';
+  const port = new EventEmitter();
+  const replies = [];
+  port.postMessage = (value) => replies.push(value);
+  const source = (await readFile(new URL('../main/feedback.mjs', import.meta.url), 'utf8'))
+    .replace(/^import[\s\S]*?;\n/gm, '')
+    .replace(/^const \{[^\n]+\} = await import\('[^']+'\);\n/gm, '');
+  await runInNewContext(`(async () => { ${source} })()`, {
+    process: { env: { NOD_FEEDBACK_TOKEN: secret }, parentPort: port },
+    register() {},
+    trustSystemCertificates() {},
+    StartupFeedbackError,
+    startupFailureMessage,
+    createStartupFeedback,
+    createFeedbackDelivery: () => ({
+      configured: true,
+      recipient: 'n8n',
+      submit: () => assert.fail('Review cannot submit.'),
+      status: () => assert.fail('No receipt is saved.'),
+    }),
+  });
+  const message = async (id, action, input) => {
+    port.emit('message', { data: { id, action, input } });
+    for (let attempt = 0; attempt < 300 && !replies.some((value) => value.id === id); attempt++)
+      await new Promise((resolve) => setTimeout(resolve, 2));
+    const reply = replies.find((value) => value.id === id);
+    assert.ok(reply);
+    return reply;
+  };
+  await message(1, 'initialize', {
+    dataRoot: root,
+    context: {
+      appVersion: '0.9.0',
+      appRelease: 'a'.repeat(40),
+      appModified: false,
+      development: false,
+      source: 'desktop',
+      platform: 'darwin-arm64',
+    },
+    status: {
+      phase: 'error',
+      error: secret,
+      failure: { name: 'TypeError', code: 'EACCES', syscall: 'open', message: secret },
+    },
+    startupLog: { entries: [{ ageMs: 5, line: secret }], truncated: false },
+  });
+  const review = await message(2, 'review', {
+    feedback: 'Synthetic helper report.',
+    includeReport: true,
+  });
+  assert.equal(JSON.parse(review.value.content).startup.failure.errno, 'EACCES');
+  assert.equal(
+    JSON.parse(review.value.content).startupLog.entries[0].event,
+    'diagnostic_text_omitted',
+  );
+  await message(3, 'snapshot', {
+    status: { phase: 'error', error: secret },
+    startupLog: { entries: [{ ageMs: 5, line: secret }], truncated: false },
+  });
+  assert.ok((await message(4, 'review', {})).error);
+  assert.ok(!JSON.stringify(replies).includes(secret));
+});
+
+test('startup report facts survive retry and disk failure without keeping diagnostic prose', async (t) => {
+  const calls = [];
+  let attempts = 0;
+  let retryFailure;
+  const privateText =
+    'synthetic-private-owner@example.test /Applications/Synthetic Owner/private-contract';
+  const f = await runningDesktop(t, async () => assert.fail('The failed engine is not needed.'), {
+    initialState: 'idle',
+    packaged: true,
+    resourcesPath: '/Applications/Synthetic Owner/Nod.app/Contents/Resources',
+    allowStart: true,
+    prepareRuntime: async () => {
+      attempts++;
+      if (attempts === 2) retryFailure = startupStatusFacts(f.status()).failure;
+      throw Object.assign(new Error(privateText), { code: 'EACCES', syscall: 'open' });
+    },
+    startupFeedbackAction: async (message) => {
+      calls.push(message);
+      return message.action === 'context'
+        ? { enabled: true, recipient: 'n8n', pending: null }
+        : null;
+    },
+  });
+  t.after(() => f.quit(() => {}));
+  await f.prepare({ retry: true }).catch(() => {});
+  await f.prepare({ retry: true }).catch(() => {});
+  assert.equal(attempts, 2);
+  assert.equal(retryFailure, undefined);
+  assert.equal(f.children.length, 0);
+  f.knownSecrets.add('/');
+  f.knownSecrets.add('@');
+  for (let index = 0; index < 105; index++) await f.writeDiagnostic(privateText + index);
+  await f.writeDiagnostic(privateText, {
+    event: 'runtime_failed',
+    error: Object.assign(new TypeError(privateText), { code: 'EIO' }),
+    durationMs: 5,
+  });
+  f.showFeedback();
+  for (
+    let attempt = 0;
+    attempt < 100 &&
+    !f.windows.some((window) => window.sent.some(([name]) => name === 'nod:startup-feedback:open'));
+    attempt++
+  )
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  const window = f.windows.find((window) =>
+    window.sent.some(([name]) => name === 'nod:startup-feedback:open'),
+  );
+  const event = { sender: window.webContents, senderFrame: window.webContents.mainFrame };
+  const action = f.handlers.get('nod:startup-feedback:action');
+  await action(event, 'context');
+  const initial = calls.find((call) => call.action === 'initialize').input;
+  assert.equal(initial.startupLog.entries.length, 100);
+  assert.equal(initial.startupLog.truncated, true);
+  assert.equal(initial.status.failure.errno, 'EACCES');
+  assert.equal(initial.status.failure.syscall, 'open');
+  assert.equal(initial.status.detailsOmitted, true);
+  assert.equal(initial.secrets, undefined);
+  const encoded = JSON.stringify({ status: initial.status, log: initial.startupLog });
+  for (const value of [
+    privateText,
+    'synthetic-private-owner',
+    'private-contract',
+    'Synthetic Owner',
+  ])
+    assert.ok(!encoded.includes(value));
+  assert.ok(
+    initial.startupLog.entries.some(
+      (row) => row.event === 'runtime_failed' && row.error.errno === 'EIO',
+    ),
+  );
+  assert.ok(
+    initial.startupLog.entries.every((row) => row.line === undefined && row.textOmitted === true),
+  );
+  assert.ok(Buffer.byteLength(JSON.stringify(initial.startupLog)) < 48000);
+  const path = join(f.profileRoot, 'logs', 'startup.log');
+  await rm(path);
+  await mkdir(path);
+  await assert.rejects(
+    f.writeDiagnostic(privateText, {
+      event: 'startup_failed',
+      error: Object.assign(new Error(privateText), { code: 'ENOSPC' }),
+    }),
+  );
+  await action(event, 'review', { feedback: 'Synthetic current facts.', includeReport: true });
+  const snapshot = calls.findLast((call) => call.action === 'snapshot').input;
+  assert.ok(snapshot.startupLog.entries.some((row) => row.error?.errno === 'ENOSPC'));
+  assert.ok(!JSON.stringify(snapshot.startupLog).includes(privateText));
+});
+
+test('startup reports do not wait for a stalled disk log write', async (t) => {
+  const gate = deferred();
+  const calls = [];
+  const f = await runningDesktop(t, async () => assert.fail('The failed engine is not needed.'), {
+    initialState: 'idle',
+    appendDiagnostic: () => gate.promise,
+    startupFeedbackAction: async (message) => {
+      calls.push(message);
+      return message.action === 'context'
+        ? { enabled: true, recipient: 'n8n', pending: null }
+        : null;
+    },
+  });
+  const logging = f.writeDiagnostic('Synthetic event with a stalled disk write');
+  t.after(async () => {
+    gate.resolve();
+    await logging;
+    await f.quit(() => {});
+  });
+  f.showFeedback();
+  for (
+    let attempt = 0;
+    attempt < 100 &&
+    !f.windows.some((window) => window.sent.some(([name]) => name === 'nod:startup-feedback:open'));
+    attempt++
+  )
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  const window = f.windows.find((window) =>
+    window.sent.some(([name]) => name === 'nod:startup-feedback:open'),
+  );
+  const event = { sender: window.webContents, senderFrame: window.webContents.mainFrame };
+  let deadline;
+  try {
+    const context = await Promise.race([
+      f.handlers.get('nod:startup-feedback:action')(event, 'context'),
+      new Promise((_, reject) => {
+        deadline = setTimeout(() => reject(new Error('The report waited for the disk log.')), 5000);
+      }),
+    ]);
+    assert.equal(context.enabled, true);
+    const initial = calls.find((call) => call.action === 'initialize').input;
+    assert.ok(
+      initial.startupLog.entries.some(
+        (entry) => entry.event === 'diagnostic_text_omitted' && entry.textOmitted,
+      ),
+    );
+    await f.handlers.get('nod:startup-feedback:action')(event, 'review', {
+      feedback: 'Synthetic failure.',
+      includeReport: true,
+    });
+    assert.ok(calls.some((call) => call.action === 'snapshot'));
+    assert.equal(f.children.length, 0);
+  } finally {
+    clearTimeout(deadline);
+  }
+});
+
+test('startup status hides environment credentials before preparation errors and text limits', async (t) => {
+  for (const [label, key, value, secret] of [
+    [
+      'feedback',
+      'NOD_FEEDBACK_TOKEN',
+      'synthetic-held-collector-secret',
+      'synthetic-held-collector-secret',
+    ],
+    ['traces', 'NOD_TRACES_TOKEN', 'synthetic-held-traces-secret', 'synthetic-held-traces-secret'],
+    [
+      'provider',
+      'AWS_BEARER_TOKEN_BEDROCK',
+      'synthetic-held-provider-secret',
+      'synthetic-held-provider-secret',
+    ],
+    ['short credential', 'NOD_FEEDBACK_TOKEN', 'k7X', 'k7X'],
+    [
+      'database password',
+      'DATABASE_URL',
+      'postgresql://synthetic:synthetic%2Bdatabase%2Fpassword@127.0.0.1/nod_synthetic',
+      'synthetic+database/password',
+    ],
+  ])
+    await t.test(label, async (t) => {
+      const calls = [];
+      const kept = Math.min(20, secret.length - 1);
+      const prefix = ('Synthetic startup failure ' + 'detail '.repeat(400)).slice(0, 2000 - kept);
+      const f = await runningDesktop(t, async () => assert.fail('The engine must not start.'), {
+        initialState: 'idle',
+        allowStart: true,
+        environment: { [key]: value },
+        prepareRuntime: async () => {
+          throw new Error(prefix + secret + ' end');
+        },
+        startupFeedbackAction: async (message) => {
+          calls.push(message);
+          return message.action === 'context'
+            ? { enabled: true, recipient: 'n8n', pending: null }
+            : null;
+        },
+      });
+      t.after(() => f.quit(() => {}));
+      await f.prepare({ retry: true }).catch(() => {});
+      assert.ok(f.status().error.startsWith('Synthetic startup failure '));
+      assert.ok(!f.status().error.includes(secret.slice(0, kept)));
+      f.showFeedback();
+      for (
+        let attempt = 0;
+        attempt < 100 &&
+        !f.windows.some((window) =>
+          window.sent.some(([name]) => name === 'nod:startup-feedback:open'),
+        );
+        attempt++
+      )
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      const window = f.windows.find((window) =>
+        window.sent.some(([name]) => name === 'nod:startup-feedback:open'),
+      );
+      const event = { sender: window.webContents, senderFrame: window.webContents.mainFrame };
+      await f.handlers.get('nod:startup-feedback:action')(event, 'context');
+      const initial = calls.find((call) => call.action === 'initialize').input;
+      assert.equal(initial.secrets, undefined);
+      assert.ok(f.knownSecrets.has(secret));
+      const { createStartupFeedback } = await import('../../src/server/startup-feedback.ts');
+      const service = createStartupFeedback({
+        ...initial,
+        delivery: {
+          configured: true,
+          recipient: 'n8n',
+          submit: () => assert.fail('A review must not send the report.'),
+          status: () => assert.fail('An unsent report has no receipt.'),
+        },
+      });
+      const review = await service.review({
+        feedback: 'Synthetic startup failure.',
+        includeReport: true,
+      });
+      assert.ok(!review.content.includes(secret.slice(0, kept)));
+      assert.equal(JSON.parse(review.content).startup.detailsOmitted, true);
+      assert.equal(f.children.length, 0);
+    });
+});
+
+test('startup status masks overlapping credentials and private roots in one pass', async (t) => {
+  const short = 'k7X';
+  const secret = short + '-synthetic-private-tail';
+  const literalSecret = String.raw`synthetic+(private)[value]\key`;
+  const resourcesPath = '/Applications/Synthetic Private Owner/Nod.app/Contents/Resources';
+  const engineRoot = join(resourcesPath, 'engine');
+  const calls = [];
+  const f = await runningDesktop(t, async () => assert.fail('The engine must not start.'), {
+    initialState: 'idle',
+    packaged: true,
+    resourcesPath,
+    allowStart: true,
+    environment: {
+      FIRST_API_KEY: short,
+      SECOND_API_KEY: secret,
+      ROOT_API_KEY: '/',
+      MASK_API_KEY: 'red',
+      LITERAL_API_KEY: literalSecret,
+      CROSS_API_KEY: 'prefixABC',
+      CROSS_OTHER_API_KEY: 'ABCsynthetic-private-cross-tail',
+      PATH_CROSS_API_KEY: 'engine/synthetic-private-path-tail',
+    },
+    prepareRuntime: async () => {
+      throw new Error(
+        `Synthetic failure ${secret} ${engineRoot.replaceAll('\\', '/')}/worker ${f.profileRoot.replaceAll('\\', '/')}/worker`,
+      );
+    },
+    startupFeedbackAction: async (message) => {
+      calls.push(message);
+      return message.action === 'context'
+        ? { enabled: true, recipient: 'n8n', pending: null }
+        : null;
+    },
+  });
+  t.after(() => f.quit(() => {}));
+  await f.prepare({ retry: true }).catch(() => {});
+  assert.equal(
+    f.status().error,
+    'Synthetic failure [redacted] <engine>[redacted]worker <profile>[redacted]worker',
+  );
+  assert.equal(f.bounded(literalSecret), '[redacted]');
+  assert.equal(f.bounded('syntheticX(private)[value]key'), 'syntheticX(private)[value]key');
+  const crossing = 'prefixABCsynthetic-private-cross-tail';
+  const crossingPath = `${engineRoot.replaceAll('\\', '/')}/synthetic-private-path-tail`;
+  assert.equal(f.bounded(crossing), '[redacted]');
+  assert.equal(f.bounded(crossingPath), '[redacted]');
+  f.status().details = [crossing, crossingPath].map((value) => f.bounded(value)).join('\n');
+  const prefix = ('Synthetic context ' + 'detail '.repeat(400)).slice(0, 1980);
+  const clipped = f.bounded(prefix + secret);
+  assert.equal(clipped, prefix + '[redacted]');
+  f.status().runtime.error = clipped;
+  f.showFeedback();
+  for (
+    let attempt = 0;
+    attempt < 100 &&
+    !f.windows.some((window) => window.sent.some(([name]) => name === 'nod:startup-feedback:open'));
+    attempt++
+  )
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  const window = f.windows.find((window) =>
+    window.sent.some(([name]) => name === 'nod:startup-feedback:open'),
+  );
+  await f.handlers.get('nod:startup-feedback:action')(
+    { sender: window.webContents, senderFrame: window.webContents.mainFrame },
+    'context',
+  );
+  const initial = calls.find((call) => call.action === 'initialize').input;
+  const { createStartupFeedback } = await import('../../src/server/startup-feedback.ts');
+  const service = createStartupFeedback({
+    ...initial,
+    delivery: {
+      configured: true,
+      recipient: 'n8n',
+      submit: () => assert.fail('Review cannot send.'),
+      status: () => assert.fail('No receipt is expected.'),
+    },
+  });
+  const review = await service.review({
+    feedback: 'Synthetic overlap failure.',
+    includeReport: true,
+  });
+  assert.ok(!review.content.includes('synthetic-private-tail'));
+  assert.ok(!review.content.includes('Synthetic Private Owner'));
+  assert.ok(!review.content.includes('synthetic-private-cross-tail'));
+  assert.ok(!review.content.includes('synthetic-private-path-tail'));
 });

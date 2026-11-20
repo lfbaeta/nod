@@ -1,3 +1,12 @@
+import {
+  startupErrorFacts,
+  startupStatusFacts,
+  startupEventFacts,
+  startupLogFacts,
+  startupFailureMessage,
+  startupReceiptFacts,
+  StartupFeedbackError,
+} from '../src/shared/startup-feedback-facts.mjs';
 import assert from 'node:assert/strict';
 import test, { describe } from 'node:test';
 import Fastify from 'fastify';
@@ -36,6 +45,7 @@ import { createTrustReview } from '../src/server/trust-review.ts';
 import { trustFacts } from '../src/server/trust-facts.ts';
 import {
   createErrorRedactor,
+  environmentSecrets,
   createRedactor,
   createTextRedactor,
   redactSecretText,
@@ -7754,3 +7764,1267 @@ function withOwnerIds<
     userMessages: words.userMessages?.map((message, index) => ({ ...message, id: ids[index] })),
   };
 }
+
+test('startup reports require review and keep exact redacted content through send and restart', async (t) => {
+  const { createStartupFeedback } = await import('../src/server/startup-feedback.ts');
+  const { mkdir, writeFile } = await import('node:fs/promises');
+  const root = await mkdtemp(join(tmpdir(), 'nod-startup-feedback-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(join(root, 'logs'));
+  const secret = 'synthetic-startup-private-key';
+  const privateName = 'Synthetic Person';
+  await writeFile(
+    join(root, 'logs', 'startup.log'),
+    `2026-11-19T00:00:00.000Z Startup failed ${secret} ${privateName} private@example.test /Users/private-person/record.txt https://private.example.test/account\n`,
+  );
+  const context = {
+    appVersion: '0.9.0',
+    appRelease: 'a'.repeat(40),
+    appModified: false,
+    platform: 'win32-x64',
+    development: false,
+    source: 'desktop' as const,
+  };
+  const submitted: import('../src/ports/feedback.ts').FeedbackEnvelope[] = [];
+  const statusCalls: string[][] = [];
+  let dispatchReady!: () => void;
+  const dispatched = new Promise<void>((resolve) => {
+    dispatchReady = resolve;
+  });
+  let release!: (value: import('../src/shared/feedback.ts').FeedbackReceipt) => void;
+  let nextStatus: import('../src/shared/feedback.ts').FeedbackReceipt['status'] = 'unknown';
+  const options = {
+    dataRoot: root,
+    context,
+    secrets: [secret],
+    names: [privateName],
+    startupLog: {
+      entries: [
+        {
+          ageMs: 1000,
+          line: `Startup failed ${secret} ${privateName} private@example.test /Users/private-person/record.txt https://private.example.test/account`,
+        },
+      ],
+      truncated: false,
+    },
+    status: {
+      phase: 'error',
+      error: `Synthetic failure for ${privateName} ${secret}`,
+      details: 'HTTP 503',
+      failure: { class: 'Error', httpStatus: 503 },
+    },
+    delivery: {
+      configured: true,
+      recipient: 'n8n',
+      async submit(envelope: import('../src/ports/feedback.ts').FeedbackEnvelope) {
+        submitted.push(envelope);
+        dispatchReady();
+        return new Promise<import('../src/shared/feedback.ts').FeedbackReceipt>((resolve) => {
+          release = resolve;
+        });
+      },
+      async status(id: string, payloadHash: string) {
+        statusCalls.push([id, payloadHash]);
+        return { submissionId: id, status: nextStatus };
+      },
+    },
+  };
+  const service = createStartupFeedback(options);
+  assert.equal((await service.context()).recipient, 'n8n');
+  assert.equal(submitted.length, 0);
+  await assert.rejects(service.send(randomUUID()), /Review the report again/);
+  const first = await service.review({
+    feedback: '  Synthetic startup does not finish.\n\n',
+    includeReport: true,
+  });
+  assert.equal(submitted.length, 0);
+  const content = first.content!;
+  for (const value of [
+    secret,
+    privateName,
+    'private@example.test',
+    '/Users/private-person',
+    'private.example.test',
+  ])
+    assert.ok(!content.includes(value), value);
+  assert.match(content, /503/);
+  assert.ok(!content.includes('2026-11-19T'));
+  assert.equal(typeof JSON.parse(content).startupLog.entries[0].ageMs, 'number');
+  options.startupLog.entries = [
+    { ageMs: 500, line: `${'Synthetic detail '.repeat(234)}${secret} end` },
+  ];
+  const boundary = await service.review({
+    feedback: 'Synthetic boundary check.',
+    includeReport: true,
+  });
+  assert.ok(
+    !boundary.content!.includes(secret.slice(0, 12)),
+    'Startup prose must be omitted before text bounds.',
+  );
+  const changedSecret = 'synthetic-rotated-startup-key';
+  options.secrets.push(changedSecret);
+  options.startupLog.entries.push({ ageMs: 0, line: `Synthetic rotated key ${changedSecret}` });
+  const current = await service.review({ feedback: first.feedback, includeReport: true });
+  assert.ok(!current.content!.includes(changedSecret));
+  assert.equal(JSON.parse(content).schema, 'nod-desktop-startup-report-v2');
+  options.startupLog.entries = [{ ageMs: 0, line: 'Synthetic later event not reviewed' }];
+  const sending = service.send(current.reviewId);
+  await Promise.race([dispatched, sending]);
+  assert.equal(submitted.length, 1);
+  assert.equal(Buffer.from(submitted[0].report!.data, 'base64').toString(), current.content);
+  assert.equal(first.feedback, '  Synthetic startup does not finish.\n\n');
+  assert.equal(submitted[0].feedback, first.feedback);
+  const duplicate = service.send(current.reviewId);
+  await assert.rejects(
+    service.review({ feedback: 'Changed', includeReport: false }),
+    /Check the previous report/,
+  );
+  release({ submissionId: current.reviewId, status: 'unknown' });
+  assert.equal((await sending).status, 'unknown');
+  assert.equal((await duplicate).status, 'unknown');
+  assert.equal(submitted.length, 1);
+  const saved = await readFile(join(root, 'startup-feedback.json'), 'utf8');
+  assert.deepEqual(Object.keys(JSON.parse(saved)).sort(), ['payloadHash', 'submissionId']);
+  assert.ok(!saved.includes('Synthetic'));
+  const restarted = createStartupFeedback(options);
+  assert.equal((await restarted.context()).pending?.status, 'unknown');
+  assert.equal((await restarted.send(current.reviewId)).status, 'unknown');
+  assert.equal(submitted.length, 1);
+  assert.equal(statusCalls.at(-1)?.[0], current.reviewId);
+  assert.equal(statusCalls.at(-1)?.[1], submitted[0].payloadHash);
+  await assert.rejects(
+    restarted.review({ feedback: 'Changed', includeReport: false }),
+    /Check the previous report/,
+  );
+  nextStatus = 'submitted';
+  assert.equal((await restarted.status())?.status, 'submitted');
+  const second = await restarted.review({
+    feedback: 'A different startup report.',
+    includeReport: false,
+  });
+  assert.equal(second.content, null);
+  await assert.rejects(restarted.send(current.reviewId + 'x'));
+  const third = await restarted.review({
+    feedback: 'Latest exact description.',
+    includeReport: false,
+  });
+  await assert.rejects(restarted.send(second.reviewId), /Review the report again/);
+  assert.notEqual(third.reviewId, second.reviewId);
+});
+
+test('startup status keeps its original submission while a newer send runs or finishes', async (t) => {
+  const { createStartupFeedback } = await import('../src/server/startup-feedback.ts');
+  for (const finishNewSend of [false, true]) {
+    await t.test(finishNewSend ? 'new send finished' : 'new send in flight', async (t) => {
+      const root = await mkdtemp(join(tmpdir(), 'nod-startup-status-race-'));
+      t.after(() => rm(root, { recursive: true, force: true }));
+      let releaseStatus!: (value: import('../src/shared/feedback.ts').FeedbackReceipt) => void;
+      let statusStarted!: () => void;
+      const checking = new Promise<void>((resolve) => {
+        statusStarted = resolve;
+      });
+      let releaseSend!: (value: import('../src/shared/feedback.ts').FeedbackReceipt) => void;
+      let sendStarted!: () => void;
+      const sending = new Promise<void>((resolve) => {
+        sendStarted = resolve;
+      });
+      let submits = 0;
+      const service = createStartupFeedback({
+        dataRoot: root,
+        context: {
+          appVersion: null,
+          appRelease: null,
+          appModified: null,
+          platform: null,
+          development: false,
+          source: 'desktop',
+        },
+        status: { phase: 'error' },
+        delivery: {
+          configured: true,
+          recipient: 'n8n',
+          async submit(envelope) {
+            if (++submits === 1)
+              return { submissionId: envelope.submissionId, status: 'submitted' };
+            sendStarted();
+            return new Promise((resolve) => {
+              releaseSend = resolve;
+            });
+          },
+          async status() {
+            statusStarted();
+            return new Promise((resolve) => {
+              releaseStatus = resolve;
+            });
+          },
+        },
+      });
+      const first = await service.review({
+        feedback: 'Synthetic first report.',
+        includeReport: false,
+      });
+      await service.send(first.reviewId);
+      const oldStatus = service.status();
+      await checking;
+      const next = await service.review({
+        feedback: 'Synthetic next report.',
+        includeReport: true,
+      });
+      const newSend = service.send(next.reviewId);
+      await sending;
+      if (finishNewSend) {
+        releaseSend({ submissionId: next.reviewId, status: 'partial' });
+        await newSend;
+      }
+      releaseStatus({ submissionId: first.reviewId, status: 'rejected' });
+      assert.deepEqual(await oldStatus, { submissionId: first.reviewId, status: 'rejected' });
+      if (!finishNewSend) {
+        releaseSend({ submissionId: next.reviewId, status: 'partial' });
+        await newSend;
+      }
+      assert.deepEqual((await service.context()).pending, {
+        submissionId: next.reviewId,
+        status: 'partial',
+        canRetryAttachments: true,
+      });
+      assert.equal(submits, 2);
+    });
+  }
+});
+
+test('startup reports omit unavailable event snapshots and refuse invalid input or failed durable saves', async (t) => {
+  const { createStartupFeedback } = await import('../src/server/startup-feedback.ts');
+  const { mkdir, writeFile, unlink } = await import('node:fs/promises');
+  const root = await mkdtemp(join(tmpdir(), 'nod-startup-feedback-unsafe-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const dataRoot = join(root, 'profile');
+  await mkdir(join(dataRoot, 'logs'), { recursive: true });
+  const target = join(root, 'private.log');
+  await writeFile(target, 'Synthetic private target\n');
+  await writeFile(join(dataRoot, 'logs', 'startup.log'), 'Synthetic disk history is excluded\n');
+  let sends = 0;
+  const options = {
+    dataRoot,
+    context: {
+      appVersion: 'private version',
+      appRelease: 'private release',
+      appModified: null,
+      platform: 'private device',
+      development: true,
+      source: 'desktop' as const,
+    },
+    secrets: [],
+    names: [],
+    status: { phase: 'error' },
+    delivery: {
+      configured: true,
+      recipient: 'n8n',
+      async submit(envelope: import('../src/ports/feedback.ts').FeedbackEnvelope) {
+        sends++;
+        return { submissionId: envelope.submissionId, status: 'submitted' as const };
+      },
+      async status(id: string) {
+        return { submissionId: id, status: 'unknown' as const };
+      },
+    },
+  };
+  const service = createStartupFeedback(options);
+  const reviewed = await service.review({ feedback: 'Synthetic failure.', includeReport: true });
+  const report = JSON.parse(reviewed.content!);
+  assert.equal(report.startupLog.status, 'unavailable');
+  assert.deepEqual(report.startupLog.entries, []);
+  assert.ok(!reviewed.content!.includes('private'));
+  assert.equal(report.context.appVersion, null);
+  assert.equal(report.context.platform, null);
+  await assert.rejects(service.review({ feedback: 'x', includeReport: true, extra: true }));
+  await assert.rejects(service.review({ feedback: '', includeReport: true }));
+  await assert.rejects(service.review({ feedback: ' \n\t', includeReport: true }));
+  const disabled = createStartupFeedback({
+    ...options,
+    delivery: { ...options.delivery, configured: false },
+  });
+  await assert.rejects(
+    disabled.review({ feedback: 'Synthetic failure.', includeReport: false }),
+    /turned off/,
+  );
+  await rm(dataRoot, { recursive: true });
+  await writeFile(dataRoot, 'Synthetic blocking file');
+  await assert.rejects(service.send(reviewed.reviewId));
+  assert.equal(sends, 0);
+  assert.equal((await service.context()).notSentSubmissionId, reviewed.reviewId);
+  await unlink(dataRoot);
+  await mkdir(dataRoot);
+  await assert.rejects(service.send(reviewed.reviewId), /Review the report again/);
+  const recoveredReview = await service.review({
+    feedback: 'Synthetic recovery review.',
+    includeReport: true,
+  });
+  assert.notEqual(recoveredReview.reviewId, reviewed.reviewId);
+  assert.equal((await service.context()).notSentSubmissionId, undefined);
+  assert.equal((await service.send(recoveredReview.reviewId)).status, 'submitted');
+  assert.equal(sends, 1, 'A known failure before dispatch must allow a fresh review and send.');
+  await writeFile(join(dataRoot, 'startup-feedback.json'), '{"submissionId":"bad"}');
+  const corrupt = createStartupFeedback(options);
+  assert.equal((await corrupt.context()).recovery?.canPreserve, true);
+  await assert.rejects(
+    corrupt.review({ feedback: 'Synthetic blocked report.', includeReport: false }),
+    /saved report status/,
+  );
+  assert.equal(sends, 1);
+});
+
+test('the startup feedback factory ignores unrelated engine configuration and dotenv keys', async (t) => {
+  const { writeFile } = await import('node:fs/promises');
+  const { execFile } = await import('node:child_process');
+  const { promisify } = await import('node:util');
+  const root = await mkdtemp(join(tmpdir(), 'nod-startup-factory-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await writeFile(
+    join(root, '.env'),
+    'PORT=invalid-synthetic-port\nOPENAI_API_KEY=synthetic-model-key-canary\nDATABASE_POOL_MAX=invalid-synthetic-pool\n',
+  );
+  const source = new URL('../src/server/feedback-delivery.ts', import.meta.url).href;
+  const script = join(root, 'check.mjs');
+  await writeFile(
+    script,
+    `const { createFeedbackDelivery } = await import(${JSON.stringify(source)}); const delivery = createFeedbackDelivery({NOD_FEEDBACK_ENABLED:'false'}); process.stdout.write(JSON.stringify({modelKeyLoaded:Object.hasOwn(process.env,'OPENAI_API_KEY'),dotenvPortLoaded:Object.hasOwn(process.env,'PORT'),configured:delivery.configured}));`,
+  );
+  const result = await promisify(execFile)(process.execPath, [script], {
+    cwd: root,
+    env: Object.fromEntries(
+      ['PATH', 'SystemRoot', 'SYSTEMROOT'].flatMap((key) =>
+        process.env[key] ? [[key, process.env[key]]] : [],
+      ),
+    ),
+  });
+  assert.deepEqual(JSON.parse(result.stdout), {
+    modelKeyLoaded: false,
+    dotenvPortLoaded: false,
+    configured: false,
+  });
+});
+
+test(
+  'startup report save failures restore disk state before a recovered restart',
+  { skip: process.platform === 'win32' },
+  async (t) => {
+    const { createStartupFeedback } = await import('../src/server/startup-feedback.ts');
+    const { open } = await import('node:fs/promises');
+    for (const previous of [false, true]) {
+      await t.test(previous ? 'prior resolved receipt' : 'no previous report', async (t) => {
+        const root = await mkdtemp(join(tmpdir(), 'nod-startup-save-restart-'));
+        t.after(() => rm(root, { recursive: true, force: true }));
+        let sends = 0;
+        const options = {
+          dataRoot: root,
+          secrets: [],
+          names: [],
+          status: { phase: 'error' },
+          context: {
+            appVersion: '0.9.0',
+            appRelease: 'a'.repeat(40),
+            appModified: false,
+            platform: 'darwin-arm64',
+            development: false,
+            source: 'desktop' as const,
+          },
+          delivery: {
+            configured: true,
+            recipient: 'n8n',
+            async submit(envelope: import('../src/ports/feedback.ts').FeedbackEnvelope) {
+              sends++;
+              return { submissionId: envelope.submissionId, status: 'submitted' as const };
+            },
+            async status(id: string) {
+              return { submissionId: id, status: 'submitted' as const };
+            },
+          },
+        };
+        const service = createStartupFeedback(options);
+        let oldId: string | undefined;
+        if (previous) {
+          const old = await service.review({
+            feedback: 'Synthetic earlier report.',
+            includeReport: false,
+          });
+          oldId = old.reviewId;
+          await service.send(oldId);
+        }
+        const candidate = await service.review({
+          feedback: 'Synthetic new report.',
+          includeReport: false,
+        });
+        const directory = await open(root, 'r');
+        const prototype = Object.getPrototypeOf(directory);
+        const sync = prototype.sync;
+        await directory.close();
+        try {
+          prototype.sync = async function (this: Awaited<ReturnType<typeof open>>) {
+            if ((await this.stat()).isDirectory())
+              throw Object.assign(new Error('Synthetic directory sync failure.'), { code: 'EIO' });
+            return sync.call(this);
+          };
+          await assert.rejects(service.send(candidate.reviewId));
+        } finally {
+          prototype.sync = sync;
+        }
+        assert.equal(sends, previous ? 1 : 0);
+        const disk = await readFile(join(root, 'startup-feedback.json'), 'utf8').catch((error) => {
+          if (error.code === 'ENOENT') return null;
+          throw error;
+        });
+        assert.equal(disk ? JSON.parse(disk).submissionId : undefined, oldId);
+        const restarted = createStartupFeedback(options);
+        assert.equal((await restarted.context()).pending?.submissionId, oldId);
+        const recovered = await restarted.review({
+          feedback: 'Synthetic report after disk recovery.',
+          includeReport: false,
+        });
+        assert.equal((await restarted.send(recovered.reviewId)).status, 'submitted');
+        assert.equal(sends, previous ? 2 : 1);
+      });
+    }
+  },
+);
+
+test('startup reports never open log paths and use only current desktop events', async (t) => {
+  const { createStartupFeedback } = await import('../src/server/startup-feedback.ts');
+  const filesystem = (await import('node:fs/promises')).default;
+  const directFilesystem = (await import('node:fs')).default;
+  const { syncBuiltinESMExports } = await import('node:module');
+  const { mkdir, writeFile } = filesystem;
+  const root = await mkdtemp(join(tmpdir(), 'nod-startup-no-log-read-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const dataRoot = join(root, 'profile');
+  const outside = join(root, 'outside');
+  await mkdir(dataRoot);
+  await mkdir(outside);
+  await writeFile(join(outside, 'startup.log'), 'Synthetic unrelated private file\n');
+  if (process.platform === 'win32') {
+    await mkdir(join(dataRoot, 'logs'));
+    await writeFile(join(dataRoot, 'logs', 'startup.log'), 'Synthetic unrelated private file\n');
+  } else await symlink(outside, join(dataRoot, 'logs'));
+  const accessed: string[] = [];
+  const restorations: Array<() => void> = [];
+  function trackReads(surface: object, names: string[]) {
+    for (const name of names) {
+      const original = Reflect.get(surface, name);
+      Reflect.set(surface, name, (...args: unknown[]) => {
+        accessed.push(String(args[0]));
+        return Reflect.apply(original, surface, args);
+      });
+      restorations.push(() => {
+        Reflect.set(surface, name, original);
+      });
+    }
+  }
+  const options = {
+    dataRoot,
+    secrets: [],
+    names: [],
+    status: { phase: 'error' },
+    context: {
+      appVersion: '0.9.0',
+      appRelease: 'a'.repeat(40),
+      appModified: false,
+      platform: 'darwin-arm64',
+      development: false,
+      source: 'desktop' as const,
+    },
+    startupLog: {
+      entries: [{ ageMs: 5, line: 'Synthetic event from this desktop process' }],
+      truncated: true,
+    },
+    delivery: {
+      configured: true,
+      recipient: 'n8n',
+      async submit(envelope: import('../src/ports/feedback.ts').FeedbackEnvelope) {
+        return { submissionId: envelope.submissionId, status: 'submitted' as const };
+      },
+      async status(id: string) {
+        return { submissionId: id, status: 'unknown' as const };
+      },
+    },
+  };
+  try {
+    const methods = [
+      'open',
+      'readFile',
+      'readdir',
+      'opendir',
+      'readlink',
+      'realpath',
+      'stat',
+      'lstat',
+      'access',
+    ];
+    trackReads(filesystem, methods);
+    trackReads(directFilesystem, [
+      ...methods,
+      ...methods.map((name) => `${name}Sync`),
+      'createReadStream',
+    ]);
+    syncBuiltinESMExports();
+    const service = createStartupFeedback(options);
+    const snapshot = await service.review({ feedback: 'Synthetic failure.', includeReport: true });
+    const report = JSON.parse(snapshot.content!);
+    assert.equal(report.startupLog.status, 'collected');
+    assert.equal(report.startupLog.scope, 'current-desktop-process');
+    assert.equal(report.startupLog.truncated, true);
+    assert.deepEqual(report.startupLog.entries, [
+      { ageMs: 5, event: 'diagnostic_text_omitted', textOmitted: true },
+    ]);
+    assert.ok(!snapshot.content!.includes('Synthetic unrelated private file'));
+    const malformed = createStartupFeedback({
+      ...options,
+      startupLog: { entries: [{ ageMs: -1, line: 'Synthetic invalid event' }], truncated: false },
+    });
+    const empty = JSON.parse(
+      (await malformed.review({ feedback: 'Synthetic failure.', includeReport: true })).content!,
+    );
+    assert.equal(empty.startupLog.status, 'unavailable');
+    assert.deepEqual(empty.startupLog.entries, []);
+    assert.ok(
+      !accessed.some((path) =>
+        [join(dataRoot, 'logs'), outside].some(
+          (root) => path === root || path.startsWith(root + '/') || path.startsWith(root + '\\'),
+        ),
+      ),
+      'Preparing a startup report must not access a log path or its outside target.',
+    );
+  } finally {
+    for (const restore of restorations.reverse()) restore();
+    syncBuiltinESMExports();
+  }
+});
+
+test('environment secret collection covers every model key and token segment before redaction', async () => {
+  const { modelProviderInfo } = await import('../src/shared/models.ts');
+  const modelEnvironment = Object.fromEntries(
+    Object.values(modelProviderInfo).map(({ env }, index) => [env, `synthetic-model-key-${index}`]),
+  );
+  const legacyEnvironment = Object.fromEntries(
+    [
+      'API_KEY',
+      'SECRET',
+      'PASSWORD',
+      'VAULT_KEY',
+      'BOT_TOKEN',
+      'ACCESS_TOKEN',
+      'AUTH_TOKEN',
+      'FEEDBACK_TOKEN',
+      'TRACES_TOKEN',
+      'UPDATES_TOKEN',
+      'AWS_SECRET_ACCESS_KEY',
+      'PRIVATE_KEY',
+      'ENCRYPTION_KEY',
+      'PASSPHRASE',
+      'ACCESS_KEY_ID',
+    ].map((key, index) => [`SYNTHETIC_${key}`, `synthetic-legacy-key-${index}`]),
+  );
+  const environment = {
+    ...modelEnvironment,
+    ...legacyEnvironment,
+    NOD_FEEDBACK_TOKEN: 'synthetic-feedback-key',
+    NOD_TRACES_TOKEN: 'synthetic-traces-key',
+    SYNTHETIC_TOKEN_SUFFIX: 'synthetic-token-with-suffix',
+    SYNTHETIC_SECRET: 'synthetic-secret-value',
+    SYNTHETIC_PASSWORD: 'synthetic-password-value',
+    NOD_VAULT_KEY: 'synthetic-vault-key',
+    DATABASE_URL: 'postgresql://synthetic:synthetic%2Bdatabase%2Fpassword@127.0.0.1/nod_synthetic',
+    PORT: '1234',
+  };
+  const secrets = environmentSecrets(environment);
+  for (const [key, value] of Object.entries(environment))
+    assert.equal(secrets.includes(value), key !== 'PORT', key);
+  assert.ok(secrets.includes('synthetic+database/password'));
+  const malformed = 'synthetic%2Gprivate-password';
+  assert.ok(
+    environmentSecrets({
+      DATABASE_URL: `postgresql://synthetic:${malformed}@127.0.0.1/nod_synthetic`,
+    }).includes(malformed),
+  );
+  assert.deepEqual(
+    environmentSecrets({
+      EMPTY_TOKEN: '',
+      MISSING_TOKEN: undefined,
+      DATABASE_URL: 'synthetic-invalid-url',
+    }),
+    ['synthetic-invalid-url'],
+  );
+});
+
+test('startup status recovery preserves corrupt bytes before a fresh reviewed submission', async (t) => {
+  const { createStartupFeedback } = await import('../src/server/startup-feedback.ts');
+  const { writeFile, readFile, readdir, stat } = await import('node:fs/promises');
+  const { randomUUID } = await import('node:crypto');
+  const root = await mkdtemp(join(tmpdir(), 'nod-status-recovery-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const path = join(root, 'startup-feedback.json');
+  const untrustedId = randomUUID();
+  const bytes = Buffer.from(
+    `{"submissionId":"${untrustedId}","private":"synthetic-private-state"\n`,
+  );
+  await writeFile(path, bytes);
+  const sent: import('../src/ports/feedback.ts').FeedbackEnvelope[] = [];
+  let lookups = 0;
+  const options = {
+    dataRoot: root,
+    secrets: [],
+    names: [],
+    status: { phase: 'error' },
+    context: {
+      appVersion: '0.9.0',
+      appRelease: 'a'.repeat(40),
+      appModified: false,
+      development: false,
+      source: 'desktop' as const,
+      platform: 'darwin-arm64',
+    },
+    delivery: {
+      configured: true,
+      recipient: 'n8n',
+      async submit(value: import('../src/ports/feedback.ts').FeedbackEnvelope) {
+        sent.push(value);
+        return { submissionId: value.submissionId, status: 'submitted' as const };
+      },
+      async status(id: string) {
+        lookups++;
+        return { submissionId: id, status: 'unknown' as const };
+      },
+    },
+  };
+  const service = createStartupFeedback(options);
+  const blocked = await service.context();
+  assert.equal(blocked.recovery?.canPreserve, true);
+  assert.match(blocked.recovery!.message, /invalid JSON/);
+  assert.ok(!JSON.stringify(blocked).includes('synthetic-private-state'));
+  await assert.rejects(
+    service.review({ feedback: 'Synthetic failure.', includeReport: true }),
+    /invalid JSON/,
+  );
+  await assert.rejects(service.send(untrustedId), /invalid JSON/);
+  assert.equal(lookups, 0);
+  assert.throws(() => service.recover({ confirm: false }));
+  assert.deepEqual(await readFile(path), bytes);
+  await service.recover({ confirm: true });
+  const names = await readdir(root);
+  const backups = names.filter((name) => /^startup-feedback-recovered-.*\.bin$/.test(name));
+  assert.equal(backups.length, 1);
+  assert.deepEqual(await readFile(join(root, backups[0])), bytes);
+  if (process.platform !== 'win32')
+    assert.equal((await stat(join(root, backups[0]))).mode & 0o777, 0o600);
+  await assert.rejects(readFile(path), { code: 'ENOENT' });
+  assert.equal((await service.context()).pending, null);
+  assert.equal(sent.length, 0);
+  const fresh = await service.review({ feedback: 'Synthetic fresh report.', includeReport: true });
+  assert.notEqual(fresh.reviewId, untrustedId);
+  assert.ok(!fresh.content!.includes('synthetic-private-state'));
+  assert.equal(sent.length, 0);
+  await service.send(fresh.reviewId);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].submissionId, fresh.reviewId);
+  await assert.rejects(service.recover({ confirm: true }), /Check the saved report status/);
+  const restored = createStartupFeedback(options);
+  assert.equal((await restored.context()).pending?.submissionId, fresh.reviewId);
+  assert.equal(sent.length, 1);
+});
+
+test('startup recovery refuses a failed durable backup and retries a recovered status read', async (t) => {
+  const { createStartupFeedback } = await import('../src/server/startup-feedback.ts');
+  const filesystem = (await import('node:fs/promises')).default;
+  const { syncBuiltinESMExports } = await import('node:module');
+  const { randomUUID } = await import('node:crypto');
+  const root = await mkdtemp(join(tmpdir(), 'nod-status-preserve-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const path = join(root, 'startup-feedback.json');
+  const bytes = Buffer.from('Synthetic corrupt state\u0000private');
+  await filesystem.writeFile(path, bytes);
+  let submits = 0;
+  let lookups = 0;
+  const options = {
+    dataRoot: root,
+    secrets: [],
+    names: [],
+    status: { phase: 'error' },
+    context: {
+      appVersion: '0.9.0',
+      appRelease: 'a'.repeat(40),
+      appModified: false,
+      development: false,
+      source: 'desktop' as const,
+      platform: 'darwin-arm64',
+    },
+    delivery: {
+      configured: true,
+      recipient: 'n8n',
+      async submit(value: import('../src/ports/feedback.ts').FeedbackEnvelope) {
+        submits++;
+        return { submissionId: value.submissionId, status: 'submitted' as const };
+      },
+      async status(id: string) {
+        lookups++;
+        return { submissionId: id, status: 'unknown' as const };
+      },
+    },
+  };
+  const service = createStartupFeedback(options);
+  assert.equal((await service.context()).recovery?.canPreserve, true);
+  const probe = await filesystem.open(path, 'r');
+  const prototype = Object.getPrototypeOf(probe);
+  const originalSync = prototype.sync;
+  await probe.close();
+  try {
+    prototype.sync = async function (this: import('node:fs/promises').FileHandle) {
+      const info = await this.stat();
+      if (info.isFile())
+        throw Object.assign(new Error('EIO: Synthetic backup sync failure.'), { code: 'EIO' });
+      return originalSync.call(this);
+    };
+    await assert.rejects(service.recover({ confirm: true }), /EIO/);
+    assert.deepEqual(await filesystem.readFile(path), bytes);
+    assert.equal((await service.context()).recovery?.canPreserve, true);
+    await assert.rejects(
+      service.review({ feedback: 'Synthetic blocked report.', includeReport: false }),
+    );
+    assert.equal(submits, 0);
+  } finally {
+    prototype.sync = originalSync;
+  }
+  if (process.platform !== 'win32') {
+    try {
+      prototype.sync = async function (this: import('node:fs/promises').FileHandle) {
+        if ((await this.stat()).isDirectory())
+          throw Object.assign(new Error('EIO: Synthetic backup directory sync failure.'), {
+            code: 'EIO',
+          });
+        return originalSync.call(this);
+      };
+      await assert.rejects(service.recover({ confirm: true }), /EIO/);
+      assert.deepEqual(await filesystem.readFile(path), bytes);
+      assert.equal((await service.context()).recovery?.canPreserve, true);
+    } finally {
+      prototype.sync = originalSync;
+    }
+  }
+  await service.recover({ confirm: true });
+  assert.equal((await service.context()).pending, null);
+  const id = randomUUID();
+  await filesystem.writeFile(
+    path,
+    JSON.stringify({ submissionId: id, payloadHash: 'b'.repeat(64) }),
+  );
+  const originalOpen = filesystem.open;
+  let fail = true;
+  const retrying = createStartupFeedback(options);
+  try {
+    filesystem.open = (async (...args: Parameters<typeof originalOpen>) => {
+      if (fail && String(args[0]) === path)
+        throw Object.assign(new Error('EACCES: Synthetic transient read failure.'), {
+          code: 'EACCES',
+        });
+      return originalOpen(...args);
+    }) as typeof originalOpen;
+    syncBuiltinESMExports();
+    const unavailable = await retrying.context();
+    assert.equal(unavailable.recovery?.canPreserve, false);
+    assert.match(unavailable.recovery!.message, /EACCES/);
+    fail = false;
+    assert.equal((await retrying.context()).pending?.submissionId, id);
+    await assert.rejects(retrying.recover({ confirm: true }), /Check the saved report status/);
+    await assert.rejects(
+      retrying.review({ feedback: 'Synthetic duplicate refusal.', includeReport: false }),
+      /previous report status/,
+    );
+    assert.equal(lookups, 1);
+    assert.equal(submits, 0);
+  } finally {
+    filesystem.open = originalOpen;
+    syncBuiltinESMExports();
+  }
+});
+
+test(
+  'startup keeps the saved submission fence when durable save and rollback both fail',
+  { skip: process.platform === 'win32' },
+  async (t) => {
+    const { createStartupFeedback } = await import('../src/server/startup-feedback.ts');
+    const filesystem = (await import('node:fs/promises')).default;
+    const { syncBuiltinESMExports } = await import('node:module');
+    const root = await mkdtemp(join(tmpdir(), 'nod-report-rollback-'));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const path = join(root, 'startup-feedback.json');
+    let submits = 0;
+    const options = {
+      dataRoot: root,
+      secrets: [],
+      names: [],
+      status: { phase: 'error' },
+      context: {
+        appVersion: '0.9.0',
+        appRelease: 'a'.repeat(40),
+        appModified: false,
+        development: false,
+        source: 'desktop' as const,
+        platform: 'darwin-arm64',
+      },
+      delivery: {
+        configured: true,
+        recipient: 'n8n',
+        async submit(value: import('../src/ports/feedback.ts').FeedbackEnvelope) {
+          submits++;
+          return { submissionId: value.submissionId, status: 'submitted' as const };
+        },
+        async status(id: string) {
+          return { submissionId: id, status: 'unknown' as const };
+        },
+      },
+    };
+    const service = createStartupFeedback(options);
+    const review = await service.review({
+      feedback: 'Synthetic durable report.',
+      includeReport: false,
+    });
+    const directory = await filesystem.open(root, 'r');
+    const prototype = Object.getPrototypeOf(directory);
+    const originalSync = prototype.sync;
+    const originalRm = filesystem.rm;
+    await directory.close();
+    try {
+      prototype.sync = async function (this: import('node:fs/promises').FileHandle) {
+        if ((await this.stat()).isDirectory())
+          throw Object.assign(new Error('EIO: Synthetic directory save failure.'), { code: 'EIO' });
+        return originalSync.call(this);
+      };
+      filesystem.rm = (async (...args: Parameters<typeof originalRm>) => {
+        if (String(args[0]) === path)
+          throw Object.assign(new Error('EPERM: Synthetic rollback refusal.'), { code: 'EPERM' });
+        return originalRm(...args);
+      }) as typeof originalRm;
+      syncBuiltinESMExports();
+      await assert.rejects(
+        service.send(review.reviewId),
+        /previous saved report status could not be restored/,
+      );
+      assert.equal(
+        JSON.parse(await filesystem.readFile(path, 'utf8')).submissionId,
+        review.reviewId,
+      );
+      assert.equal((await service.context()).pending?.submissionId, review.reviewId);
+      assert.equal((await service.send(review.reviewId)).status, 'unknown');
+      await assert.rejects(
+        service.review({ feedback: 'Synthetic replacement.', includeReport: false }),
+        /previous report status/,
+      );
+      assert.equal(submits, 0);
+      assert.equal(
+        (await createStartupFeedback(options).context()).pending?.submissionId,
+        review.reviewId,
+      );
+    } finally {
+      prototype.sync = originalSync;
+      filesystem.rm = originalRm;
+      syncBuiltinESMExports();
+    }
+  },
+);
+
+test('startup exports and receipts hide original overlapping private spans before text changes', async (t) => {
+  const { createStartupFeedback } = await import('../src/server/startup-feedback.ts');
+  const root = await mkdtemp(join(tmpdir(), 'nod-report-overlap-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const cases = [
+    {
+      name: 'contained',
+      secrets: ['k7X', 'k7Xsynthetic-private-contained'],
+      input: 'k7Xsynthetic-private-contained',
+    },
+    {
+      name: 'crossing',
+      secrets: ['prefixABC', 'ABCsynthetic-private-cross-tail'],
+      input: 'prefixABCsynthetic-private-cross-tail',
+    },
+    {
+      name: 'chain',
+      secrets: ['prefixABC', 'ABCsynthetic-private-middle', 'middleXYZtail'],
+      input: 'prefixABCsynthetic-private-middleXYZtail',
+    },
+    {
+      name: 'adjacent',
+      secrets: ['synthetic-private-first', 'synthetic-private-second'],
+      input: 'synthetic-private-firstsynthetic-private-second',
+    },
+    {
+      name: 'literal',
+      secrets: [String.raw`synthetic+(private)[value]\key`],
+      input: String.raw`synthetic+(private)[value]\key`,
+    },
+    {
+      name: 'repeated masks',
+      secrets: ['red', 'synthetic-private-repeat'],
+      input: '[redacted] synthetic-private-repeat [redacted]',
+    },
+    {
+      name: 'POSIX root',
+      secrets: ['/Applications/Synthetic Owner/engine', 'engine/synthetic-private-path-tail'],
+      input: '/Applications/Synthetic Owner/engine/synthetic-private-path-tail',
+    },
+    {
+      name: 'Windows root',
+      secrets: [
+        String.raw`C:\Synthetic Owner\engine`,
+        String.raw`engine\synthetic-private-path-tail`,
+      ],
+      input: String.raw`C:\Synthetic Owner\engine\synthetic-private-path-tail`,
+    },
+    {
+      name: 'short credential in root',
+      secrets: ['/', '/Applications/Synthetic Owner/engine'],
+      input: '/Applications/Synthetic Owner/engine/startup',
+    },
+  ];
+  for (const [index, item] of cases.entries())
+    await t.test(item.name, async () => {
+      let exported = '';
+      const service = createStartupFeedback({
+        dataRoot: join(root, String(index)),
+        status: {
+          phase: 'error',
+          error: `Synthetic failure EIO ${item.input}`,
+          failure: Object.assign(new Error(item.input), { code: 'EIO' }),
+        },
+        context: {
+          appVersion: '0.9.0',
+          appRelease: 'a'.repeat(40),
+          appModified: false,
+          development: false,
+          source: 'desktop',
+          platform: 'darwin-arm64',
+        },
+        delivery: {
+          configured: true,
+          recipient: 'n8n',
+          async submit(envelope) {
+            exported = Buffer.from(envelope.report!.data, 'base64').toString('utf8');
+            return {
+              submissionId: envelope.submissionId,
+              status: 'submitted',
+              message: `Synthetic collector reason EIO ${item.input}`,
+            };
+          },
+          status: () => assert.fail('No status request is needed.'),
+        },
+      });
+      const review = await service.review({
+        feedback: 'Synthetic overlap report.',
+        includeReport: true,
+      });
+      const result = await service.send(review.reviewId);
+      assert.equal(exported, review.content);
+      assert.equal(result.message, undefined);
+      assert.equal(result.messageOmitted, true);
+      for (const value of [exported, JSON.stringify(result)]) {
+        assert.ok(!value.includes('synthetic-private'));
+        assert.ok(!value.includes('Synthetic Owner'));
+        assert.ok(!value.includes(String.raw`synthetic+(private)[value]\key`));
+        assert.ok(!value.includes('[['));
+      }
+    });
+});
+
+test('startup attachment repair keeps the original ID and bytes and never repeats the description', async (t) => {
+  const { createStartupFeedback } = await import('../src/server/startup-feedback.ts');
+  const root = await mkdtemp(join(tmpdir(), 'nod-report-repair-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const calls: import('../src/ports/feedback.ts').FeedbackEnvelope[] = [];
+  let release!: (value: import('../src/shared/feedback.ts').FeedbackReceipt) => void;
+  let dispatch!: () => void;
+  const dispatched = new Promise<void>((resolve) => {
+    dispatch = resolve;
+  });
+  let hold = true;
+  let remote: 'partial' | 'submitted' = 'partial';
+  const options = {
+    dataRoot: root,
+    secrets: ['synthetic-private-key'],
+    names: [],
+    status: { phase: 'error', error: 'Synthetic failure synthetic-private-key' },
+    context: {
+      appVersion: '0.9.0',
+      appRelease: 'a'.repeat(40),
+      appModified: false,
+      development: false,
+      source: 'desktop' as const,
+      platform: 'darwin-arm64',
+    },
+    delivery: {
+      configured: true,
+      recipient: 'n8n',
+      async submit(
+        value: import('../src/ports/feedback.ts').FeedbackEnvelope,
+      ): Promise<import('../src/shared/feedback.ts').FeedbackReceipt> {
+        calls.push(value);
+        if (value.action === 'repair' && hold) {
+          dispatch();
+          return new Promise((resolve) => {
+            release = resolve;
+          });
+        }
+        return {
+          submissionId: value.submissionId,
+          status: value.action === 'repair' ? 'submitted' : 'partial',
+          message: 'Synthetic delivery detail synthetic-private-key',
+        };
+      },
+      async status(id: string) {
+        return { submissionId: id, status: remote };
+      },
+    },
+  };
+  const service = createStartupFeedback(options);
+  const review = await service.review({
+    feedback: 'Synthetic original description.',
+    includeReport: true,
+  });
+  const partialReceipt = await service.send(review.reviewId);
+  assert.equal(partialReceipt.canRetryAttachments, true);
+  assert.equal(partialReceipt.message, undefined);
+  assert.equal(partialReceipt.messageOmitted, true);
+  const repairing = service.repair(review.reviewId);
+  await dispatched;
+  const duplicate = service.repair(review.reviewId);
+  assert.equal(calls.length, 2);
+  const { action, ...same } = calls[1];
+  assert.equal(action, 'repair');
+  assert.deepEqual(same, calls[0]);
+  release({ submissionId: review.reviewId, status: 'unknown' });
+  assert.equal((await repairing).status, 'unknown');
+  assert.equal((await duplicate).status, 'unknown');
+  await assert.rejects(service.repair(review.reviewId), /Check the report status/);
+  await assert.rejects(
+    service.review({ feedback: 'Synthetic new description.', includeReport: true }),
+    /previous report status/,
+  );
+  assert.equal((await service.status())?.status, 'partial');
+  hold = false;
+  assert.equal((await service.repair(review.reviewId)).status, 'submitted');
+  assert.equal(calls.filter((value) => !value.action).length, 1);
+  const second = await service.review({
+    feedback: 'Synthetic second report.',
+    includeReport: true,
+  });
+  await service.send(second.reviewId);
+  const restarted = createStartupFeedback(options);
+  assert.equal((await restarted.context()).pending?.canRetryAttachments, false);
+  await assert.rejects(restarted.repair(second.reviewId), /original report bytes/);
+  assert.equal(calls.filter((value) => !value.action).length, 2);
+  const fresh = await restarted.review({ feedback: 'Synthetic fresh bytes.', includeReport: true });
+  assert.notEqual(fresh.reviewId, second.reviewId);
+  const originalNow = Date.now;
+  try {
+    Date.now = () => originalNow() + 3_600_001;
+    assert.equal((await service.status())?.canRetryAttachments, false);
+    await assert.rejects(service.repair(second.reviewId), /original report bytes/);
+  } finally {
+    Date.now = originalNow;
+  }
+  assert.equal(calls.filter((value) => !value.action).length, 2);
+});
+
+test('startup not-sent evidence binds an expired review and survives a clock change', async (t) => {
+  const { createStartupFeedback } = await import('../src/server/startup-feedback.ts');
+  const { writeFile } = await import('node:fs/promises');
+  const root = await mkdtemp(join(tmpdir(), 'nod-report-expiry-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const olderId = randomUUID();
+  await writeFile(
+    join(root, 'startup-feedback.json'),
+    JSON.stringify({ submissionId: olderId, payloadHash: 'a'.repeat(64) }),
+  );
+  let now = Date.now();
+  const originalNow = now;
+  t.mock.method(Date, 'now', () => now);
+  let submits = 0;
+  const service = createStartupFeedback({
+    dataRoot: root,
+    status: { phase: 'error' },
+    context: {
+      appVersion: '0.9.0',
+      appRelease: 'a'.repeat(40),
+      appModified: false,
+      development: false,
+      source: 'desktop',
+      platform: 'darwin-arm64',
+    },
+    delivery: {
+      configured: true,
+      recipient: 'n8n',
+      submit: async (value) => {
+        submits++;
+        return { submissionId: value.submissionId, status: 'submitted' };
+      },
+      status: async (id) => ({ submissionId: id, status: 'submitted' }),
+    },
+  });
+  assert.equal((await service.context()).pending?.submissionId, olderId);
+  const expired = await service.review({
+    feedback: 'Synthetic expired review.',
+    includeReport: false,
+  });
+  now += 3600001;
+  await assert.rejects(service.send(expired.reviewId), /Review the report again/);
+  const evidence = await service.context();
+  assert.equal(evidence.notSentSubmissionId, expired.reviewId);
+  assert.equal(evidence.pending?.submissionId, olderId);
+  now = originalNow;
+  await assert.rejects(service.send(expired.reviewId), /Review the report again/);
+  assert.equal(submits, 0);
+  const fresh = await service.review({ feedback: 'Synthetic fresh review.', includeReport: false });
+  assert.notEqual(fresh.reviewId, expired.reviewId);
+  assert.equal((await service.context()).notSentSubmissionId, undefined);
+  await service.send(fresh.reviewId);
+  assert.equal(submits, 1);
+  assert.equal((await service.context()).notSentSubmissionId, undefined);
+});
+
+test('startup facts omit every prose shape without pattern matching or code inference', () => {
+  const values = [
+    '/Applications/Synthetic Owner/profile/workspaces/synthetic-private-contract.docx',
+    String.raw`C:\Synthetic Owner\profile\synthetic-private-contract.docx`,
+    '<profile>[redacted]workspaces[redacted]synthetic-private-contract.docx',
+    'https:[redacted][redacted]private.example.test[redacted]synthetic-private-url',
+    'synthetic-private-local[redacted]example.test',
+    'synthetic-private-local@example.test',
+    '@synthetic-private-handle',
+    '+34 600 123 456',
+    '%2FUsers%2Fsynthetic-private-owner%2Fcontract',
+    '{"name":"synthetic-private-owner","message":"HTTP 503 EIO"}',
+    'prefixABCsynthetic-private-cross-tail',
+    'prefixABCsynthetic-private-middleXYZtail',
+  ];
+  for (const value of values) {
+    const status = startupStatusFacts({
+      phase: 'error',
+      stage: value,
+      error: value,
+      details: value,
+      failure: { name: value, code: value, syscall: value, status: '503' },
+    });
+    const event = startupEventFacts(value, {
+      error: value,
+      durationMs: value,
+      path: value,
+      line: value,
+    });
+    const log = startupLogFacts({
+      entries: [{ ageMs: 5, line: value, event: value }],
+      truncated: false,
+    });
+    const encoded = JSON.stringify({ status, event, log });
+    assert.ok(!encoded.includes(value));
+    assert.equal(status.stage, 'unknown');
+    assert.equal(status.failure?.httpStatus, undefined);
+    assert.equal(status.failure?.errno, undefined);
+    assert.equal(event.event, 'diagnostic_text_omitted');
+    assert.equal(log.entries[0].textOmitted, true);
+  }
+});
+
+test('startup facts keep only structured bounded codes and do not call getters or serializers', () => {
+  let calls = 0;
+  const error = Object.assign(new TypeError('synthetic-private-error'), {
+    code: 'EACCES',
+    errno: -13,
+    statusCode: 0,
+    syscall: 'open',
+    status: 503,
+    signal: 'SIGTERM',
+    exitCode: 4294967295,
+    toJSON() {
+      calls++;
+      throw new Error('No serialization.');
+    },
+  });
+  Object.defineProperty(error, 'stack', {
+    get() {
+      calls++;
+      throw new Error('No stack read.');
+    },
+  });
+  const facts = startupErrorFacts(error);
+  assert.equal(
+    startupStatusFacts({ phase: 'preparing', runtime: { phase: 'downloading' } }).runtimePhase,
+    'downloading',
+  );
+  assert.deepEqual(facts, {
+    detailsOmitted: true,
+    class: 'TypeError',
+    errno: 'EACCES',
+    syscall: 'open',
+    httpStatus: 503,
+    exitCode: 4294967295,
+    signal: 'SIGTERM',
+  });
+  const poisoned = Object.defineProperties(
+    {},
+    Object.fromEntries(
+      [
+        'name',
+        'code',
+        'syscall',
+        'status',
+        'phase',
+        'stage',
+        'runtime',
+        'error',
+        'failure',
+        'message',
+      ].map((key) => [
+        key,
+        {
+          get() {
+            calls++;
+            throw new Error('No getter read.');
+          },
+        },
+      ]),
+    ),
+  );
+  JSON.stringify(startupStatusFacts(poisoned));
+  JSON.stringify(startupErrorFacts(poisoned));
+  JSON.stringify(startupEventFacts('runtime_failed', poisoned));
+  assert.deepEqual(startupReceiptFacts(poisoned, 'synthetic-owned-id'), {
+    submissionId: 'synthetic-owned-id',
+    status: 'unknown',
+  });
+  const receipt = startupReceiptFacts(
+    { status: 'rejected', message: 'synthetic-private-receipt', httpStatus: 400 },
+    'synthetic-owned-id',
+  );
+  assert.deepEqual(receipt, {
+    submissionId: 'synthetic-owned-id',
+    status: 'rejected',
+    httpStatus: 400,
+    messageOmitted: true,
+  });
+  assert.ok(!startupFailureMessage(error).includes('synthetic-private'));
+  assert.match(startupFailureMessage(error), /EACCES.*open.*HTTP 503/);
+  assert.match(
+    startupFailureMessage(new StartupFeedbackError('review_required')),
+    /Review the report again/,
+  );
+  assert.equal(
+    startupReceiptFacts(
+      { ...receipt, issueUrl: 'https://private.example.test/synthetic-private' },
+      'synthetic-owned-id',
+    ).issueUrl,
+    undefined,
+  );
+  assert.equal(calls, 0);
+  for (const value of [-1, 1.5, Infinity, NaN, 86400001])
+    assert.equal(startupEventFacts('update', { durationMs: value }).durationMs, undefined);
+  assert.equal(
+    startupErrorFacts({ code: 'synthetic-private-code', status: 600 }).httpStatus,
+    undefined,
+  );
+});
