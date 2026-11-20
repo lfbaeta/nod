@@ -233,11 +233,11 @@ Open the **Settings** page, then **Models** to choose the model Nod uses from yo
 
 ## Adjust the sidebar
 
-On a wide screen, select the sidebar button to hide or show the sidebar. In the desktop app it sits at the top-left of the window, beside the traffic lights on a Mac. Drag the sidebar's right edge to make it narrower or wider; drag it far to the left to hide the sidebar, and drag from the window's left edge to bring it back. Narrow screens use the navigation menu at the top.
+On a wide screen, move your pointer near the sidebar's right edge to reveal its middle button. Select it to expand or collapse the sidebar. You can also Tab to the button; on touch screens, it stays visible. Narrow screens use the navigation menu at the top.
 
 ## Desktop shortcuts
 
-In the desktop app, hold Command on a Mac or Ctrl on Windows and Linux to reveal the navigation tooltips. These are the same tooltips shown on hover. Use that key with 1–6 for Chat, Scheduled, Apps, Channels, Usage and Vault, including while the chat message box is focused; B hides or shows the sidebar, and comma opens Settings. Web browsers keep their own shortcuts.
+In the desktop app, hold Command on a Mac or Ctrl on Windows and Linux to reveal the navigation tooltips. These are the same tooltips shown on hover. Use that key with 1–6 for Chat, Scheduled, Apps, Channels, Usage and Vault, including while the chat message box is focused; B expands or collapses the sidebar, and comma opens Settings. Web browsers keep their own shortcuts.
 
 ## React to messages
 

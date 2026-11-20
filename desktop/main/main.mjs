@@ -941,14 +941,6 @@ async function openExternal(value) {
 
 function protectWindow(window, origin) {
   if (origin) trackZoomFactor(window);
-  if (origin)
-    for (const [name, fullScreen] of [
-      ['enter-full-screen', true],
-      ['leave-full-screen', false],
-    ])
-      window.on(name, () => {
-        if (!window.isDestroyed()) window.webContents.send('nod:fullscreen', fullScreen);
-      });
   window.on('focus', updateReadinessNotice);
   for (const event of ['blur', 'hide', 'closed'])
     window.on(event, () => setTimeout(updateReadinessNotice, 100));
@@ -3456,10 +3448,6 @@ else {
           appUIOpenings.set(distinctId, opening);
         }
         return opening;
-      });
-      ipcMain.handle('nod:fullscreen:get', (event) => {
-        if (!isEngine(event)) throw new Error('This action is unavailable.');
-        return BrowserWindow.fromWebContents(event.sender)?.isFullScreen() ?? false;
       });
       ipcMain.handle('nod:preferences:get', (event) => {
         if (!isSetup(event) && !isEngine(event)) throw new Error('This action is unavailable.');
