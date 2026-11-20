@@ -226,7 +226,7 @@ Describe the failure, then select **Review**. The startup report contains only f
 
 If the send result is unknown, select **Check status** while the startup form is open. If Nod restarts into the startup error screen, reopen **Report bug** to check the saved submission instead of sending it again. **Show startup log** still opens the local log when you need it.
 
-If the description was sent without its diagnostic report, select **Send diagnostic report** to add the same reviewed attachment to the same report. This option needs the original bytes, which the helper keeps for up to one hour. After a restart, those bytes are gone. Check the saved status or start a new report; Nod does not rebuild an attachment under the old submission reference.
+If the description was sent without its diagnostic report, select **Send the report again** to add the same reviewed attachment to the same report. This option needs the original bytes, which the helper keeps for up to one hour. After a restart, those bytes are gone. Check the saved status or start a new report; Nod does not rebuild an attachment under the old submission reference.
 
 If Nod cannot read the saved submission status, select **Retry saved status**. Nod keeps sending blocked while that status is unknown. For a corrupt regular file, **Start a new report** warns that the previous report may already have been sent and a new one can be a duplicate. Nod first saves the original bytes in a local `startup-feedback-recovered-*.bin` file. If it cannot preserve them, sending stays blocked. After recovery, review the new report and select **Send report** yourself.
 

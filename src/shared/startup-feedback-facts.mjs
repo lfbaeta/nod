@@ -1,4 +1,16 @@
-const phases = new Set(['idle', 'preparing', 'starting', 'ready', 'error', 'updating', 'stopping']);
+const phases = new Set([
+  'idle',
+  'preparing',
+  'starting',
+  'ready',
+  'error',
+  'updating',
+  'stopping',
+  'downloading',
+  'verifying',
+  'install',
+  'installing',
+]);
 const stages = new Set([
   'computer',
   'runtime',
@@ -10,6 +22,7 @@ const stages = new Set([
   'update',
   'connect',
   'health',
+  'ready',
 ]);
 const events = new Set([
   'runtime_prepare',

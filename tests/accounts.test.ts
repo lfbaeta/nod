@@ -8819,6 +8819,10 @@ test('startup facts keep only structured bounded codes and do not call getters o
     },
   });
   const facts = startupErrorFacts(error);
+  assert.equal(
+    startupStatusFacts({ phase: 'preparing', runtime: { phase: 'downloading' } }).runtimePhase,
+    'downloading',
+  );
   assert.deepEqual(facts, {
     detailsOmitted: true,
     class: 'TypeError',

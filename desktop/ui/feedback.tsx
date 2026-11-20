@@ -216,7 +216,7 @@ export function StartupFeedback({
                 })
               }
             >
-              Send diagnostic report
+              Send the report again
             </Button>
           )}
           {(receipt?.status === 'unknown' || receipt?.status === 'partial') && (

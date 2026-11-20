@@ -10508,7 +10508,7 @@ test('the built startup report form requires exact review and keeps uncertain se
     page.window.document.body.textContent.includes('Sent without the diagnostic report.'),
   );
   assert.equal(requests.filter(([action]) => action === 'send').length, 2);
-  assert.equal(button('Send diagnostic report'), undefined);
+  assert.equal(button('Send the report again'), undefined);
   button('New report').click();
   await settle(() => page.window.document.querySelector('#startup-feedback-text')?.value === '');
   const repairedDescription = page.window.document.querySelector('#startup-feedback-text');
@@ -10525,17 +10525,15 @@ test('the built startup report form requires exact review and keeps uncertain se
   button('Send report').click();
   await settle(() => send);
   send({ submissionId: reportId, status: 'partial', canRetryAttachments: true });
-  await settle(
-    () => button('Send diagnostic report') && !button('Send diagnostic report').disabled,
-  );
-  button('Send diagnostic report').click();
-  button('Send diagnostic report')?.click();
+  await settle(() => button('Send the report again') && !button('Send the report again').disabled);
+  button('Send the report again').click();
+  button('Send the report again')?.click();
   await settle(() => repair);
   assert.equal(requests.filter(([action]) => action === 'repair').length, 1);
   assert.equal(requests.find(([action]) => action === 'repair')[1], reportId);
   repair({ submissionId: reportId, status: 'unknown' });
   await settle(() => button('Check status') && !button('Check status').disabled);
-  assert.equal(button('Send diagnostic report'), undefined);
+  assert.equal(button('Send the report again'), undefined);
   assert.equal(requests.filter(([action]) => action === 'send').length, 3);
   button('Check status').click();
   await settle(() => page.window.document.body.textContent.includes('Your report was sent.'));
