@@ -258,11 +258,19 @@ export function createFeedbackRedactor(options: { secrets: string[]; profile: Pe
 
     function structured(input: string, parsed: unknown, depth: number) {
       const strings: Array<{ start: number; end: number }> = [];
+      const escapes: Array<{ start: number; end: number }> = [];
       redactionMatches(input, /"(?:\\.|[^"\\])*"/g, (match) =>
         strings.push({ start: match.index, end: match.index + match[0].length }),
       );
+      redactionMatches(input, /\\(?:u[0-9a-f]{4}|["\\/bfnrt])/gi, (match) =>
+        escapes.push({ start: match.index, end: match.index + match[0].length }),
+      );
       if (
-        literalSpans(input).length ||
+        literalSpans(input).some(
+          (span) =>
+            !strings.some((token) => span.start > token.start && span.end < token.end) ||
+            escapes.some((escape) => span.start < escape.end && span.end > escape.start),
+        ) ||
         textSpans(input, false, budget).some(
           (span) => !strings.some((token) => span.start >= token.start && span.end <= token.end),
         )

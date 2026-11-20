@@ -3420,6 +3420,13 @@ test('feedback redaction checks original text and structure before masking', asy
       privateParts: [opaque],
     },
     {
+      id: 'json-literal-within-value-keeps-reason',
+      input: JSON.stringify({ message: `HTTP 503 for ${opaque}` }),
+      secrets: [opaque],
+      privateParts: [opaque],
+      kept: ['HTTP 503'],
+    },
+    {
       id: 'literal-across-embedded-json',
       input: `failed: ${JSON.stringify({ field: opaque })}`,
       secrets: [`failed: {"field":"${opaque}`],
