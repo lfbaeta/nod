@@ -6982,6 +6982,12 @@ test('a discovered tool schema reduces the room for its next result', async (t) 
 
 test('a browser tool or a guide loads the tools that go with it', async (t) => {
   const { toolDefinitions } = await import('../src/runtime/tools.ts');
+  const { createSkillLibrary } = await import('../src/providers/pi/skills.ts');
+  const { coreSkills } = await import('../src/runtime/prompt.ts');
+  const library = createSkillLibrary(
+    new URL('../src/runtime/skills/', import.meta.url).pathname,
+    coreSkills,
+  );
   const browserTools = ['browser', 'browser_session', 'sign_in', 'pay'] as const;
   const url = 'https://people.example.test/in/synthetic';
   const browsing = { tools: browserTools, loads: ['sign_in', 'pay'] };
@@ -7046,7 +7052,7 @@ test('a browser tool or a guide loads the tools that go with it', async (t) => {
           ...(name === 'skills'
             ? {
                 companions: (args: Record<string, unknown>) =>
-                  args.name === 'travel' ? ['flights'] : [],
+                  library.tools?.(String(args.name)) ?? [],
               }
             : {}),
           parameters: toolDefinitions[name].parameters as Record<string, unknown>,

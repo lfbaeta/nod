@@ -916,11 +916,13 @@ export function nodTools(
     {
       option: FlightOption;
       amount?: number;
-      price: (amount: number) => string;
+      upperBound: boolean;
+      money: Intl.NumberFormat;
       source: { label: string; url: string };
       asOf: string;
     }
   >();
+  let searched = 0;
   const withFlights = (value: unknown) => {
     const references = flightReferences.safeParse(value);
     if (!references.success) return value;
@@ -934,12 +936,15 @@ export function nodTools(
         return result;
       }),
     );
-    const { sources, asOf, ...rest } = references.data;
+    const { sources: _sources, asOf: _asOf, ...rest } = references.data;
     return {
       version: 1,
       ...rest,
       options: references.data.options.map(({ recommended, label }, index) => {
         const legs = parts[index]!;
+        const journeys = legs.flatMap((leg) => leg.option.journeys);
+        if (journeys.length > 6)
+          throw new Error('One flight card option can hold at most six journeys.');
         const total = legs.every((leg) => leg.amount !== undefined)
           ? legs.reduce((sum, leg) => sum + leg.amount!, 0)
           : undefined;
@@ -949,18 +954,22 @@ export function nodTools(
             : {
                 id: legs.map((leg) => leg.option.id).join('-'),
                 status: 'option' as const,
-                ...(total === undefined ? {} : { price: legs[0]!.price(total) }),
-                journeys: legs.flatMap((leg) => leg.option.journeys),
+                ...(total === undefined
+                  ? {}
+                  : {
+                      price: `${legs.some((leg) => leg.upperBound) ? '≤ ' : ''}${legs[0]!.money.format(total)}`,
+                    }),
+                journeys,
               }),
           ...(recommended ? { recommended } : {}),
           ...(label ? { label } : {}),
         };
       }),
-      sources:
-        Array.isArray(sources) && sources.length
-          ? sources
-          : [...new Map(parts.flat().map((leg) => [leg.source.url, leg.source])).values()],
-      asOf: typeof asOf === 'string' && asOf.trim() ? asOf : parts[0]![0]!.asOf,
+      sources: [...new Map(parts.flat().map((leg) => [leg.source.url, leg.source])).values()].slice(
+        0,
+        8,
+      ),
+      asOf: parts[0]![0]!.asOf,
     };
   };
   const { browserId } = turn.execution;
@@ -1085,6 +1094,8 @@ export function nodTools(
     ...(flights
       ? [
           bind(toolDefinitions.flights, async (p) => {
+            const first = searched;
+            searched += p.searches.length;
             const result = await flights.search(
               {
                 ...p,
@@ -1092,6 +1103,7 @@ export function nodTools(
                 children: p.children ?? 0,
                 infants: p.infants ?? 0,
                 cabin: p.cabin ?? 'economy',
+                first,
               },
               signal,
             );
@@ -1112,10 +1124,15 @@ export function nodTools(
                 if ('error' in search) return search;
                 const { options, upperBound, ...rest } = search;
                 const source = { label: 'Google Flights', url: search.url };
-                const price = (amount: number) =>
-                  `${upperBound ? '≤ ' : ''}${money.format(amount)}`;
                 for (const { option, amount } of options)
-                  found.set(option.id, { option, amount, price, source, asOf });
+                  found.set(option.id, {
+                    option,
+                    amount,
+                    upperBound: Boolean(upperBound),
+                    money,
+                    source,
+                    asOf,
+                  });
                 return { ...rest, options: options.map((item) => item.summary) };
               }),
             };

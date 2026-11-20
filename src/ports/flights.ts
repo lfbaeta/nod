@@ -9,6 +9,7 @@ export interface FlightSearchRequest {
   maxStops?: number;
   currency: string;
   language: string;
+  first?: number;
 }
 
 export type FlightOption = Extract<Presentation, { type: 'flights' }>['options'][number];

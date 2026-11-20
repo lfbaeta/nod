@@ -39,7 +39,7 @@ interface Leg {
 
 interface Journey {
   legs: Leg[];
-  layovers: number[];
+  layovers: Array<number | undefined>;
   minutes?: number;
   selfTransfer: boolean;
   price?: number;
@@ -155,7 +155,7 @@ function leg(raw: unknown[]): Leg {
     !leg.number ||
     !leg.from ||
     !leg.to ||
-    [leg.departure, leg.arrival].some((at) => !at.date?.[0] || !at.time)
+    [leg.departure, leg.arrival].some((at) => at.date?.length !== 3 || !Array.isArray(at.time))
   )
     throw new Error('incomplete leg');
   return leg;
@@ -170,11 +170,9 @@ function journey(row: unknown[]): Journey {
   const stated = Array.isArray(detail[13]) ? (detail[13] as unknown[][]) : [];
   return {
     legs,
-    layovers: legs.slice(1).map((next, index) => {
+    layovers: legs.slice(1).map((_, index) => {
       const minutes = stated[index]?.[0];
-      return typeof minutes === 'number'
-        ? minutes
-        : Math.round((instant(next.departure) - instant(legs[index]!.arrival)) / 60_000);
+      return typeof minutes === 'number' ? minutes : undefined;
     }),
     minutes: typeof detail[9] === 'number' ? detail[9] : undefined,
     selfTransfer: detail[12] === 1,
@@ -207,7 +205,12 @@ async function results(url: string, signal: AbortSignal) {
     throw new Error(
       `Google Flights returned a page without flight results${title ? ` (${title})` : ''}.`,
     );
-  const payload = JSON.parse(data) as unknown[];
+  let payload: unknown[];
+  try {
+    payload = JSON.parse(data) as unknown[];
+  } catch {
+    throw new Error('Google Flights returned result data that could not be read.');
+  }
   const rows = [2, 3].flatMap((index) => {
     const group = (payload[index] as unknown[][] | null)?.[0];
     return Array.isArray(group) ? (group as unknown[][]) : [];
@@ -233,8 +236,8 @@ function summary(id: string, trip: Trip, price: (amount: number) => string, cabi
       const previous = item.legs[index]!;
       return [
         previous.to === next.from ? previous.to : `${previous.to}→${next.from} airport change`,
-        span(item.layovers[index]!),
-        ...(previous.arrival.date[2] === next.departure.date[2] ? [] : ['overnight']),
+        ...(item.layovers[index] === undefined ? [] : [span(item.layovers[index])]),
+        ...(isoDate(previous.arrival.date) === isoDate(next.departure.date) ? [] : ['overnight']),
       ].join(' ');
     });
     return [
@@ -317,7 +320,9 @@ function card(
         ...(position < item.legs.length - 1
           ? {
               connectionAfter: {
-                duration: length(item.layovers[position]!),
+                ...(item.layovers[position] === undefined
+                  ? {}
+                  : { duration: length(item.layovers[position]) }),
                 airportChange:
                   current.to === item.legs[position + 1]!.from ? ('no' as const) : ('yes' as const),
                 selfTransfer: !item.selfTransfer
@@ -356,25 +361,6 @@ async function trips(
   const back = segment(home, request.maxStops);
   const outbound = (legs?: Leg[]) => segment(search, request.maxStops, legs);
   const first = await results(searchUrl(request, [outbound(), back]), signal);
-  if (!first.length) {
-    const [out, ret] = await Promise.all([
-      oneWay(request, search, signal),
-      oneWay(request, home, signal),
-    ]);
-    return leading(out)
-      .flatMap((there) =>
-        leading(ret).map((again) => ({
-          price:
-            there.price === undefined || again.price === undefined
-              ? undefined
-              : there.price + again.price,
-          journeys: [there, again],
-          separate: true,
-        })),
-      )
-      .sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity))
-      .slice(0, shown);
-  }
   const settled = await Promise.allSettled(
     leading(first).map(async (out) =>
       leading(await results(searchUrl(request, [outbound(out.legs), back]), signal)).map(
@@ -383,10 +369,31 @@ async function trips(
     ),
   );
   const found = settled.flatMap((item) => (item.status === 'fulfilled' ? item.value : []));
+  if (found.length) return found;
+  const [out, ret] = await Promise.all([
+    oneWay(request, search, signal),
+    oneWay(request, home, signal),
+  ]);
+  const separate = leading(out)
+    .flatMap((there) =>
+      leading(ret).map((again) => ({
+        price:
+          there.price === undefined || again.price === undefined
+            ? undefined
+            : there.price + again.price,
+        journeys: [there, again],
+        separate: true,
+      })),
+    )
+    .sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity))
+    .slice(0, shown);
   const failed = settled.find((item) => item.status === 'rejected');
-  if (!found.length && failed) throw failed.reason;
-  return found;
+  if (!separate.length && failed) throw failed.reason;
+  return separate;
 }
+
+const priced = (list: Trip[]) => list.some((trip) => trip.price !== undefined);
+const letter = (index: number) => (index < 26 ? String.fromCharCode(65 + index) : `X${index}-`);
 
 export function createGoogleFlights(): FlightSearch {
   return {
@@ -402,17 +409,16 @@ export function createGoogleFlights(): FlightSearch {
         });
       const local = money(request.language);
       const english = money('en');
-      const searchedAt = new Date().toISOString();
       const searches = await Promise.all(
         request.searches.map(async (search, index) => {
-          const letter = String.fromCharCode(65 + index);
+          const prefix = letter((request.first ?? 0) + index);
           const label = `${search.from.join('/')} → ${search.to.join('/')} ${search.date}${search.returnDate ? ` – ${search.returnDate}` : ''}`;
           const url = sourceUrl(request, search);
           try {
             let found = await trips(request, search, signal);
-            const family = request.children + request.infants > 0 && !found.length;
-            if (family)
-              found = await trips(
+            let family = false;
+            if (request.children + request.infants > 0 && !priced(found)) {
+              const adults = await trips(
                 {
                   ...request,
                   adults: request.adults + request.children + request.infants,
@@ -422,6 +428,8 @@ export function createGoogleFlights(): FlightSearch {
                 search,
                 signal,
               );
+              if (priced(adults)) [found, family] = [adults, true];
+            }
             const bound = (format: Intl.NumberFormat) => (amount: number) =>
               `${family ? '≤ ' : ''}${format.format(amount)}`;
             const cheapest = found.reduce<number | undefined>(
@@ -444,9 +452,9 @@ export function createGoogleFlights(): FlightSearch {
                       upperBound: true,
                     }
                   : {}),
-              ...(cheapest === undefined ? {} : { cheapest: `${letter}${cheapest + 1}` }),
+              ...(cheapest === undefined ? {} : { cheapest: `${prefix}${cheapest + 1}` }),
               options: found.map((trip, position) => {
-                const id = `${letter}${position + 1}`;
+                const id = `${prefix}${position + 1}`;
                 return {
                   summary: summary(id, trip, bound(english), cabins.indexOf(request.cabin) + 1),
                   option: card(id, trip, request.language, bound(local)),
@@ -460,7 +468,11 @@ export function createGoogleFlights(): FlightSearch {
           }
         }),
       );
-      return { searchedAt, travellers: travellers(request).join(', '), searches };
+      return {
+        searchedAt: new Date().toISOString(),
+        travellers: travellers(request).join(', '),
+        searches,
+      };
     },
   };
 }

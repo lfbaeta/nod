@@ -141,6 +141,7 @@ const delimitedTools = new Set([
   'get_search_content',
   'source_check',
   'codemode',
+  'flights',
 ]);
 export function webTarget(name: string, params: unknown, redact: (text: string) => string) {
   const input = (params ?? {}) as Record<string, unknown>;
