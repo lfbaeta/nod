@@ -71,7 +71,9 @@ async function json(url, request, signal, accept = 'application/json') {
       await response.body?.cancel();
       continue;
     }
-    if (!response.ok || !response.body) throw new Error('Desktop updates are unavailable.');
+    if (!response.ok)
+      throw new Error(`The desktop update request failed (HTTP ${response.status}).`);
+    if (!response.body) throw new Error('The desktop update response is empty.');
     const chunks = [];
     let bytes = 0;
     for await (const chunk of response.body) {
@@ -91,6 +93,8 @@ async function githubReleaseTag(repository, name, request, signal) {
     redirect: 'manual',
   });
   await response.body?.cancel();
+  if (response.status >= 400)
+    throw new Error(`The desktop update request failed (HTTP ${response.status}).`);
   const target = new URL(response.headers.get('location') || '', alias);
   const prefix = `/${repository}/releases/download/`;
   const path = target.pathname.slice(prefix.length);

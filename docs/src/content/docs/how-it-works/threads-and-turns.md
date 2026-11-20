@@ -160,6 +160,7 @@ Your messages from a withdrawn turn stay in the chat, and Nod can still find the
 - A session that starts fresh doesn't get them as recent chat, and related-message and memory recall leave them out. Nod's own replies from that turn stay, so later work knows what happened.
 - The trust check doesn't count them as your words, and a later short reply never accepts something Nod proposed in that turn.
 - Approval questions do not use them, and memory learning skips them unless Nod names one when you ask it to remember something.
+- A planned task check or another resume does not copy a withdrawn turn's request into its prompt.
 
 The session's next turn is told how its previous request ended, so Nod doesn't pick it up again on its own. What that turn already did stays in the session's context. To continue, ask again. Nod finds the request with `history_search`, and the trust check asks before any action your new words don't cover.
 
@@ -168,6 +169,16 @@ When the monthly spending limit is reached, schedule, event, task and resume tur
 Each session also checks in with you. When its model spend since your last message to it passes the task check-in ($5 by default, changed by asking Nod in chat), its tools refuse new work and the model asks you whether to keep going with `ask_user`. Reporting tools still work, and so do the task actions that report, update, finish, list or stop saved work; `task start` and `task reply` do not, in any session. Helpers stop at their next step. A model that keeps trying to work for two more steps ends the turn `failed` with a check-in notice. An observer turn that ends past the check-in without asking waits on that notice as its question instead, so no new batch starts until you reply. Your next message to that session starts a new count.
 
 ## Reset
+
+### Start fresh chat
+
+The owner can send `/clear` through web, desktop, Telegram or WhatsApp. The server handles it without a model call.
+
+Under the thread lock, it cancels only main-chat turns, saves the command, and records new context and view boundaries. This context change does not withdraw owner requests. Saved task and schedule instructions stay valid; a request already withdrawn by Stop or a model failure stays withdrawn. The next main-chat turn starts a fresh Pi transcript. Recent chat and automatic related-chat recall exclude earlier messages. Chat search can still read them.
+
+The intake boundary changes only after commit. Main-chat input still in progress, including transcription, is cancelled before it can save a new message or file. Web requests carry the last view boundary, so a queued main-chat message is refused after another client clears the chat. Addressed task replies keep their task session.
+
+The thread, workspace, browser, independent tasks, schedules, memory, accounts and settings stay. A repeated web command with the same message ID returns its first result and does not clear newer work. A stale thread ID or a message ID from another request is refused. The chat apps use their saved inbox transaction to handle the command once.
 
 ### Restart chat context
 

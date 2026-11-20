@@ -2,6 +2,9 @@ import type { TurnRef } from './thread.ts';
 
 export const browserOf = (turn: TurnRef) => turn.browserId ?? turn.threadId;
 
+export const taskMessageSql =
+  '(t.message_id=m.id OR mt.task_id=t.id OR m.reply_to_message_id=t.message_id OR pt.task_id=t.id)';
+
 export function supersededSql(alias: string, newer: string) {
   return `EXISTS(SELECT 1 FROM turns newer WHERE newer.owner_id=${alias}.owner_id AND newer.session_id=${alias}.session_id
     AND newer.id<>${alias}.id AND ${newer})`;
