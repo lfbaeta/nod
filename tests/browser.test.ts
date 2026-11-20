@@ -3435,6 +3435,44 @@ test('feedback redaction checks original text and structure before masking', asy
       ),
       privateParts: [opaque],
     },
+    {
+      id: 'encoded-name-after-field-limit',
+      input: Object.assign(
+        { value: opaque },
+        Object.fromEntries(Array.from({ length: 99 }, (_, index) => ['field' + index, index])),
+        { 'n%61me': 'Authorization' },
+      ),
+      privateParts: [opaque],
+      kept: ['[structured data omitted]'],
+    },
+    {
+      id: 'encoded-type-after-field-limit',
+      input: Object.assign(
+        { data: opaque },
+        Object.fromEntries(Array.from({ length: 99 }, (_, index) => ['field' + index, index])),
+        { 't%79pe': 'image' },
+      ),
+      privateParts: [opaque],
+      kept: ['[structured data omitted]'],
+    },
+    {
+      id: 'safe-object-below-field-limit',
+      input: Object.assign(
+        { status: 503 },
+        Object.fromEntries(Array.from({ length: 98 }, (_, index) => ['field' + index, index])),
+      ),
+      privateParts: [],
+      kept: ['"status":503', '"field97":97'],
+    },
+    {
+      id: 'safe-object-at-field-limit',
+      input: Object.assign(
+        { status: 503 },
+        Object.fromEntries(Array.from({ length: 99 }, (_, index) => ['field' + index, index])),
+      ),
+      privateParts: [],
+      kept: ['"status":503', '"field98":98'],
+    },
     { id: 'tuple-literal', input: tuple, secrets: ['Author'], privateParts: [opaque] },
     {
       id: 'json-tuple-literal',

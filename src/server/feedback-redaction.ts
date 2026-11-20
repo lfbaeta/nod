@@ -471,10 +471,7 @@ export function createFeedbackRedactor(options: { secrets: string[]; profile: Pe
             }
           })();
       for (const key of keys) {
-        if (++count > 100) {
-          result.truncated = true;
-          break;
-        }
+        if (++count > 100) return '[structured data omitted]';
         const property = Object.getOwnPropertyDescriptor(input, key);
         if (!property) continue;
         if (key.length > 200) {
