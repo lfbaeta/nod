@@ -39,6 +39,11 @@ import {
 } from './turn-chain.ts';
 import { resemblesTaskAcknowledgement } from '../shared/task-ack.ts';
 import { bareConfirmationAnswer } from './owner-instructions.ts';
+import {
+  activityIdentityKey,
+  activityIdentitySchema,
+  canonicalActivityIdentity,
+} from './activity-identity.ts';
 
 const now = z.string().trim().min(1);
 const waits = z.array(
@@ -61,6 +66,7 @@ const input = z.discriminatedUnion('action', [
       action: z.literal('start'),
       title: z.string().trim().min(1),
       key: z.string().trim().min(1).max(200).optional(),
+      activity: activityIdentitySchema.optional(),
       message: z.string().trim().min(1),
       doneWhen: z.string().trim().min(1),
       now,
@@ -342,12 +348,37 @@ export function createTasks(options: {
   }
 
   async function recordInput(client: PoolClient, id: string, turnId: string) {
-    const task = (
+    const occupied = (
       await client.query(
-        "UPDATE tasks SET revision=revision+1,state='open',closed_at=NULL,turn_id=$3,updated_at=now() WHERE id=$1 AND owner_id=$2 RETURNING revision,session_id",
-        [id, ownerId, turnId],
+        `SELECT next.id FROM tasks old JOIN tasks next
+           ON next.owner_id=old.owner_id AND next.activity_identity_key=old.activity_identity_key
+         WHERE old.id=$1 AND old.owner_id=$2 AND old.state<>'open'
+           AND old.activity_identity_key IS NOT NULL AND next.state='open' AND next.id<>old.id
+         LIMIT 1`,
+        [id, ownerId],
       )
     ).rows[0];
+    if (occupied)
+      throw failure(
+        'Another open task already covers this monitoring activity. Reply to that task instead.',
+        409,
+      );
+    let task: { revision: number; session_id: string } | undefined;
+    try {
+      task = (
+        await client.query<{ revision: number; session_id: string }>(
+          "UPDATE tasks SET revision=revision+1,state='open',closed_at=NULL,turn_id=$3,updated_at=now() WHERE id=$1 AND owner_id=$2 RETURNING revision,session_id",
+          [id, ownerId, turnId],
+        )
+      ).rows[0];
+    } catch (error) {
+      if ((error as { code?: string }).code === '23505')
+        throw failure(
+          'Another open task already covers this monitoring activity. Reply to that task instead.',
+          409,
+        );
+      throw error;
+    }
     await client.query('UPDATE turns SET task_id=$1,task_revision=$2 WHERE id=$3 AND owner_id=$4', [
       id,
       task.revision,
@@ -523,6 +554,8 @@ export function createTasks(options: {
     if (request.action === 'start') {
       if (current.task_id) throw failure('This session already has a task. Use update.');
       let startAfter: Date | undefined;
+      let activityKey: string | null = null;
+      let monitoringKey: string | null = null;
       if (current.proactive) {
         if (!request.key)
           throw failure('Use a stable source record and change as the key for this work.');
@@ -536,14 +569,26 @@ export function createTasks(options: {
           throw failure('Private preparation is paused.');
         const prefs = await preferences.get();
         if (isQuietTime(prefs)) startAfter = deliveryTime(prefs, Date.now()) ?? undefined;
+        const activity = request.activity ? canonicalActivityIdentity(request.activity) : undefined;
+        activityKey = `${turn.threadId}:${request.key}`;
+        monitoringKey = activity ? activityIdentityKey(activity) : null;
         const existing = (
           await client.query<{ id: string }>(
             `SELECT t.id FROM tasks t JOIN turns u ON u.id=t.turn_id AND u.owner_id=t.owner_id
            WHERE t.owner_id=$1 AND u.thread_id=$2 AND t.activity_key=$3`,
-            [ownerId, turn.threadId, `${turn.threadId}:${request.key}`],
+            [ownerId, turn.threadId, activityKey],
           )
         ).rows[0];
         if (existing) return (await read(client, { id: existing.id, closed: true }))[0];
+        if (monitoringKey) {
+          const open = (
+            await client.query<{ id: string }>(
+              `SELECT id FROM tasks WHERE owner_id=$1 AND activity_identity_key=$2 AND state='open'`,
+              [ownerId, monitoringKey],
+            )
+          ).rows[0];
+          if (open) return (await read(client, { id: open.id, closed: true }))[0];
+        }
       }
       id = randomUUID();
       const independent = current.proactive || current.session_id === turn.threadId;
@@ -570,9 +615,11 @@ export function createTasks(options: {
           ? prior.id
           : await insertAssistantMessage(client, turn, request.message);
       const sessionId = independent ? id : current.session_id;
-      await client.query(
-        `INSERT INTO tasks(id,owner_id,turn_id,session_id,source_message_id,message_id,title,done_when,brief,now_text,steps,waiting_for,next_check,applied_revision,activity_key,model)
-         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+      const inserted = await client.query<{ id: string }>(
+        `INSERT INTO tasks(id,owner_id,turn_id,session_id,source_message_id,message_id,title,done_when,brief,now_text,steps,waiting_for,next_check,applied_revision,activity_key,activity_identity_key,model)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+         ON CONFLICT DO NOTHING
+         RETURNING id`,
         [
           id,
           ownerId,
@@ -588,10 +635,25 @@ export function createTasks(options: {
           JSON.stringify(request.waitingFor ?? []),
           request.nextCheck ?? null,
           independent ? 0 : 1,
-          current.proactive ? `${turn.threadId}:${request.key}` : null,
+          current.proactive ? activityKey : null,
+          current.proactive ? monitoringKey : null,
           model ? JSON.stringify(model) : null,
         ],
       );
+      if (!inserted.rowCount && current.proactive) {
+        const existing = (
+          await client.query<{ id: string }>(
+            `SELECT t.id FROM tasks t JOIN turns u ON u.id=t.turn_id AND u.owner_id=t.owner_id
+             WHERE t.owner_id=$1 AND u.thread_id=$2 AND t.activity_key=$3
+             UNION ALL
+             SELECT id FROM tasks WHERE owner_id=$1 AND activity_identity_key=$4 AND state='open'
+             LIMIT 1`,
+            [ownerId, turn.threadId, activityKey, monitoringKey],
+          )
+        ).rows[0];
+        if (existing) return (await read(client, { id: existing.id, closed: true }))[0];
+        throw new Error('Observer task uniqueness conflict could not be resolved.');
+      }
       if (independent) {
         const source = (
           await client.query(
@@ -783,6 +845,9 @@ export function createTasks(options: {
       ALTER TABLE tasks ADD COLUMN IF NOT EXISTS activity_key text;
       ALTER TABLE tasks ADD COLUMN IF NOT EXISTS model jsonb;
       CREATE UNIQUE INDEX IF NOT EXISTS tasks_activity ON tasks(owner_id,activity_key) WHERE activity_key IS NOT NULL;
+      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS activity_identity_key text;
+      CREATE UNIQUE INDEX IF NOT EXISTS tasks_active_identity ON tasks(owner_id,activity_identity_key)
+        WHERE activity_identity_key IS NOT NULL AND state='open';
       ALTER TABLE tasks ADD COLUMN IF NOT EXISTS steps jsonb NOT NULL DEFAULT '[]';
       ALTER TABLE tasks ADD COLUMN IF NOT EXISTS step_index integer NOT NULL DEFAULT 0;
       ALTER TABLE tasks ADD COLUMN IF NOT EXISTS revision integer NOT NULL DEFAULT 1;

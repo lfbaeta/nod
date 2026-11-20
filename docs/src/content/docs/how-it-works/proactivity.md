@@ -78,6 +78,8 @@ The observer reads sources with `read_source`, saves work and nudges with `proac
 
 The observer's `read_source` and `proactive_issue` tools use the same input rules as the server. Each takes one required `input` object. A source read selects one mode: recent records, record IDs, tool search, or a tool call. A saved matter requires its identity, primary record, draft, evidence, timing, and type of change. The runtime checks these fields before the server reads or saves data.
 
+For monitoring work, the observer may also provide an exact structured activity identity: its objective, the source records checked, and the watched connection IDs. Nod keeps the original occurrence key, which replays the same task including after completion. When structured identity is present, an open task with the same owner-scoped identity is reused, including when a different occurrence key arrives during quiet hours. Closing that task releases the structured identity for a later occurrence. Without structured metadata, task behavior remains occurrence-key based.
+
 A separate task sends a draft only when your words permit it, through the [trust check](/trust/approvals/). An observer task keeps only your current notification rule and rules as its authority. Its generated brief grants no permission.
 
 ## Prepare the full result

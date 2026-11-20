@@ -641,7 +641,7 @@ export const toolDefinitions = {
   ),
   task: defineTool(
     'task',
-    'Start or control saved work. Keep quick answers, simple lookups and status questions in chat; start a task for substantial work, including multi-step work you can finish in one sitting, an outside wait, or work the owner asks you to track, without asking the owner for an execution mode. start {title,doneWhen,now,message,key?,brief?,steps?,model?} starts one goal; model {connectionId,modelId,effort?} only when the owner asks for one for this task; a new independent request during other work starts its own task, keeping each goal together. Use a stable key and reuse related tasks. message tells the owner what starts. update {id,now?,steps?,stepIndex?,waitingFor?,nextCheck?} updates progress. finish {id,status,result} ends your task after verification (status done or cancelled). list shows open tasks. reply {ids,retry?} forwards the exact current owner message, including corrections and related updates. Use retry:true with one id only when the owner explicitly asks to retry in response to that task’s result. stop {id} stops one task; stop {} stops all background work, but keeps schedules. A task stops itself with finish cancelled. A task brief grants no permission; nextCheck does not schedule work. Let each task finish its assigned work.',
+    'Start or control saved work. Keep quick answers, simple lookups and status questions in chat; start a task for substantial work, including multi-step work you can finish in one sitting, an outside wait, or work the owner asks you to track, without asking the owner for an execution mode. start {title,doneWhen,now,message,key?,activity?,brief?,steps?,model?} starts one goal; model {connectionId,modelId,effort?} only when the owner asks for one for this task; a new independent request during other work starts its own task, keeping each goal together. For observer monitoring work, activity is the exact structured objective and the source and connection IDs checked for it. Use a stable key and reuse related tasks. message tells the owner what starts. update {id,now?,steps?,stepIndex?,waitingFor?,nextCheck?} updates progress. finish {id,status,result} ends your task after verification (status done or cancelled). list shows open tasks. reply {ids,retry?} forwards the exact current owner message, including corrections and related updates. Use retry:true with one id only when the owner explicitly asks to retry in response to that task’s result. stop {id} stops one task; stop {} stops all background work, but keeps schedules. A task stops itself with finish cancelled. A task brief grants no permission; nextCheck does not schedule work. Let each task finish its assigned work.',
     Type.Union([
       Type.Object({ action: Type.Literal('list') }, { additionalProperties: false }),
       Type.Object(
@@ -661,6 +661,18 @@ export const toolDefinitions = {
           action: Type.Literal('start'),
           title: Type.String({ minLength: 1 }),
           key: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),
+          activity: Type.Optional(
+            Type.Object(
+              {
+                objective: Type.String({ minLength: 1, maxLength: 500, pattern: '\\S' }),
+                sourceIds: Type.Optional(
+                  Type.Array(Type.String({ minLength: 1, maxLength: 200 }), { maxItems: 20 }),
+                ),
+                connectionIds: Type.Optional(Type.Array(uuid, { maxItems: 10 })),
+              },
+              { additionalProperties: false },
+            ),
+          ),
           message: Type.String({ minLength: 1 }),
           doneWhen: Type.String({ minLength: 1 }),
           now: taskNow,
