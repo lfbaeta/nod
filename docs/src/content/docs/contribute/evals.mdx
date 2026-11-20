@@ -14,7 +14,7 @@ The short version: each attempt boots its own Nod with a real model. The apps, w
 For the landing-page results, benchmark definitions, and measurement limits, read [How we evaluate Nod](/how-it-works/benchmarks/).
 
 :::caution[Evals cost money]
-They call live models. An attempt costs about $0.10 to $0.50. A full controlled run has 357 attempts before time-window skips. The unit tests never call them.
+They call live models. An attempt costs about $0.10 to $0.50. A full controlled run has 360 attempts before time-window skips. The unit tests never call them.
 :::
 
 The collector requires a captured prompt for each successful background turn that opened the agent or recorded an agent request. A recorded source-screen result with no agent start or request needs no agent prompt. Missing records alone do not prove that a source screen ran. Its source reads and model usage still count. Missing prompts from executed agent work are measurement errors.
@@ -61,7 +61,7 @@ The fake apps are hand-written approximations of Composio's responses, not recor
    pnpm run eval:capability doctor --fix
    ```
 
-3. Run all 119 controlled cases, three attempts each.
+3. Run all 120 controlled cases, three attempts each.
 
    ```sh title="Terminal"
    pnpm run eval:capability run
@@ -73,13 +73,13 @@ For a small run, add `--tier pr --repeat 1`. To cap the spend at $20, add `--bud
 
 ### Run the release suite
 
-The release suite adds 253 cases: 206 of everyday work across every connected app, the browser, computer use, Vault and payments, files, memory, schedules, background events and the trust check, and 47 generated proactivity cases: 45 stress and population cases and two attention cases. Run it on your computer before a release. CI never runs it, because a full pass is several hundred attempts.
+The release suite adds 254 cases: 207 of everyday work across every connected app, the browser, computer use, Vault and payments, files, memory, schedules, background events and the trust check, and 47 generated proactivity cases: 45 stress and population cases and two attention cases. Run it on your computer before a release. CI never runs it, because a full pass is several hundred attempts.
 
 ```sh title="Terminal"
 pnpm run eval:capability run --tier release --repeat 3 --concurrency 3 --budget 500
 ```
 
-`--tier release` runs the release cases together with every controlled case, 372 attempts per repeat before time-window skips. Each attempt starts its own workspace and browser containers; `--concurrency 6` fits in 8 GB of Docker memory. Database connections are a separate limit. Start with concurrency two when you use a standard disposable database. Each attempt starts several connection pools. Parallel campaigns add their load. Increase concurrency only when the database has spare connections. To run one area, add `--capability vault`, or name cases with `--scenario`.
+`--tier release` runs the release cases together with every controlled case, 374 attempts per repeat before time-window skips. Each attempt starts its own workspace and browser containers; `--concurrency 6` fits in 8 GB of Docker memory. Database connections are a separate limit. Start with concurrency two when you use a standard disposable database. Each attempt starts several connection pools. Parallel campaigns add their load. Increase concurrency only when the database has spare connections. To run one area, add `--capability vault`, or name cases with `--scenario`.
 
 Results go to `.local/capability-evals/<label>/`. Open `report.html` to read every transcript and check. A label never overwrites an earlier run. If a worker fails before it can save checks, its log records the phase: start, prepare, play, collect, or grade.
 
@@ -287,7 +287,7 @@ flowchart TD
 
 ## The suite
 
-The suite has 376 cases: 119 controlled cases, 253 release cases, three live web cases and the harness canary.
+The suite has 378 cases: 120 controlled cases, 254 release cases, three live web cases and the harness canary.
 
 | Status      | Meaning                                                                                                                    |
 | ----------- | -------------------------------------------------------------------------------------------------------------------------- |
@@ -536,6 +536,7 @@ Every release case is calibrating until it has been run and sorted. The table li
 | `return-wrong-size`                     | Start a return for the jacket from order 48213, it's the wrong size. I'm keeping the shoes.                                       | browser, apps                   |
 | `returning-user-po-detail`              | After a six-minute break, what was the PO number in Priya's email, and when is it due? Then draft a reply with it                 | apps, long-running              |
 | `returning-user-two-gaps-decision`      | After two six-minute breaks, draft an email to the printer vendor I chose earlier                                                 | apps, long-running              |
+| `rules-save-request`                    | Save these as my standing rules                                                                                                   | memory, approvals               |
 | `sales-pdf-report`                      | Make a one-page PDF summary with total revenue and the best month, and send it                                                    | files, progress                 |
 | `schedule-ny-time`                      | Every day at 9am New York time, remind me to check the US market open                                                             | schedules                       |
 | `scheduled-post-linear-to-slack`        | Every Friday at 17:00, post the Web issues we closed this week in #eng                                                            | schedules, apps                 |

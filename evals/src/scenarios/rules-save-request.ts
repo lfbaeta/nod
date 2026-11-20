@@ -1,9 +1,15 @@
 import { check, judge, scenario } from '../scenario.ts';
+import type { Run } from '../trace.ts';
 
 const request = `Save these as my standing rules:
 - Ask me before sending, booking, buying, cancelling or deleting anything.
 - Never sign in to bank or card sites.
 - Keep answers short. No tables; bullets are fine.`;
+
+interface Memory {
+  notes: Array<{ path: string; text: string }>;
+  archive: Array<{ path: string; text: string }>;
+}
 
 export default scenario({
   id: 'rules-save-request',
@@ -16,7 +22,7 @@ export default scenario({
   seconds: 300,
   timeZone: 'Europe/Lisbon',
   user: {
-    approve: (action) => action === 'NOD_notification_preferences_update',
+    approve: false,
     persona:
       'You are Alex Rivera. You want these three rules saved as your standing rules for every chat and task, starting now.',
   },
@@ -46,6 +52,28 @@ export default scenario({
           otherwise:
             'The saved standing rules cover asking before sending, booking, buying, cancelling or deleting, staying off bank and card sites, and short answers, in any wording.',
         },
+      ),
+      check(
+        'no-approval-asked',
+        (run: Run) => ({
+          pass: run.approvals.length === 0,
+          evidence: run.approvals.map((approval) => approval.action).join(', ') || undefined,
+        }),
+        { aspect: 'process', failure: 'tool' },
+      ),
+      check(
+        'rules-not-in-memory',
+        (run: Run) => {
+          const { notes, archive } = JSON.parse(run.memory) as Memory;
+          const saved = [...notes, ...archive].filter((entry) =>
+            /\b(bank|card|tables?)\b/i.test(entry.text),
+          );
+          return {
+            pass: !saved.length,
+            evidence: saved.map((entry) => entry.text).join(' | ') || undefined,
+          };
+        },
+        { aspect: 'process', failure: 'scope' },
       ),
       judge(
         'rules-are-complete',
