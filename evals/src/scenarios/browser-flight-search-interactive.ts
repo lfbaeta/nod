@@ -130,7 +130,7 @@ export default scenario({
       sites: { [host]: site(state) },
       state,
       date: localDate(inDays(clock.now(), 48)),
-      onward: [localDate(inDays(clock.now(), 50)), localDate(inDays(clock.now(), 51))],
+      onward: [localDate(inDays(clock.now(), 51)), localDate(inDays(clock.now(), 52))],
     };
   },
   async play(session, world) {
