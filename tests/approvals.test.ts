@@ -4317,7 +4317,7 @@ test(
       );
 
       await t.test(
-        'revision replies leave the addressed proposal open and reach its session',
+        'revision replies close the addressed proposal and reach its session',
         async () => {
           for (const explicit of [false, true]) {
             const before = calls.length;
@@ -4337,8 +4337,8 @@ test(
             });
             const resumed = await row(revised.turnId);
             assert.equal(resumed.source, 'user');
-            assert.equal((await stored(id)).status, 'pending');
-            assert.equal(await turnStatus(origin.turnId), 'waiting');
+            assert.equal((await stored(id)).status, explicit ? 'expired' : 'pending');
+            assert.equal(await turnStatus(origin.turnId), explicit ? 'cancelled' : 'waiting');
             assert.equal(resumed.background, explicit);
             assert.equal(resumed.parent_turn_id, explicit ? origin.turnId : null);
             if (explicit) assert.equal(resumed.session_id, (await row(origin.turnId)).session_id);

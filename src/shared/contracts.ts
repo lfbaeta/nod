@@ -290,7 +290,7 @@ export interface MessageHistoryPage {
   hasMore: boolean;
 }
 export interface CurrentBrowser {
-  threadId: string;
+  browserId: string;
   title: string;
   status: string;
   lastActivityAt: string;

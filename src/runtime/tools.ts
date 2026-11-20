@@ -40,7 +40,7 @@ import { withoutSchemaPatterns } from '../shared/json-schema.ts';
 import type { Turn } from './turn.ts';
 
 export const taskRouting =
-  'Keep quick answers, simple lookups and status questions in chat. This chat has no browser, sign-in, payment or computer tools: work that needs a website, a login, a payment or a desktop app always runs in a task you start. Start a saved task for substantial work, including multi-step work you can finish in one sitting, an outside wait, or work the owner asks you to track. A new independent request during other work starts its own task; keep each goal together and send corrections or related updates to the existing task with task reply. If the owner explicitly asks to retry in response to a finished task’s result, use task reply with that task’s id from taskLedger and retry:true. Start tasks without asking the owner for an execution mode, and let each one finish its assigned work. A task brief grants no permission or schedule.';
+  'Keep quick answers, simple lookups and status questions in chat. This chat has no browser, sign-in, payment or computer tools: work that needs a website, a login, a payment or a desktop app always runs in a task you start. Questions about a task’s work belong to that task: start it with the owner’s words and let it ask; do not ask them in chat. Start a saved task for substantial work, including multi-step work you can finish in one sitting, an outside wait, or work the owner asks you to track. A new independent request during other work starts its own task; keep each goal together and send corrections or related updates to the existing task with task reply. If the owner explicitly asks to retry in response to a finished task’s result, use task reply with that task’s id from taskLedger and retry:true. Start tasks without asking the owner for an execution mode, and let each one finish its assigned work. A task brief grants no permission or schedule.';
 
 export const personalActions = [
   'notification_preferences_get',
@@ -392,7 +392,7 @@ export const toolDefinitions = {
   ),
   sign_in: defineTool(
     'sign_in',
-    "Private sign-in on the current exact origin. Inspect the page and saved account metadata first. Use the owner's method or a unique matching saved login, which selects password sign-in. For ambiguous methods use kind:method with one {label,selector} per visible method control, by current @eN ref or CSS. Ask only for an ambiguous account. For identifier/password/otp, pass current field refs or CSS selectors and submitSelector if required; omit it for automatic submission. passwordSelector can be an ordered array for split codes. savedLoginId selects a Vault login from manage_apps list; one matching Vault login is used automatically. Otherwise the owner enters values privately. Use emailCode:true and the page's emailRecipient only for a code sent by email; Nod retrieves it privately. Omit emailCode for an authenticator code. Never read codes with apps or ask in chat. message describes private entry; action is its short button label; label names the login. The server checks consent, fills and submits once; the result includes the page when available. Inspect it without submitting again. Read-only scripts need no reload; reload only when entry was refused because a script changed the document.",
+    "Private sign-in on the current exact origin. Inspect the page and saved account metadata first. Use the owner's method or a unique matching saved login, which selects password sign-in. For ambiguous methods use kind:method with one {label,selector} per visible method control, by current @eN ref or CSS. Ask only for an ambiguous account. For identifier/password/otp, pass current field refs or CSS selectors and submitSelector if required; omit it for automatic submission. passwordSelector can be an ordered array for split codes. savedLoginId selects a Vault login from manage_apps list; one matching Vault login is used automatically. Otherwise the owner enters values privately. Use emailCode:true and the page's emailRecipient only for a code sent by email; Nod retrieves it privately. Omit emailCode for an authenticator code. Never read codes with apps or ask in chat. message describes private entry without repeating the button label; action is that short button label; label names the login. The server checks consent, fills and submits once; the result includes the page when available. Inspect it without submitting again. Read-only scripts need no reload; reload only when entry was refused because a script changed the document.",
     Type.Union([
       Type.Object(
         {
@@ -922,12 +922,13 @@ export function nodTools(
       step.action === 'upload' ? { action: 'click', selector: step.selector } : step,
     );
     signal.throwIfAborted();
+    const control = page.controls?.length === 1 ? page.controls[0]! : undefined;
     if (
-      !page.submits &&
+      control &&
+      inputRoles.has(control.role) &&
+      (!page.submits || (control.role === 'link' && page.submits === 'unknown')) &&
       !page.dialog &&
       ['click', 'press'].includes(step.action) &&
-      page.controls?.length === 1 &&
-      inputRoles.has(page.controls[0]!.role) &&
       !(step.action === 'press' && isEnterKey(step.key))
     )
       return { binding: {} };

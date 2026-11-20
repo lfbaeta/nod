@@ -847,6 +847,50 @@ test(
         `Synthetic turn did not become ${status}; status=${turn.status}, error=${turn.error ?? 'none'}.`,
       );
     }
+    async function taskTurn(
+      text: string,
+      taskCalls?: FixtureCall[],
+      options: { sequential?: boolean; wait?: string | false } = {},
+    ) {
+      const title = `Synthetic task ${randomUUID()}`;
+      batches.set(text, {
+        subagents: false,
+        sequential: options.sequential ?? true,
+        chatOnly: true,
+        calls: [
+          {
+            tool: 'task',
+            action: 'start',
+            args: {
+              title,
+              message: `I’ll handle ${title}.`,
+              doneWhen: 'The synthetic step is handled.',
+              now: 'Working on it',
+            },
+          },
+        ],
+        ...(taskCalls ? { taskCalls } : {}),
+      });
+      const response = await request('POST', '/api/messages', { text });
+      assert.equal(response.statusCode, 200, response.body);
+      ids.push(response.json().threadId as string);
+      await waitFor(response.json().turnId, 'succeeded');
+      const task = (
+        await pool.query<{ turn_id: string }>(
+          'SELECT turn_id FROM tasks WHERE owner_id=$1 AND title=$2',
+          [ownerId, title],
+        )
+      ).rows[0];
+      assert.ok(task);
+      const { session_id: sessionId } = (
+        await pool.query<{ session_id: string }>('SELECT session_id FROM turns WHERE id=$1', [
+          task.turn_id,
+        ])
+      ).rows[0]!;
+      if (options.wait !== false) await waitFor(task.turn_id, options.wait ?? 'waiting|succeeded');
+      return { turnId: task.turn_id, sessionId, rootTurnId: response.json().turnId as string };
+    }
+    const taskTools = new Set(['browser', 'sign_in', 'pay', 'browser_session', 'computer']);
     async function propose(
       action: string,
       args: Record<string, unknown>,
@@ -854,6 +898,7 @@ test(
       text = `Synthetic proposal ${randomUUID()}`,
     ) {
       plans.set(text, { tool, action, args });
+      if (tool && taskTools.has(tool)) return (await taskTurn(text)).turnId;
       const response = await request('POST', '/api/messages', { text });
       assert.equal(response.statusCode, 200);
       const id = response.json().turnId as string;
@@ -1838,16 +1883,13 @@ test(
           const text = `Synthetic unidentified click ${randomUUID()}`;
           const before = browserActs.filter((act) => act.action === 'click').length;
           const errors = batchErrors.length;
-          batches.set(text, {
-            subagents: false,
-            calls: [{ tool: 'browser', action: 'click', args: { x: 0.5, y: 0.5 } }],
-          });
           browserControls = [{ role: 'RootWebArea', name: 'Synthetic bank' }];
           try {
-            const response = await request('POST', '/api/messages', { text });
-            assert.equal(response.statusCode, 200, response.body);
-            const turnId = response.json().turnId;
-            await waitFor(turnId, 'succeeded');
+            const { turnId } = await taskTurn(
+              text,
+              [{ tool: 'browser', action: 'click', args: { x: 0.5, y: 0.5 } }],
+              { sequential: false, wait: 'succeeded' },
+            );
             assert.deepEqual(await approvalsFor(turnId), []);
             assert.equal(browserActs.filter((act) => act.action === 'click').length, before);
             assert.match(batchErrors.slice(errors).join('\n'), /click target is not identified/);
@@ -2230,11 +2272,10 @@ test(
               const { action, ...args } = entry.step;
               const errors = batchErrors.length;
               const before = seen.length;
-              batches.set(text, { subagents: false, calls: [{ tool: 'browser', action, args }] });
-              const response = await request('POST', '/api/messages', { text });
-              assert.equal(response.statusCode, 200, response.body);
-              await waitFor(response.json().turnId, 'waiting|succeeded');
-              assert.deepEqual(await approvalsFor(response.json().turnId), []);
+              const { turnId } = await taskTurn(text, [{ tool: 'browser', action, args }], {
+                sequential: false,
+              });
+              assert.deepEqual(await approvalsFor(turnId), []);
               assert.equal(seen.length, before);
               assert.match(batchErrors.slice(errors).join('\n'), /target is not identified/);
               if (entry.step.action === 'type')
@@ -5598,11 +5639,10 @@ test(
                     }
                   : { ...input, ...(login ? { savedLoginId: login } : {}) },
             });
-            const response = await request('POST', '/api/messages', { text });
-            assert.equal(response.statusCode, 200, response.body);
-            const turnId = response.json().turnId as string;
+            const { turnId, rootTurnId } = await taskTurn(text, undefined, {
+              wait: source === 'saved' ? false : 'waiting',
+            });
             if (source !== 'saved') {
-              await waitFor(turnId, 'waiting');
               const messages = JSON.stringify(
                 (
                   await pool.query('SELECT text,presentation FROM messages WHERE turn_id=$1', [
@@ -5657,7 +5697,7 @@ test(
                   source === 'card'
                     ? 'SELECT status FROM vault_uses WHERE id=$1'
                     : 'SELECT status FROM vault_uses WHERE root_turn_id=$1',
-                  [source === 'card' ? token : turnId],
+                  [source === 'card' ? token : rootTurnId],
                 )
               ).rows[0]?.status;
               if (status !== 'uncertain') await delay(20);
@@ -6706,20 +6746,15 @@ test(
           assert.equal(enabled.json().enabled, true);
           const text = `Open TextEdit and clear the notes ${randomUUID()}`;
           asked.add(text);
-          batches.set(text, {
-            subagents: false,
-            sequential: true,
-            calls: [
+          const { turnId: turn } = await taskTurn(
+            text,
+            [
               { tool: 'computer', action: 'open', args: { bundle: 'com.apple.TextEdit' } },
               { tool: 'computer', action: 'snapshot', args: { pid: 41 } },
               { tool: 'computer', action: 'press', args: { ref: '@snotes01:e7' } },
             ],
-          });
-          const response = await send({ text });
-          assert.equal(response.statusCode, 200, response.body);
-          const turn = response.json().turnId as string;
-          ids.push(response.json().threadId as string);
-          await waitFor(turn, 'waiting');
+            { wait: 'waiting' },
+          );
           assert.deepEqual(desktopSteps, []);
           const [held] = await approvalsFor(turn);
           assert.equal(held.action, 'COMPUTER_PRESS');
@@ -8262,8 +8297,7 @@ test(
                 message: 'Use the synthetic login.',
               },
             });
-            const started = await request('POST', '/api/messages', { text });
-            assert.equal(started.statusCode, 200);
+            await taskTurn(text, undefined, { wait: false });
             for (let attempt = 0; !entryStarted && attempt < 300; attempt++) await delay(20);
             assert.equal(entryStarted, true);
             assert.ok(entrySignal);

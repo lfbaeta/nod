@@ -742,27 +742,27 @@ export async function createApp(dependencies: AppDependencies = {}) {
   async function readCurrentBrowser() {
     const thread = await activeThread(pool);
     const latest = await pool.query(
-      `SELECT left(COALESCE(m.text,u.prompt),100) AS title,u.status,COALESCE(e.created_at,u.created_at) AS "lastActivityAt"
+      `SELECT u.session_id AS "browserId",left(COALESCE(m.text,u.prompt),100) AS title,u.status,COALESCE(e.created_at,u.created_at) AS "lastActivityAt"
        FROM turns u LEFT JOIN messages m ON m.id=u.message_id
        LEFT JOIN LATERAL (SELECT created_at FROM turn_events WHERE turn_id=u.id AND type IN ('tool_start','tool_complete') AND (summary='browser' OR summary LIKE 'browser %') ORDER BY created_at DESC LIMIT 1) e ON true
-       WHERE u.owner_id=$1 AND u.thread_id=$2 AND u.session_id=$2 AND e.created_at IS NOT NULL
+       WHERE u.owner_id=$1 AND u.thread_id=$2 AND e.created_at IS NOT NULL
        ORDER BY e.created_at IS NULL,COALESCE(e.created_at,u.created_at) DESC LIMIT 1`,
       [ownerId, thread.id],
     );
     const row = latest.rows[0];
     if (!row) return undefined;
     return {
-      threadId: thread.id,
+      browserId: row.browserId as string,
       title: row.title,
       status: row.status,
       lastActivityAt: row.lastActivityAt,
     };
   }
   app.get('/api/browser', async () => ({ currentBrowser: (await readCurrentBrowser()) ?? null }));
-  async function credentialEntryOpen(threadId: string) {
+  async function credentialEntryOpen(threadId: string, sessionId: string) {
     const latest = await pool.query(
-      "SELECT status,waiting_reason FROM turns WHERE owner_id=$1 AND thread_id=$2 AND session_id=$2 AND status<>'queued' ORDER BY created_at DESC,id DESC LIMIT 1",
-      [ownerId, threadId],
+      "SELECT status,waiting_reason FROM turns WHERE owner_id=$1 AND thread_id=$2 AND session_id=$3 AND status<>'queued' ORDER BY created_at DESC,id DESC LIMIT 1",
+      [ownerId, threadId, sessionId],
     );
     return latest.rows[0]?.status === 'waiting' && latest.rows[0].waiting_reason === 'credentials';
   }
@@ -778,12 +778,13 @@ export async function createApp(dependencies: AppDependencies = {}) {
   const handoffClosed = 'The browser opens here when Nod hands it to you.';
   async function readBrowserScreen(reply: FastifyReply) {
     const thread = await activeThread(pool);
-    const blocked = () => credentialEntryOpen(thread.id);
+    const browserId = (await readCurrentBrowser())?.browserId ?? thread.id;
+    const blocked = () => credentialEntryOpen(thread.id, browserId);
     const paused = 'Browser observations are paused during credential entry.';
     if (await blocked()) return reply.code(423).send({ error: paused });
     let screen: Buffer | null | undefined;
     try {
-      screen = await dependencies.computer?.screenshot(thread.id);
+      screen = await dependencies.computer?.screenshot(browserId);
     } catch (error) {
       const message =
         error instanceof BrowserActionError ? browserErrorMessage(error.code) : undefined;
@@ -796,7 +797,7 @@ export async function createApp(dependencies: AppDependencies = {}) {
       return reply.code(409).send({ error: 'The browser session changed. Request a new view.' });
     if (await blocked()) return reply.code(423).send({ error: paused });
     if (!screen) return reply.code(404).send({ error: 'There is no browser screen yet.' });
-    const screenStatus = dependencies.computer?.screenStatus(thread.id);
+    const screenStatus = dependencies.computer?.screenStatus(browserId);
     reply.header('X-Screen-State', screenStatus?.state ?? 'live');
     if (screenStatus?.capturedAt) reply.header('X-Screen-Captured-At', screenStatus.capturedAt);
     return reply.type('image/png').send(screen);
