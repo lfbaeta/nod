@@ -271,15 +271,9 @@ export function AccountSettings({
       return setSection(jumped.current.target);
     const line = scroller.getBoundingClientRect().top + settingsHeadingOffset;
     let active = 'general';
-    let nearest = Infinity;
     for (const candidate of settingsSections) {
       const heading = document.getElementById(`${id}-${candidate.id}`);
-      if (!heading) continue;
-      const distance = Math.abs(heading.getBoundingClientRect().top - line);
-      if (distance < nearest) {
-        nearest = distance;
-        active = candidate.id;
-      }
+      if (heading && heading.getBoundingClientRect().top <= line + 4) active = candidate.id;
     }
     const atEnd = scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop < 4;
     setSection(atEnd ? 'privacy' : active);

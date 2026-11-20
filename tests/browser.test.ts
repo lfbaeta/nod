@@ -8740,7 +8740,7 @@ test('Settings nav highlights the heading nearest the top', async () => {
         });
         const tops = [
           scrollerTop - 1800, scrollerTop - 1400, scrollerTop - 900, scrollerTop - 520,
-          scrollerTop + 140, scrollerTop + 760, scrollerTop + 1300,
+          scrollerTop + 32, scrollerTop + 760, scrollerTop + 1300,
         ];
         const place = () => document.querySelectorAll('.settings-category > h2').forEach((heading, index) => {
           heading.getBoundingClientRect = () => ({ top: tops[index] });
@@ -8756,6 +8756,16 @@ test('Settings nav highlights the heading nearest the top', async () => {
         assert.equal(highlighted(), 'Memory');
         tops[3] = scrollerTop - 16;
         tops[4] = scrollerTop + 480;
+        place();
+        await scroll();
+        assert.equal(highlighted(), 'Voice & audio');
+        tops[0] = scrollerTop - 2200;
+        tops[1] = scrollerTop - 1700;
+        tops[2] = scrollerTop - 1100;
+        tops[3] = scrollerTop + 32 - 500;
+        tops[4] = scrollerTop + 32 + 400;
+        tops[5] = scrollerTop + 900;
+        tops[6] = scrollerTop + 1400;
         place();
         await scroll();
         assert.equal(highlighted(), 'Voice & audio');
