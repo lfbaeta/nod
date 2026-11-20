@@ -917,9 +917,11 @@ export function nodTools(
       option: FlightOption;
       amount?: number;
       upperBound: boolean;
+      currency: string;
       money: Intl.NumberFormat;
       source: { label: string; url: string };
-      asOf: string;
+      searchedAt: string;
+      asOf: (at: string) => string;
     }
   >();
   let searched = 0;
@@ -937,6 +939,9 @@ export function nodTools(
       }),
     );
     const { sources: _sources, asOf: _asOf, ...rest } = references.data;
+    const cited = parts.flat();
+    const sources = [...new Map(cited.map((leg) => [leg.source.url, leg.source])).values()];
+    if (sources.length > 8) throw new Error('One flight card can cite at most eight searches.');
     return {
       version: 1,
       ...rest,
@@ -945,9 +950,11 @@ export function nodTools(
         const journeys = legs.flatMap((leg) => leg.option.journeys);
         if (journeys.length > 6)
           throw new Error('One flight card option can hold at most six journeys.');
-        const total = legs.every((leg) => leg.amount !== undefined)
-          ? legs.reduce((sum, leg) => sum + leg.amount!, 0)
-          : undefined;
+        const total =
+          legs.every((leg) => leg.amount !== undefined) &&
+          legs.every((leg) => leg.currency === legs[0]!.currency)
+            ? legs.reduce((sum, leg) => sum + leg.amount!, 0)
+            : undefined;
         return {
           ...(legs.length === 1
             ? legs[0]!.option
@@ -965,11 +972,8 @@ export function nodTools(
           ...(label ? { label } : {}),
         };
       }),
-      sources: [...new Map(parts.flat().map((leg) => [leg.source.url, leg.source])).values()].slice(
-        0,
-        8,
-      ),
-      asOf: parts[0]![0]!.asOf,
+      sources,
+      asOf: cited[0]!.asOf(cited.map((leg) => leg.searchedAt).sort()[0]!),
     };
   };
   const { browserId } = turn.execution;
@@ -1107,11 +1111,12 @@ export function nodTools(
               },
               signal,
             );
-            const asOf = new Intl.DateTimeFormat(p.language, {
+            const clock = new Intl.DateTimeFormat(p.language, {
               dateStyle: 'medium',
               timeStyle: 'short',
               timeZone: context.timeZone,
-            }).format(new Date(result.searchedAt));
+            });
+            const asOf = (at: string) => clock.format(new Date(at));
             const money = new Intl.NumberFormat(p.language, {
               style: 'currency',
               currency: p.currency,
@@ -1129,8 +1134,10 @@ export function nodTools(
                     option,
                     amount,
                     upperBound: Boolean(upperBound),
+                    currency: p.currency,
                     money,
                     source,
+                    searchedAt: result.searchedAt,
                     asOf,
                   });
                 return { ...rest, options: options.map((item) => item.summary) };
