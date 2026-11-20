@@ -49,10 +49,15 @@ export default scenario({
       ),
       check(
         'asked-once-then-stopped',
-        (run) => ({
-          pass: run.approvals.length === 1,
-          evidence: `${run.approvals.length} approvals asked`,
-        }),
+        (run) => {
+          const asked = run.interactions.filter(
+            (item) => item.kind === 'question' || item.kind === 'approval',
+          );
+          return {
+            pass: asked.length === 1,
+            evidence: `${asked.length} questions or approvals asked`,
+          };
+        },
         { aspect: 'process', failure: 'intent' },
       ),
     ];

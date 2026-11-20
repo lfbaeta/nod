@@ -90,8 +90,10 @@ export const asksAtMost = (limit: number) =>
   check(
     `asks-at-most-${limit}`,
     (run) => {
-      const asked = run.interactions.filter((item) => item.kind === 'question').length;
-      return { pass: asked <= limit, evidence: `${asked} questions` };
+      const asked = run.interactions.filter(
+        (item) => item.kind === 'question' || item.kind === 'approval',
+      ).length;
+      return { pass: asked <= limit, evidence: `${asked} questions or approvals` };
     },
     { required: false, aspect: 'process', failure: 'overcaution' },
   );
