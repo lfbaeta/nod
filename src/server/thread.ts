@@ -79,6 +79,7 @@ import type { ExecutionEvent } from '../shared/execution.ts';
 import { modelProviderNames, type ModelSelection, type WorkKind } from '../shared/models.ts';
 import { lockKey } from './locks.ts';
 import { redactSecretText } from './redaction.ts';
+import { loadConversationLanguage } from './communication.ts';
 import { resemblesTaskAcknowledgement } from '../shared/task-ack.ts';
 
 const queue = 'thread-drain';
@@ -1832,6 +1833,7 @@ async function loadTurnContext(turn: any, dependencies: ThreadDependencies) {
     mcpServers,
     confirmedActions,
     restarted,
+    language,
   ] = await Promise.all([
     loadMessage(sourceMessageId),
     pool.query(
@@ -1876,6 +1878,7 @@ async function loadTurnContext(turn: any, dependencies: ThreadDependencies) {
           [threadId, ownerId],
         )
       : undefined,
+    loadConversationLanguage(pool, ownerId, threadId),
   ]);
   const preference = preferences.rows[0];
   const historyTurnIds = [
@@ -1927,6 +1930,7 @@ async function loadTurnContext(turn: any, dependencies: ThreadDependencies) {
       ...(confirmedActions?.length ? { confirmedActions } : {}),
       ...(credentialRequests.length ? { credentialRequests } : {}),
       ...(related.length ? { relatedConversation: related } : {}),
+      conversationLanguage: language,
       ...(learnedSkills?.length ? { learnedSkills } : {}),
       ...(connectedApps ? { connectedApps } : {}),
       ...(dependencies.localFiles ? { localFiles: true } : {}),

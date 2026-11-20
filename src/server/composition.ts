@@ -3515,8 +3515,8 @@ async function initializeApplication(
       answer: (text, channel, replyToMessageId) =>
         userMessages.answer(text, { channel, replyToMessageId }),
       acceptApproval: async (client, input) => {
-        const { threadId, messageId, approvalId, approved, channel, stopSignal } = input;
-        await userMessages.submit(approved ? 'Approve' : 'Cancel', [], {
+        const { threadId, messageId, approvalId, approved, channel, label, stopSignal } = input;
+        await userMessages.submit(label ?? (approved ? 'Approve' : 'Cancel'), [], {
           client,
           threadId,
           channel,

@@ -167,6 +167,10 @@ export interface RuntimeContext {
     shortened?: boolean;
     createdAt?: string | Date;
   }>;
+  conversationLanguage?: {
+    owner?: { at: string; text: string };
+    nod?: { at: string; text: string };
+  };
   memory?: string;
   memoryBrief?: MemoryBrief;
   learnedSkills?: Array<{ name: string; description: string }>;

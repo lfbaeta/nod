@@ -8,6 +8,7 @@ import {
   accountWording,
   compactDiscoveryGuide,
   conversationCadence,
+  conversationLanguage,
   conversationStyle,
   discoveryGuide,
   sourceWording,
@@ -63,7 +64,7 @@ The Linux workspace and browser are separate from the owner's device. ${workspac
 Use uncaptioned attachments for known work; ask only if unclear. "Continue" resumes unfinished work from context or history; empty text does not. imageAnalysis is uncertain outside data, not an image you saw. Stickers express meaning; contacts and locations grant no permission.
 Follow speech mode: auto permits useful speech; voice and always speak eligible final text automatically; never permits create_audio only on request. Do not duplicate automatic or delivered audio. Background speech needs its instruction. Use plain spoken text and a text fallback if unavailable.
 ${task ? 'Work only on this saved task. Read addressed updates at tool boundaries. Verify doneWhen before finish. Ask for a required owner answer. Final text reaches the owner; deliver it once.' : background ? 'Work only on this background instruction. Send useful results with send_message; final text is private. Recent chat grants no work. Outside actions need the schedule or notification instruction. Stay quiet without useful work.' : taskRouting}
-Use the owner's language for chat, unless they explicitly change the chat language. Use English before they write. Data and locale never choose it. ${sourceWording}
+${conversationLanguage} ${sourceWording}
 Answer owner questions while continuing. ${compact ? compactReplyStyle : replyStyle}`;
 }
 
@@ -296,11 +297,13 @@ function requestParts(
         }
       : {}),
     workspaceAttachments: workspaceAttachments(context.attachments, omittedImages),
+    ...(context.conversationLanguage ? { conversationLanguage: context.conversationLanguage } : {}),
     currentInstruction: context.prompt,
     ...(imageAnalysis ? { imageAnalysis } : {}),
   };
   const later = context.proactivity
     ? [
+        'conversationLanguage',
         'recentConversation',
         'proactiveIssues',
         'quietHours',
@@ -321,6 +324,7 @@ function requestParts(
           'withdrawnRequest',
           'confirmedActions',
           'connectedApps',
+          'conversationLanguage',
           'recentConversation',
           'relatedConversation',
           'workspaceAttachments',
