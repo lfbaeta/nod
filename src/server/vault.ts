@@ -245,6 +245,7 @@ export async function sealedDataExists(pool: Pick<Pool, 'query'>) {
           'vault_app_grants',
           'channel_settings',
           'channel_session_keys',
+          'channel_slack_intake',
           'credential_account_selections',
         ],
       ],

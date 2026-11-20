@@ -75,7 +75,7 @@ const modelConnectionProperties = z.object({
 });
 const turnProperties = z.object({
   source: z.enum(['user', 'schedule', 'event', 'resume', 'task']),
-  channel: z.enum(['web', 'telegram', 'whatsapp', 'other']),
+  channel: z.enum(['web', 'telegram', 'whatsapp', 'slack', 'other']),
   background: z.boolean(),
   work_type: z.enum(['immediate', 'scheduled', 'background']),
   owner_requested: z.boolean(),
@@ -111,7 +111,9 @@ export const analyticsEvent = z.discriminatedUnion('event', [
   z
     .object({
       event: z.literal('owner_message_accepted'),
-      properties: z.object({ channel: z.enum(['web', 'telegram', 'whatsapp', 'other']) }).strict(),
+      properties: z
+        .object({ channel: z.enum(['web', 'telegram', 'whatsapp', 'slack', 'other']) })
+        .strict(),
     })
     .strict(),
   z
@@ -119,7 +121,7 @@ export const analyticsEvent = z.discriminatedUnion('event', [
       event: z.literal('channel_connection_observed'),
       properties: z
         .object({
-          channel: z.enum(['telegram', 'whatsapp']),
+          channel: z.enum(['telegram', 'whatsapp', 'slack']),
           state: z.enum(['disabled', 'setup_pending', 'connected', 'configured_unverified']),
         })
         .strict(),
@@ -247,7 +249,7 @@ export const analyticsEvent = z.discriminatedUnion('event', [
         .object({
           section: z.enum(['account', 'preferences', 'channels', 'models', 'trust', 'memory']),
           operation: z.enum(['update', 'connect_started', 'disconnect']),
-          channel: z.enum(['telegram', 'whatsapp']).optional(),
+          channel: z.enum(['telegram', 'whatsapp', 'slack']).optional(),
         })
         .strict(),
     })

@@ -3023,6 +3023,17 @@ test(
           };
           const requested = await thread.submitUserMessage('Synthetic analytics request');
           await completed(requested.turnId, 'immediate', true, 'reply');
+          const slack = await thread.submitUserMessage('Synthetic Slack analytics request', [], {
+            channel: 'slack:account_one',
+          });
+          await completed(slack.turnId, 'immediate', true, 'reply');
+          assert.deepEqual(
+            analyticsEvents
+              .filter((event) => event.properties.run_id === analyticsRuns.get(slack.turnId))
+              .filter((event) => ['turn_started', 'turn_completed'].includes(event.event))
+              .map((event) => event.properties.channel),
+            ['slack', 'slack'],
+          );
           const schedule = await thread.enqueueTurn('Synthetic analytics schedule', {
             source: 'schedule',
           });

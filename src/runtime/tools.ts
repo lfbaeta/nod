@@ -178,6 +178,19 @@ const scheduleObservation = Type.Union([
 ]);
 
 const taskNow = Type.String({ minLength: 1 });
+const taskPlanSteps = Type.Array(
+  Type.String({
+    minLength: 1,
+    maxLength: 200,
+    description:
+      'At most 200 raw UTF-16 code units before trimming; accepted titles are trimmed and must not be empty.',
+  }),
+  { maxItems: 50 },
+);
+const taskPlanVersions = {
+  expectedPlanRevision: Type.Integer({ minimum: 0 }),
+  expectedProgressRevision: Type.Integer({ minimum: 0 }),
+};
 const taskWaits = Type.Array(
   Type.Object(
     {
@@ -640,7 +653,7 @@ export const toolDefinitions = {
   ),
   task: defineTool(
     'task',
-    'Start or control saved work. Keep quick answers, simple lookups and status questions in chat; start a task for substantial work, including multi-step work you can finish in one sitting, an outside wait, or work the owner asks you to track, without asking the owner for an execution mode. start {title,doneWhen,now,message,key?,brief?,steps?,model?} starts one goal; model {connectionId,modelId,effort?} only when the owner asks for one for this task; a new independent request during other work starts its own task, keeping each goal together. Use a stable key and reuse related tasks. message tells the owner what starts. update {id,now?,steps?,stepIndex?,waitingFor?,nextCheck?} updates progress. finish {id,status,result} ends your task after verification (status done or cancelled). list shows open tasks. reply {ids,retry?} forwards the exact current owner message, including corrections and related updates. Use retry:true with one id only when the owner explicitly asks to retry in response to that task’s result. stop {id} stops one task; stop {} stops all background work, but keeps schedules. A task stops itself with finish cancelled. A task brief grants no permission; nextCheck does not schedule work. Let each task finish its assigned work.',
+    'Start or control saved work. Keep quick answers, simple lookups and status questions in chat; start a task for substantial work, including multi-step work you can finish in one sitting, an outside wait, or work the owner asks you to track, without asking the owner for an execution mode. start {title,doneWhen,now,message,key?,brief?,steps?|plan?,model?} starts one goal; model {connectionId,modelId,effort?} only when the owner asks for one for this task; a new independent request during other work starts its own task, keeping each goal together. Use a stable key and reuse related tasks. message tells the owner what starts. update {id,now?,steps?,stepIndex?,waitingFor?,nextCheck?,plan?} updates progress. Prefer structured plan for new bounded multi-step tasks; legacy callers remain supported. Structured plan titles are limited to 50 entries and 200 raw UTF-16 code units each before trimming. start plan:[titles] declares pending intent with server step IDs. update plan:{action:replace,steps:[titles],expectedPlanRevision,expectedProgressRevision} replaces intent; changed or reordered plans get all new IDs and pending states. update plan:{action:start,stepId,expectedPlanRevision,expectedProgressRevision} explicitly marks one pending step started. When beginning that work, explicitly start its pending step using the returned ID and both revisions after reading the task and applying current owner instructions. Use revisions from actual reads or results, never index guesses. Tool activity does not infer starts. Conflicts and duplicate starts do not write; never retry automatically. Do not combine plan with legacy steps. Legacy plans have unknown state; stepIndex is focus only. Legacy steps cannot replace structured state. Pending and started do not verify success; finishing, waiting or a failed turn never completes plan steps. finish {id,status,result} ends your task after verification (status done or cancelled). list shows open tasks. reply {ids,retry?} forwards the exact current owner message, including corrections and related updates. Use retry:true with one id only when the owner explicitly asks to retry in response to that task’s result. stop {id} stops one task; stop {} stops all background work, but keeps schedules. A task stops itself with finish cancelled. A task brief grants no permission; nextCheck does not schedule work. Let each task finish its assigned work.',
     Type.Union([
       Type.Object({ action: Type.Literal('list') }, { additionalProperties: false }),
       Type.Object(
@@ -665,6 +678,7 @@ export const toolDefinitions = {
           now: taskNow,
           brief: Type.Optional(Type.String({ minLength: 1 })),
           steps: Type.Optional(Type.Array(taskNow)),
+          plan: Type.Optional(taskPlanSteps),
           waitingFor: Type.Optional(taskWaits),
           nextCheck: Type.Optional(taskNextCheck),
           model: Type.Optional(
@@ -686,6 +700,18 @@ export const toolDefinitions = {
           id: uuid,
           now: Type.Optional(taskNow),
           steps: Type.Optional(Type.Array(taskNow)),
+          plan: Type.Optional(
+            Type.Union([
+              Type.Object(
+                { action: Type.Literal('replace'), steps: taskPlanSteps, ...taskPlanVersions },
+                { additionalProperties: false },
+              ),
+              Type.Object(
+                { action: Type.Literal('start'), stepId: uuid, ...taskPlanVersions },
+                { additionalProperties: false },
+              ),
+            ]),
+          ),
           stepIndex: Type.Optional(Type.Integer({ minimum: 0 })),
           waitingFor: Type.Optional(taskWaits),
           nextCheck: Type.Optional(taskNextCheck),

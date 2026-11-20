@@ -123,7 +123,7 @@ const usageOperations = [
   'synthesize',
 ];
 const protectedLists = ['failures', 'startupLog', 'settings', 'modelSettings', 'channelSettings'];
-const channels = ['web', 'telegram', 'whatsapp'];
+const channels = ['web', 'telegram', 'whatsapp', 'slack'];
 const efforts = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
 const outcomes = ['succeeded', 'failed', 'cancelled'];
 const choice = (value: unknown, allowed: readonly string[], fallback = 'unknown') =>
@@ -625,7 +625,7 @@ export async function buildFeedbackReport(options: FeedbackReportOptions) {
           provider: choice(row.provider, channels, 'other'),
           enabled: row.enabled === true,
           managed: summary.managed === true,
-          mode: choice(summary.mode, ['polling', 'webhook', 'linked']),
+          mode: choice(summary.mode, ['polling', 'webhook', 'linked', 'socket']),
           linkMode: choice(summary.linkMode, ['bot', 'self-chat']),
           connectionState: choice(summary.connectionState, [
             'connecting',

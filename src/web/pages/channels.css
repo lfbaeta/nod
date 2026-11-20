@@ -2,7 +2,8 @@
   container-type: inline-size;
 }
 
-.channel-wizard-step > form {
+.channel-wizard-step > form,
+.channel-slack-form {
   display: grid;
   gap: 20px;
 }

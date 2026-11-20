@@ -2,9 +2,51 @@ import type { ChannelLinkStatus } from '../shared/contracts.ts';
 
 export class MessagingConnectionError extends Error {}
 
+export class MessagingDeliveryError extends MessagingConnectionError {
+  constructor(
+    message: string,
+    readonly ids: string[],
+  ) {
+    super(message);
+  }
+}
+
 export class MessagingAttachmentError extends Error {
   constructor(readonly maxBytes: number) {
     super('The channel file is too large.');
+  }
+}
+
+export const messagingAttachmentServiceCodes = [
+  'rate_limited',
+  'file_not_found',
+  'missing_scope',
+  'file_deleted',
+] as const;
+
+export class MessagingAttachmentReadError extends Error {
+  readonly httpStatus?: number;
+  readonly serviceCode?: (typeof messagingAttachmentServiceCodes)[number];
+
+  constructor(
+    readonly reason:
+      | 'metadata_unavailable'
+      | 'download_url_rejected'
+      | 'download_failed'
+      | 'download_http_error'
+      | 'download_timeout',
+    httpStatus?: number,
+    serviceCode?: string,
+  ) {
+    super(reason);
+    if (
+      typeof httpStatus === 'number' &&
+      Number.isInteger(httpStatus) &&
+      httpStatus >= 100 &&
+      httpStatus <= 599
+    )
+      this.httpStatus = httpStatus;
+    this.serviceCode = messagingAttachmentServiceCodes.find((code) => code === serviceCode);
   }
 }
 
@@ -19,6 +61,9 @@ export interface MessagingChannel {
   available?: boolean;
   error?: string;
   presenceMs?: number;
+  rich?: boolean;
+  richError?: string;
+  installationId?: string;
 }
 
 export interface MessagingAttachment {
@@ -39,6 +84,9 @@ export interface InboundMessage {
   text: string;
   attachments?: MessagingAttachment[];
   replyToMessageId?: string;
+  conversationRootMessageId?: string;
+  mediaIntakeThreadId?: string;
+  installationId?: string;
   sentAt: Date;
 }
 
@@ -48,6 +96,53 @@ export interface InboundReaction {
   senderId: string;
   messageId: string;
   reaction: string | null;
+  displayOnly?: boolean;
+}
+
+export interface MessagingControl {
+  channelId: string;
+  accountId: string;
+  senderId: string;
+  threadId: string;
+  eventId: string;
+  rootMessageId: string;
+  action: 'stop' | 'status';
+  nonce?: string;
+  messageId?: string;
+  streamIds?: string[];
+  installationId?: string;
+}
+
+export interface MessagingConversation {
+  ownerId: string;
+  channelId: string;
+  accountId: string;
+  threadId: string;
+  sessionId: string;
+  turnId: string;
+  rootMessageId: string;
+  status: 'processing' | 'active' | 'suspended' | 'closed';
+  title: string;
+  text: string;
+  activity?: string;
+  control?: { stop: string; status: string };
+  task?: {
+    state: string;
+    steps: string[];
+    stepIndex: number;
+    plan?:
+      | { kind: 'legacy'; state: 'unknown' }
+      | {
+          kind: 'structured';
+          planRevision: number;
+          progressRevision: number;
+          activity: 'current' | 'historical';
+          steps: ReadonlyArray<{ key: string; ordinal: number; intent: 'pending' | 'started' }>;
+        };
+  };
+  outcome?: 'failed' | 'cancelled';
+  signal: AbortSignal;
+  current?(): Promise<boolean>;
 }
 
 export interface InboundApproval {
@@ -92,6 +187,8 @@ export interface MessagingWebhookResult {
 
 export interface MessagingTransport {
   channels: MessagingChannel[];
+  controls?(accept: (control: MessagingControl) => Promise<void>): () => void;
+  conversation?(input: MessagingConversation): Promise<{ id?: string }>;
   canDeliverLiteral?(input: { channelId: string; text: string; literal: string }): boolean;
   pairing?(): Promise<ChannelLinkStatus>;
   cancelPairing?(pairingId: string, restart?: boolean): Promise<boolean>;
@@ -113,6 +210,25 @@ export interface MessagingTransport {
     replyToMessageId?: string;
     replyToText?: string;
     attachmentFailure?: (names: string[]) => Promise<string | undefined>;
+    rootMessageId?: string;
+    deliveryId?: string;
+    stream?: {
+      status?(): Promise<MessagingConversation['status']>;
+      record(input: {
+        part: number;
+        state:
+          | 'starting'
+          | 'dispatching'
+          | 'open'
+          | 'appending'
+          | 'finalizing'
+          | 'finalized'
+          | 'uncertain';
+        id?: string;
+        confirmedChars?: number;
+      }): Promise<void>;
+    };
+    signal?: AbortSignal;
   }): Promise<{ id: string; ids?: string[]; approvalButtons?: true }>;
   react?(input: {
     channelId: string;

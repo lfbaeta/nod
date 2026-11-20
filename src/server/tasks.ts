@@ -46,6 +46,22 @@ const waits = z.array(
 );
 const nextCheck = z.iso.datetime({ offset: true });
 const credentialUrl = /(?<![\w/])(?:[a-z][a-z\d+.-]*:)?\/\/[^/\s?#<>]*@/iu;
+const planSteps = z
+  .array(
+    z
+      .string()
+      .refine(
+        (title) => title.length <= 200,
+        'Plan titles must be at most 200 raw UTF-16 code units.',
+      )
+      .trim()
+      .min(1),
+  )
+  .max(50);
+const planVersions = {
+  expectedPlanRevision: z.number().int().nonnegative(),
+  expectedProgressRevision: z.number().int().nonnegative(),
+};
 const input = z.discriminatedUnion('action', [
   z.object({ action: z.literal('list') }).strict(),
   z
@@ -66,6 +82,7 @@ const input = z.discriminatedUnion('action', [
       now,
       brief: z.string().trim().min(1).optional(),
       steps: z.array(now).optional(),
+      plan: planSteps.optional(),
       waitingFor: waits.optional(),
       nextCheck: nextCheck.optional(),
       model: modelSelectionInput.optional(),
@@ -77,6 +94,12 @@ const input = z.discriminatedUnion('action', [
       id: z.uuid(),
       now: now.optional(),
       steps: z.array(now).optional(),
+      plan: z
+        .discriminatedUnion('action', [
+          z.object({ action: z.literal('replace'), steps: planSteps, ...planVersions }).strict(),
+          z.object({ action: z.literal('start'), stepId: z.uuid(), ...planVersions }).strict(),
+        ])
+        .optional(),
       stepIndex: z.number().int().nonnegative().optional(),
       waitingFor: waits.optional(),
       nextCheck: nextCheck.optional(),
@@ -98,6 +121,9 @@ type Row = {
   step_index: number;
   revision: number;
   applied_revision: number;
+  plan_steps: Extract<NonNullable<Task['plan']>, { kind: 'structured' }>['steps'] | null;
+  plan_revision: number;
+  progress_revision: number;
   title: string;
   done_when: string;
   now_text: string;
@@ -185,6 +211,7 @@ export function createTasks(options: {
          )
          SELECT t.id,t.title,t.done_when,t.now_text,t.result,t.state,t.waiting_for,t.next_check,
            t.message_id,t.steps,t.step_index,t.revision,t.applied_revision,
+           t.plan_steps,t.plan_revision,t.progress_revision,
            t.created_at,t.updated_at,t.closed_at,COALESCE((SELECT r.status FROM turns r WHERE r.owner_id=t.owner_id AND r.session_id=t.session_id AND r.status='running'),u.status) AS turn_status,
            EXISTS(SELECT 1 FROM turns n WHERE n.owner_id=u.owner_id AND n.thread_id=u.thread_id
              AND n.session_id=u.session_id AND n.parent_turn_id=u.id) AS answered,
@@ -225,6 +252,14 @@ export function createTasks(options: {
         stepIndex: row.step_index,
         revision: row.revision,
         appliedRevision: row.applied_revision,
+        plan: {
+          taskId: row.id,
+          planRevision: row.plan_revision,
+          progressRevision: row.progress_revision,
+          ...(row.plan_steps === null
+            ? { kind: 'legacy' as const, state: 'unknown' as const }
+            : { kind: 'structured' as const, steps: row.plan_steps }),
+        },
         title: row.title,
         doneWhen: row.done_when,
         now: row.now_text,
@@ -487,10 +522,18 @@ export function createTasks(options: {
     priorHandoff = false,
   ) {
     const request = input.parse(raw);
+    if (
+      'plan' in request &&
+      request.plan !== undefined &&
+      'steps' in request &&
+      request.steps !== undefined
+    )
+      throw failure('Use either a structured plan or legacy steps, not both.');
     if (request.action === 'list') return { tasks: await read(client) };
     const current = (
       await client.query('SELECT * FROM turns WHERE id=$1 AND owner_id=$2', [turn.turnId, ownerId])
     ).rows[0];
+    if (!current) throw failure('The current task turn was not found for this owner.', 409);
     if (request.action === 'reply') {
       if (current.task_id || current.session_id !== turn.threadId || !sourceMessageId)
         throw failure('Only the main chat can send owner updates to tasks.');
@@ -521,6 +564,8 @@ export function createTasks(options: {
     }
     let id: string;
     if (request.action === 'start') {
+      if (request.plan && current.thread_id !== turn.threadId)
+        throw failure("Structured plan creation requires this turn's conversation.", 409);
       if (current.task_id) throw failure('This session already has a task. Use update.');
       let startAfter: Date | undefined;
       if (current.proactive) {
@@ -570,9 +615,14 @@ export function createTasks(options: {
           ? prior.id
           : await insertAssistantMessage(client, turn, request.message);
       const sessionId = independent ? id : current.session_id;
+      const plan = request.plan?.map((title) => ({
+        id: randomUUID(),
+        title,
+        state: 'pending' as const,
+      }));
       await client.query(
-        `INSERT INTO tasks(id,owner_id,turn_id,session_id,source_message_id,message_id,title,done_when,brief,now_text,steps,waiting_for,next_check,applied_revision,activity_key,model)
-         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+        `INSERT INTO tasks(id,owner_id,turn_id,session_id,source_message_id,message_id,title,done_when,brief,now_text,steps,waiting_for,next_check,applied_revision,activity_key,model,plan_steps,plan_revision,progress_revision)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$18)`,
         [
           id,
           ownerId,
@@ -584,12 +634,14 @@ export function createTasks(options: {
           request.doneWhen,
           request.brief ?? request.doneWhen,
           request.now,
-          JSON.stringify(request.steps ?? []),
+          JSON.stringify(request.plan ?? request.steps ?? []),
           JSON.stringify(request.waitingFor ?? []),
           request.nextCheck ?? null,
           independent ? 0 : 1,
           current.proactive ? `${turn.threadId}:${request.key}` : null,
           model ? JSON.stringify(model) : null,
+          plan ? JSON.stringify(plan) : null,
+          plan ? 1 : 0,
         ],
       );
       if (independent) {
@@ -624,6 +676,89 @@ export function createTasks(options: {
       id = request.id;
       if (current.task_id !== id)
         throw failure('Only the task session can change its progress or result.');
+      if (request.action === 'update') {
+        const task = (
+          await client.query<Row & { turn_id: string; session_id: string }>(
+            'SELECT * FROM tasks WHERE id=$1 AND owner_id=$2 FOR NO KEY UPDATE',
+            [id, ownerId],
+          )
+        ).rows[0];
+        if (request.steps !== undefined && task?.plan_steps !== null)
+          throw failure(
+            'Structured plan state cannot be replaced with legacy steps. Read the task and use a versioned plan replacement.',
+            409,
+          );
+        if (request.plan) {
+          if (
+            !task ||
+            task.state !== 'open' ||
+            task.session_id !== current.session_id ||
+            task.turn_id !== current.id ||
+            current.thread_id !== turn.threadId
+          )
+            throw failure(
+              'Structured plan writes require the current turn of this task session.',
+              409,
+            );
+          if (task.applied_revision !== task.revision || current.task_revision !== task.revision)
+            throw failure(
+              'The task has an owner instruction revision to read before changing its plan.',
+              409,
+            );
+          const change = request.plan;
+          if (
+            change.expectedPlanRevision !== task.plan_revision ||
+            change.expectedProgressRevision !== task.progress_revision
+          )
+            throw failure(
+              'Task plan or progress revision changed. Read the task before another plan write.',
+              409,
+            );
+          let steps: NonNullable<Row['plan_steps']>;
+          let replacement = false;
+          if (change.action === 'replace') {
+            replacement =
+              task.plan_steps === null ||
+              change.steps.length !== task.steps.length ||
+              change.steps.some((title, index) => title !== task.steps[index]);
+            steps = replacement
+              ? change.steps.map((title) => ({ id: randomUUID(), title, state: 'pending' }))
+              : task.plan_steps!;
+          } else {
+            const step = task.plan_steps?.find((step) => step.id === change.stepId);
+            if (!step)
+              throw failure('Step not found in the current structured plan. Read the task.', 409);
+            if (step.state !== 'pending')
+              throw failure(
+                'This plan step is already started. Read the task before another progress write.',
+                409,
+              );
+            steps = task.plan_steps!.map((step) =>
+              step.id === change.stepId ? { ...step, state: 'started' } : step,
+            );
+          }
+          if (replacement || change.action === 'start')
+            await client.query(
+              `UPDATE tasks SET steps=$3,plan_steps=$4,plan_revision=plan_revision+$5,
+               progress_revision=progress_revision+1,step_index=CASE WHEN $5=1 THEN 0 ELSE step_index END,updated_at=now()
+               WHERE id=$1 AND owner_id=$2`,
+              [
+                id,
+                ownerId,
+                JSON.stringify(steps.map((step) => step.title)),
+                JSON.stringify(steps),
+                replacement ? 1 : 0,
+              ],
+            );
+          if (
+            request.now === undefined &&
+            request.stepIndex === undefined &&
+            request.waitingFor === undefined &&
+            request.nextCheck === undefined
+          )
+            return (await read(client, { id, closed: true }))[0];
+        }
+      }
       const updated =
         request.action === 'update'
           ? await client.query(
@@ -787,6 +922,9 @@ export function createTasks(options: {
       ALTER TABLE tasks ADD COLUMN IF NOT EXISTS step_index integer NOT NULL DEFAULT 0;
       ALTER TABLE tasks ADD COLUMN IF NOT EXISTS revision integer NOT NULL DEFAULT 1;
       ALTER TABLE tasks ADD COLUMN IF NOT EXISTS applied_revision integer NOT NULL DEFAULT 0;
+      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS plan_steps jsonb;
+      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS plan_revision integer NOT NULL DEFAULT 0;
+      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS progress_revision integer NOT NULL DEFAULT 0;
       ALTER TABLE turns ADD COLUMN IF NOT EXISTS task_revision integer NOT NULL DEFAULT 1;
       CREATE INDEX IF NOT EXISTS tasks_session ON tasks(owner_id,session_id);
       CREATE INDEX IF NOT EXISTS tasks_owner ON tasks(owner_id,state,updated_at DESC);
@@ -1018,6 +1156,25 @@ export function createTasks(options: {
   }
 
   return {
+    async channelControl(
+      client: PoolClient,
+      target: { threadId: string; sessionId: string; turnId: string; channel: string },
+    ) {
+      const thread = await lockThread(client);
+      if (thread.id !== target.threadId) throw failure('The conversation has changed.');
+      const cancelled = await cancelTurns(
+        client,
+        thread.id,
+        {
+          sessionId: target.sessionId,
+          expectedTurnId: target.turnId,
+          channel: target.channel,
+        },
+        snapshotAnalytics(options.analytics),
+        'owner',
+      );
+      return () => afterStop(cancelled);
+    },
     initialize,
     execute,
     setModel,

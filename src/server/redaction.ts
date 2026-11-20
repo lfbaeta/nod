@@ -4,7 +4,7 @@ export { environmentSecrets } from '../shared/environment-secrets.mjs';
 const payloadDefault = 16_384;
 const hidden = '[redacted]';
 const secretNames =
-  'password|passwd|pwd|passphrase|secret|clientsecret|authorization|proxyauthorization|cookie|setcookie|apikey|xapikey|xauthtoken|xcsrftoken|csrftoken|sessiontoken|accesskey|privatekey|signingkey|masterkey|vaultkey|token|accesstoken|refreshtoken|idtoken|bottoken|credential|credentials|otp|otpcode|verificationcode|totp|totpsecret|cvv|cvc|pan|cardnumber';
+  'password|passwd|pwd|passphrase|secret|clientsecret|authorization|proxyauthorization|cookie|setcookie|apikey|xapikey|xauthtoken|xcsrftoken|csrftoken|sessiontoken|accesskey|privatekey|signingkey|masterkey|vaultkey|token|accesstoken|refreshtoken|idtoken|bottoken|apptoken|credential|credentials|otp|otpcode|verificationcode|totp|totpsecret|cvv|cvc|pan|cardnumber';
 const secretKey = new RegExp(`^(?:${secretNames})$`, 'i');
 const secretAssignment = new RegExp(
   String.raw`((["']?)\b(?:${secretNames
@@ -29,7 +29,7 @@ const privateQuery =
 const privateUserInfo = /(https?:\/\/)[^\s/@]+:[^\s/@]+@/gi;
 const base64Data = /\bdata:[^,\s]+;base64,[A-Za-z0-9+/=]+/g;
 
-const tokenShapes = String.raw`\b(?:sk-(?:proj-|ant-)?[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{12,}|(?:AKIA|ASIA)[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{30,}|glpat-[A-Za-z0-9_-]{20,}|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)\b|${privateKeyStart}`;
+const tokenShapes = String.raw`\b(?:sk-(?:proj-|ant-)?[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{12,}|xapp-[A-Za-z0-9-]{12,}|(?:AKIA|ASIA)[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{30,}|glpat-[A-Za-z0-9_-]{20,}|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)\b|${privateKeyStart}`;
 export const secretToken = new RegExp(tokenShapes);
 
 export function secretField(key: string) {

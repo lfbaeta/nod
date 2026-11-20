@@ -7,6 +7,7 @@ import { useVoiceRecorder } from '../hooks/use-voice-recorder';
 import { api, apiResponse, errorMessage } from '../lib/api';
 import { desktopSettingsAvailable } from '../lib/desktop';
 import { savePreferences } from '../lib/preferences';
+import { CircleCheck } from './icons';
 import { SearchPicker } from './search-picker';
 import { useSettingsDraft } from './settings-drafts';
 import { VoiceConnections } from './voice-connections';
@@ -55,8 +56,8 @@ export function VoiceSettings({ onBusyChange }: { onBusyChange(busy: boolean): v
   const [connectionDirty, setConnectionDirty] = useState(false);
   const [discardConnection, setDiscardConnection] = useState(false);
   const [error, setError] = useState('');
-  const [preparationError, setPreparationError] = useState('');
-  const [preparing, setPreparing] = useState(false);
+  const [preparationErrors, setPreparationErrors] = useState({ voice: '', input: '' });
+  const [preparing, setPreparing] = useState<'voice' | 'input' | null>(null);
   const [catalogRefreshing, setCatalogRefreshing] = useState(false);
   const [catalogError, setCatalogError] = useState('');
   const catalogRequest = useRef<AbortController | null>(null);
@@ -85,7 +86,8 @@ export function VoiceSettings({ onBusyChange }: { onBusyChange(busy: boolean): v
     setPlaying(null);
     setPreviewing(null);
   }
-  const busy = saving || preparing || connectionBusy || catalogRefreshing || recorder.discovering;
+  const busy =
+    saving || preparing !== null || connectionBusy || catalogRefreshing || recorder.discovering;
   useLayoutEffect(() => {
     onBusyChange(busy);
     return () => onBusyChange(false);
@@ -139,28 +141,31 @@ export function VoiceSettings({ onBusyChange }: { onBusyChange(busy: boolean): v
     const timer = window.setTimeout(() => void refresh(), 1000);
     return () => window.clearTimeout(timer);
   }, [preparing, data?.local?.state, data?.localInput?.state, refresh, refreshing]);
-  async function prepare() {
+  async function prepare(target: 'voice' | 'input') {
     if (prepareRequest.current) return;
     const controller = new AbortController();
     prepareRequest.current = controller;
-    setPreparing(true);
-    setPreparationError('');
+    setPreparing(target);
+    setPreparationErrors((current) => ({ ...current, [target]: '' }));
     try {
       await api('/api/speech/prepare', {
         method: 'POST',
-        body: JSON.stringify({ locale: navigator.language }),
+        body: JSON.stringify(
+          target === 'input' ? { localInput: true } : { locale: navigator.language },
+        ),
         signal: controller.signal,
       });
       const next = await api<SpeechSettings>('/api/speech', { signal: controller.signal });
       controller.signal.throwIfAborted();
       update(() => next);
     } catch (cause) {
-      if (!controller.signal.aborted) setPreparationError(errorMessage(cause));
+      if (!controller.signal.aborted)
+        setPreparationErrors((current) => ({ ...current, [target]: errorMessage(cause) }));
     } finally {
       if (prepareRequest.current === controller) {
         prepareRequest.current = null;
         if (mounted.current) {
-          setPreparing(false);
+          setPreparing(null);
           void refresh();
         }
       }
@@ -372,14 +377,14 @@ export function VoiceSettings({ onBusyChange }: { onBusyChange(busy: boolean): v
                 value={data.speechVoice}
                 defaultVoice={data.defaultVoice}
                 open={pickerOpen}
-                disabled={saving || connectionBusy}
+                disabled={saving || connectionBusy || preparing === 'input'}
                 labelledBy={`${id}-voice`}
                 loading={previewing}
                 playing={playing}
                 error={error || catalogError || data.voicesError || ''}
                 local={data.local}
-                preparing={preparing}
-                preparationError={preparationError}
+                preparing={preparing === 'voice'}
+                preparationError={preparationErrors.voice}
                 refreshing={catalogRefreshing}
                 providers={providerOptions}
                 onOpenChange={(open) => {
@@ -394,7 +399,7 @@ export function VoiceSettings({ onBusyChange }: { onBusyChange(busy: boolean): v
                 }}
                 onPreview={(voice) => void preview(voice)}
                 onStop={stop}
-                onPrepare={() => void prepare()}
+                onPrepare={() => void prepare('voice')}
                 onCancelPreparation={() => prepareRequest.current?.abort()}
                 onConnect={(provider) => {
                   stop();
@@ -418,12 +423,12 @@ export function VoiceSettings({ onBusyChange }: { onBusyChange(busy: boolean): v
               Your saved voice is unavailable. Check its connection or choose another voice.
             </p>
           )}
-          {!pickerOpen && (preparing || data.local?.state === 'downloading') && (
+          {!pickerOpen && (preparing === 'voice' || data.local?.state === 'downloading') && (
             <p className="field-hint" role="status">
               {(data.local?.progress ?? 0) >= 100
                 ? 'Preparing free voices…'
                 : `Downloading free voices · ${Math.round(data.local?.progress ?? 0)}%`}
-              {preparing && (
+              {preparing === 'voice' && (
                 <Button
                   type="button"
                   variant="ghost"
@@ -433,6 +438,51 @@ export function VoiceSettings({ onBusyChange }: { onBusyChange(busy: boolean): v
                   Cancel
                 </Button>
               )}
+            </p>
+          )}
+          {data.localInput && (
+            <div className="account-preference-row">
+              <span>On-device transcription</span>
+              <div className="voice-settings-choice voice-local-input">
+                {data.localInput.state === 'ready' ? (
+                  <span className="voice-local-input-status" role="status">
+                    <CircleCheck size={14} aria-hidden="true" /> Ready
+                  </span>
+                ) : preparing === 'input' || data.localInput.state === 'downloading' ? (
+                  <>
+                    <span role="status">
+                      {(data.localInput.progress ?? 0) >= 100
+                        ? 'Preparing…'
+                        : `Downloading · ${Math.round(data.localInput.progress ?? 0)}%`}
+                    </span>
+                    {preparing === 'input' && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => prepareRequest.current?.abort()}
+                      >
+                        Cancel
+                      </Button>
+                    )}
+                  </>
+                ) : (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={preparing !== null}
+                    onClick={() => void prepare('input')}
+                  >
+                    Download
+                  </Button>
+                )}
+              </div>
+            </div>
+          )}
+          {preparationErrors.input && (
+            <p className="field-hint" role="alert">
+              {preparationErrors.input}
             </p>
           )}
           <div className="account-preference-row voice-spoken-row">
@@ -465,9 +515,9 @@ export function VoiceSettings({ onBusyChange }: { onBusyChange(busy: boolean): v
         !loadError && <p className="field-hint">Loading voices…</p>
       )}
       {!pickerOpen &&
-        (loadError || error || catalogError || data?.voicesError || preparationError) && (
+        (loadError || error || catalogError || data?.voicesError || preparationErrors.voice) && (
           <Notice>
-            {loadError || error || catalogError || data?.voicesError || preparationError}
+            {loadError || error || catalogError || data?.voicesError || preparationErrors.voice}
             {(loadError || catalogError || data?.voicesError) && (
               <Button
                 type="button"

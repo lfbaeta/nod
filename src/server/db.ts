@@ -95,6 +95,10 @@ export async function initializeDatabase() {
     CREATE UNIQUE INDEX IF NOT EXISTS turns_owner_source ON turns(owner_id,source_id) WHERE source_id IS NOT NULL;
     CREATE INDEX IF NOT EXISTS turns_thread_queue ON turns(thread_id,status,created_at,id);
     CREATE INDEX IF NOT EXISTS turns_owner_time ON turns(owner_id,created_at,id);
+    CREATE INDEX IF NOT EXISTS turns_reply_current ON turns(owner_id,session_id,created_at DESC,id DESC)
+      WHERE status<>'succeeded' OR started_at IS NOT NULL OR message_id IS NULL OR source NOT IN ('user','task');
+    CREATE INDEX IF NOT EXISTS turns_reply_unknown_credentials ON turns(owner_id,session_id,created_at DESC,id DESC)
+      WHERE status='waiting' AND waiting_reason='credentials' AND started_at IS NULL;
     CREATE UNIQUE INDEX IF NOT EXISTS turns_proactive_queued ON turns(owner_id,thread_id) WHERE proactive AND source='event' AND status='queued';
     CREATE TABLE IF NOT EXISTS turn_events (
       id uuid PRIMARY KEY, turn_id uuid NOT NULL REFERENCES turns(id), type text NOT NULL,
@@ -132,6 +136,7 @@ export async function initializeDatabase() {
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS answer_choices jsonb;
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS question_answer jsonb;
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS approval_answer boolean;
+    ALTER TABLE messages ADD COLUMN IF NOT EXISTS no_reply_context boolean NOT NULL DEFAULT false;
     CREATE INDEX IF NOT EXISTS messages_question_answer_reply ON messages(reply_to_message_id) WHERE question_answer IS NOT NULL;
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS delivered_channel text;
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS hidden_at timestamptz;
@@ -154,6 +159,7 @@ export async function initializeDatabase() {
       ADD COLUMN IF NOT EXISTS details jsonb,
       ADD COLUMN IF NOT EXISTS title text;
     CREATE INDEX IF NOT EXISTS approvals_turn ON approvals(turn_id);
+    CREATE INDEX IF NOT EXISTS approvals_reply_pending ON approvals(owner_id,turn_id) WHERE status='pending';
     CREATE INDEX IF NOT EXISTS approvals_execution_turn ON approvals(execution_turn_id);
     CREATE INDEX IF NOT EXISTS approvals_confirmation_message ON approvals(confirmation_message_id);
     CREATE INDEX IF NOT EXISTS approvals_memory_save ON approvals(owner_id,source_message_id) WHERE action='NOD_memory_save';

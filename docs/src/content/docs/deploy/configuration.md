@@ -132,7 +132,7 @@ Leave every variable for a channel blank or unset to manage it in **Channels**. 
 
 Setting any nonempty variable for a channel makes that entire channel server-managed. Its environment configuration takes precedence over saved settings. The app shows this state and prevents configuration edits or removal.
 
-Set `TELEGRAM_ENABLED=false` or `WHATSAPP_ENABLED=false` to disable a channel explicitly. Otherwise, supplying channel settings enables it. Remove or clear every variable for that channel to return to its previous saved setup. Credentials from the environment are never copied into the database.
+Set `TELEGRAM_ENABLED=false`, `WHATSAPP_ENABLED=false`, or `SLACK_ENABLED=false` to disable a channel explicitly. Otherwise, supplying channel settings enables it. Remove or clear every variable for that channel to return to its previous saved setup. Credentials from the environment are never copied into the database.
 
 | Variable                        | What it does                                                                                                                     | Default                                 |
 | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- |
@@ -149,10 +149,18 @@ Set `TELEGRAM_ENABLED=false` or `WHATSAPP_ENABLED=false` to disable a channel ex
 | `WHATSAPP_PHONE_NUMBER_ID`      | The ID of the business sender number.                                                                                            | Empty                                   |
 | `WHATSAPP_VERIFY_TOKEN`         | The token Meta sends when it verifies the webhook.                                                                               | Empty                                   |
 | `WHATSAPP_ALLOWED_NUMBER`       | Your personal number, with country code, 7 to 15 digits. Required for `bot` and Cloud API. Self-chat uses the linked number.     | Empty                                   |
+| `SLACK_ENABLED`                 | `true` enables Slack; `false` disables it. Either value makes it server-managed.                                                 | Unset; follows supplied configuration   |
+| `SLACK_RICH_ENABLED`            | Requests agent status, task threads, controls, and buffered reply streams after [rich Slack setup](/use/channels/#rich-slack).   | `false`                                 |
+| `SLACK_BOT_TOKEN`               | Your app's `xoxb-` bot token.                                                                                                    | Empty                                   |
+| `SLACK_APP_TOKEN`               | The same app's `xapp-` app-level token with `connections:write`.                                                                 | Empty                                   |
+| `SLACK_TEAM_ID`                 | The only workspace Nod accepts, beginning with `T`.                                                                              | Empty                                   |
+| `SLACK_ALLOWED_USER_ID`         | Your human Slack member ID. Only this member's one-to-one DM is accepted.                                                        | Empty                                   |
 
 For QR setup, use **Channels** to scan the code. The `bot` and `self-chat` modes do not use the Meta access token, app secret, business phone number ID or webhook token. The saved device keys stay encrypted in the database. See [WhatsApp setup](/use/channels/#set-up-a-channel).
 
 The smallest Telegram configuration needs `TELEGRAM_BOT_TOKEN` and `TELEGRAM_ALLOWED_USER_ID`; it uses polling.
+
+Slack requires both tokens, the workspace ID, and your member ID. Enable Socket Mode, the bot scopes, and the three events listed in [Slack setup](/use/channels/#slack-setup). Nod verifies the bot, app, workspace, member, and DM again when the connection starts. No public callback, signing secret, workspace slash command, or `chat:write.public` permission is needed. Send commands as ordinary DM text. See [Slack replies and commands](/use/channels/#slack-replies-and-commands) for which commands are scoped to a task thread.
 
 ### Telegram webhooks
 

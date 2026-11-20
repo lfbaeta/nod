@@ -65,7 +65,15 @@ import type { MemoryCurator } from '../ports/memory-curator.ts';
 import type { DecisionModel, ModelReview } from '../ports/decisions.ts';
 import { createDecisionModel, createOpenRouterDecisionCatalog } from '../providers/decisions.ts';
 import type { SpeechProvider, LocalSpeechControls } from '../ports/speech.ts';
-import { createLocalSpeechProvider } from '../providers/local-speech/index.ts';
+import {
+  createLocalSpeechProvider,
+  LocalSpeechInputError,
+} from '../providers/local-speech/index.ts';
+import {
+  LocalMediaDecodeError,
+  LocalMediaDecoderMissing,
+  prepareSlackSpeech,
+} from '../providers/local-speech/slack-media.ts';
 import type { MessagingTransport } from '../ports/messaging.ts';
 import type { ChannelSetupVerifier } from '../ports/channel-settings.ts';
 import type { LinkPreviewProvider } from '../ports/link-preview.ts';
@@ -77,6 +85,7 @@ import type { UsageTelemetry } from '../ports/provider-usage.ts';
 import { agentModels, defaultEffort, defaultModel } from '../shared/model-defaults.ts';
 import { createChatSdkTransport } from '../providers/chat-sdk/index.ts';
 import { createWhatsAppLinkedTransport } from '../providers/chat-sdk/whatsapp.ts';
+import { createSlackTransport } from '../providers/chat-sdk/slack.ts';
 import { combineMessagingTransports } from '../providers/chat-sdk/combined.ts';
 import { createChatSdkSetupVerifier } from '../providers/chat-sdk/settings.ts';
 import { createContainerBrowserComputer } from '../providers/container-browser/index.ts';
@@ -159,7 +168,7 @@ import { localArtifacts } from './artifacts.ts';
 import { memoryFileName, memoryMarkdown } from '../shared/memory-export.ts';
 import { createChannels } from './channels.ts';
 import { createChannelSettings, managedChannelEnvironment } from './channel-settings.ts';
-import { createChannelMedia } from './channel-media.ts';
+import { ChannelMediaFailure, createChannelMedia } from './channel-media.ts';
 import { createChannelSessionStore } from './channel-session.ts';
 import { configuration, dataRoot, desktopMode, ownerId, publicOrigin } from './config.ts';
 import { createAccountStore } from './account-store.ts';
@@ -170,7 +179,7 @@ import { connectedGmail } from '../shared/onboarding.ts';
 import { createPostgresObjectStore } from './object-storage.ts';
 import { loadPrivacyNoticeFile, registerPrivacyNotice } from './privacy.ts';
 import { createDocumentation } from './documentation.ts';
-import { initializeDatabase, pool } from './db.ts';
+import { cancellationTransaction, initializeDatabase, pool } from './db.ts';
 import { events, refresh } from './events.ts';
 import { createIntegrations } from './integrations.ts';
 import {
@@ -200,7 +209,12 @@ import { createMemoryLearning, initializeMemoryLearning } from './memory-learnin
 import { createMemoryService, importMemoryFile } from './memory.ts';
 import { createMemoryRecall } from './memory-recall.ts';
 import { createLearnedSkills } from './learned-skills.ts';
-import { automaticSpeechVoice, createSpeech } from './speech.ts';
+import {
+  automaticSpeechVoice,
+  createSpeech,
+  SpeechSetupError,
+  TranscriptionLengthError,
+} from './speech.ts';
 import {
   activeThread,
   boss,
@@ -248,7 +262,7 @@ export interface ApplicationAdapters {
   computer: Computer;
   workspace: Workspace;
   speech: SpeechProvider;
-  localSpeech?: LocalSpeechControls;
+  localSpeech?: LocalSpeechControls & SpeechProvider;
   speechInputFormat?: (voice: string | null) => 'wav' | undefined;
   integrations: IntegrationProvider;
   observations?: ObservationProvider[];
@@ -646,6 +660,11 @@ export function createDefaultAdapters(
       managed: managedChannelEnvironment(env),
       create: (environment) => {
         const configured = { ...env, ...environment };
+        const slack = createSlackTransport(pool, configured, {
+          ownerId,
+          keyStore,
+          captureThread: async () => (await activeThread(pool, ownerId)).id,
+        });
         const mode =
           environment.WHATSAPP_MODE ??
           (environment.WHATSAPP_ENABLED === 'true' && environment.WHATSAPP_ACCESS_TOKEN
@@ -657,9 +676,10 @@ export function createDefaultAdapters(
           (mode !== 'bot' && mode !== 'self-chat') ||
           (mode === 'bot' && !/^\d{7,15}$/.test(configured.WHATSAPP_ALLOWED_NUMBER ?? ''))
         )
-          return createChatSdkTransport(pool, configured);
+          return combineMessagingTransports(createChatSdkTransport(pool, configured), slack);
         return combineMessagingTransports(
           createChatSdkTransport(pool, { ...configured, WHATSAPP_ENABLED: 'false' }),
+          slack,
           createWhatsAppLinkedTransport({
             mode,
             allowedNumber: configured.WHATSAPP_ALLOWED_NUMBER,
@@ -985,6 +1005,9 @@ async function initializeApplication(
   });
   const speechPreferences = createPreferencesStore(pool, ownerId);
   const speechProvider = ledger.speech(adapters.speech);
+  const localSpeech = adapters.localSpeech
+    ? createSpeech(ledger.speech(adapters.localSpeech))
+    : undefined;
   const speech = createSpeech({
     ...speechProvider,
     get configured() {
@@ -2501,7 +2524,9 @@ async function initializeApplication(
         event: 'owner_message_accepted',
         properties: {
           channel:
-            source === 'web' || source === 'telegram' || source === 'whatsapp' ? source : 'other',
+            source === 'web' || source === 'telegram' || source === 'whatsapp' || source === 'slack'
+              ? source
+              : 'other',
         },
       });
     };
@@ -3638,6 +3663,7 @@ async function initializeApplication(
         keyStore: adapters.keyStore,
         verifier: setup.verifier,
         managed: setup.managed,
+        available: (provider) => channels?.available(provider),
         linkStatus: async () => {
           if (!channels) throw new Error('Messaging is not ready.');
           return channels.pairing();
@@ -3664,13 +3690,16 @@ async function initializeApplication(
               consent.version !== analytics.consent(ownerId).version
             )
               return;
-            const signature = JSON.stringify(states);
+            const observedStates = states.some((state) => state.channel === 'slack')
+              ? states
+              : [...states, { channel: 'slack' as const, state: 'disabled' as const }];
+            const signature = JSON.stringify(observedStates);
             if (
               lastChannelObservation?.consentVersion === consent.version &&
               lastChannelObservation.signature === signature
             )
               return;
-            for (const properties of states)
+            for (const properties of observedStates)
               captureAnalytics(
                 { event: 'channel_connection_observed', properties },
                 { consentRevision: consent.revision },
@@ -3685,11 +3714,49 @@ async function initializeApplication(
       ? setup.create(await channelSettings!.environment())
       : adapters.messaging!;
     channels = await createChannels(pool, {
+      control: tasks.channelControl,
+      cancel: (work) => cancellationTransaction(work, pool),
       admission,
       ownerId,
       present: communication.present,
       resolveAttachments: artifacts.readThreadArtifacts,
-      media: createChannelMedia({ artifacts, speech }),
+      media: createChannelMedia({
+        artifacts,
+        speech,
+        slackTranscribe:
+          localSpeech &&
+          (async (input, signal, report) => {
+            const audio = await prepareSlackSpeech(input, signal).catch((error) => {
+              signal.throwIfAborted();
+              if (error instanceof LocalMediaDecoderMissing)
+                throw new ChannelMediaFailure('local_media_decoder_missing');
+              if (error instanceof LocalMediaDecodeError)
+                throw new ChannelMediaFailure(
+                  error.reason === 'length'
+                    ? 'local_media_too_long'
+                    : error.reason === 'format'
+                      ? 'local_media_format_unsupported'
+                      : 'local_media_decode_failed',
+                );
+              throw error;
+            });
+            if (!audio) return null;
+            return localSpeech.transcribe(audio, signal, report).catch((error) => {
+              signal.throwIfAborted();
+              if (error instanceof SpeechSetupError || error instanceof TranscriptionLengthError)
+                throw error;
+              if (error instanceof LocalSpeechInputError)
+                throw new ChannelMediaFailure(
+                  error.reason === 'silence'
+                    ? 'local_media_no_speech'
+                    : error.reason === 'length'
+                      ? 'local_media_too_long'
+                      : 'local_media_decode_failed',
+                );
+              throw new ChannelMediaFailure('local_speech_engine_failed');
+            });
+          }),
+      }),
       modelConfigured: () => adapters.model.configured,
       verificationPending: async (channel) => (await chatVerification.pending(channel)).length > 0,
       attributeMediaUsage: ledger.attributeMediaUsage,
@@ -3699,7 +3766,7 @@ async function initializeApplication(
       classifyRetiredReply: (reply, expired) =>
         ledger.forOwner(() => trust.classifyRetiredReply(reply, expired)),
       acceptVerification: (text, input) => chatVerification.accept(text, input),
-      reacted: (messageId, reaction) => reactToMessage(messageId, reaction),
+      reacted: (messageId, reaction, wake) => reactToMessage(messageId, reaction, wake),
       activeThread: (client) => lockThread(client),
       activity: activity.read,
       taskCommand: tasks.chatCommand,
@@ -3768,6 +3835,7 @@ async function initializeApplication(
         attachments,
         onInserted,
         stopSignal,
+        replyContext,
       ) =>
         (
           await userMessages.submit(text, attachments, {
@@ -3779,6 +3847,7 @@ async function initializeApplication(
             answer,
             onInserted,
             stopSignal,
+            replyContext,
           })
         ).turnId,
       stopSignal,

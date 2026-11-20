@@ -953,6 +953,12 @@ export function createPiAgent(options: {
                       'Search the public web through the configured Pi provider. Use queries with 2-4 varied angles for broad research. Return source-linked results without a curator or a separate summary. Use includeContent only when full source text is needed.',
                   }
                 : {}),
+              ...(web && name === 'fetch_content'
+                ? {
+                    description:
+                      'Fetch publicly accessible HTTP or HTTPS URLs. Use mode to select the kind of web extraction. This tool does not open workspace paths or file URLs. Inspect local attachments with workspace tools instead. An extracted video frame does not contain audio.',
+                  }
+                : {}),
               execute: async (id, params, signal, onUpdate, context) => {
                 const args = web
                   ? {

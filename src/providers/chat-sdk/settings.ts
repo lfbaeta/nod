@@ -2,6 +2,8 @@ import { createHmac, randomBytes } from 'node:crypto';
 import { isIP } from 'node:net';
 import { z } from 'zod';
 import { modelServiceError } from '../model-error.ts';
+import { slackInput, verifySlack } from './slack.ts';
+import { MessagingConnectionError } from '../../ports/messaging.ts';
 import {
   ChannelSetupFailure,
   telegramSecret,
@@ -140,6 +142,11 @@ export function createChatSdkSetupVerifier(
   return {
     async verify(provider, input): ReturnType<ChannelSetupVerifier['verify']> {
       try {
+        if (provider === 'slack') {
+          const parsed = slackInput.safeParse(input);
+          if (!parsed.success) throw new ChannelSetupFailure('invalid_input');
+          return await verifySlack(parsed.data, request);
+        }
         if (provider === 'telegram') {
           const parsed = telegramInput.safeParse(input);
           if (!parsed.success) throw new ChannelSetupFailure('invalid_input');
@@ -258,6 +265,8 @@ export function createChatSdkSetupVerifier(
         };
       } catch (error) {
         if (error instanceof ChannelSetupFailure) throw error;
+        if (provider === 'slack' && error instanceof MessagingConnectionError)
+          throw new ChannelSetupFailure('verification_failed', error.message);
         throw new ChannelSetupFailure('verification_failed');
       }
     },

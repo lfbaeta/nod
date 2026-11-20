@@ -6,6 +6,17 @@ export function combineMessagingTransports(
   const forChannel = (id: string) =>
     transports.findLast((transport) => transport.channels.some((channel) => channel.id === id));
   return {
+    controls(accept) {
+      const releases = transports.map((transport) =>
+        transport.controls?.((input) =>
+          forChannel(input.channelId) === transport ? accept(input) : Promise.resolve(),
+        ),
+      );
+      return () => releases.forEach((release) => release?.());
+    },
+    async conversation(input) {
+      return (await forChannel(input.channelId)?.conversation?.(input)) ?? {};
+    },
     get channels() {
       return [
         ...new Map(
@@ -49,11 +60,13 @@ export function combineMessagingTransports(
       if (!transport?.progress) throw new Error('Channel progress is unavailable.');
       await transport.progress(input);
     },
-    async pairing() {
-      const transport = transports.findLast((transport) => transport.pairing);
-      if (!transport?.pairing) throw new Error('QR pairing is unavailable.');
-      return transport.pairing();
-    },
+    pairing: transports.some((transport) => transport.pairing)
+      ? async () => {
+          const transport = transports.findLast((transport) => transport.pairing);
+          if (!transport?.pairing) throw new Error('QR pairing is unavailable.');
+          return transport.pairing();
+        }
+      : undefined,
     async unlink() {
       for (const transport of transports) await transport.unlink?.();
     },

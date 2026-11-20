@@ -16,6 +16,7 @@ interface VerificationInput {
   receiptOnly?: boolean;
   attachmentIds?: string[];
   signal?: AbortSignal;
+  validateReplyTarget?: (client: PoolClient) => Promise<void>;
   persistOrdinary?: (client: PoolClient) => Promise<void>;
   persistVerification?: (client: PoolClient, response: SubmitMessageResponse) => Promise<void>;
 }
@@ -225,6 +226,7 @@ export async function createChatVerification(
         return response;
       }
       let turnId: string | undefined;
+      await input.validateReplyTarget?.(client);
       let requestId = input.verificationRequestId;
       if (input.replyToMessageId) {
         const target = (

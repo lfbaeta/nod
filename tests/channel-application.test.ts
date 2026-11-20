@@ -347,6 +347,15 @@ test('input preparation reuses cloud transcription and preserves an explicit loc
     app.inject({ method: 'POST', url: '/api/speech/prepare', payload: { inputOnly: true } });
   assert.equal((await prepare()).json().transcription, true);
   assert.equal(inputPreparations, 0);
+  const forced = await app.inject({
+    method: 'POST',
+    url: '/api/speech/prepare',
+    payload: { localInput: true },
+  });
+  assert.equal(forced.statusCode, 200);
+  assert.equal(forced.json().localInput.state, 'ready');
+  assert.equal(inputPreparations, 1);
+  inputReady = false;
   voice = 'local:af_heart';
   assert.equal((await app.inject('/api/speech')).json().transcription, false);
   const local = await prepare();
@@ -354,7 +363,7 @@ test('input preparation reuses cloud transcription and preserves an explicit loc
   assert.equal(local.json().transcriptionFormat, 'wav');
   assert.equal(local.json().local.state, 'not_downloaded');
   assert.equal(local.json().localInput.state, 'ready');
-  assert.equal(inputPreparations, 1);
+  assert.equal(inputPreparations, 2);
   assert.equal(fullPreparations, 0);
   assert.equal(voice, 'local:af_heart');
   assert.equal((await app.inject('/api/speech')).json().transcription, true);

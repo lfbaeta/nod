@@ -12,6 +12,18 @@ import { logFailure } from '../../ports/failure-log.ts';
 import { speechVoices } from '../../shared/speech.ts';
 import { verifySpeechCache } from './cache.ts';
 
+export class LocalSpeechInputError extends SpeechProviderError {
+  constructor(readonly reason: 'silence' | 'length' | 'format') {
+    super(
+      reason === 'silence'
+        ? 'No speech was detected. Please record again.'
+        : reason === 'length'
+          ? 'Keep local voice messages under five minutes.'
+          : 'Local speech supports WebM, Ogg, MP3 and WAV recordings.',
+    );
+  }
+}
+
 interface LocalSpeechStatus {
   state: 'not_downloaded' | 'downloading' | 'ready' | 'failed';
   progress?: number;
@@ -184,17 +196,15 @@ export function createLocalSpeechProvider(options: {
             detail: typeof reply.detail === 'string' ? reply.detail.slice(0, 2000) : undefined,
           };
           finished.reject(
-            new SpeechProviderError(
-              reply.reason === 'silence'
-                ? 'No speech was detected. Please record again.'
-                : reply.reason === 'length'
-                  ? 'Keep local voice messages under five minutes.'
-                  : reply.reason === 'tokens'
+            reply.reason === 'silence' || reply.reason === 'length' || reply.reason === 'format'
+              ? new LocalSpeechInputError(reply.reason)
+              : new SpeechProviderError(
+                  reply.reason === 'tokens'
                     ? "This text exceeds the local voice's pronunciation limit. Try a shorter passage or a voice service that supports its language."
-                    : reply.reason === 'format'
-                      ? 'Local speech supports WebM, Ogg, MP3 and WAV recordings.'
+                    : reply.reason === 'transcript_length'
+                      ? 'Local speech produced an unusually long transcript. Try recording again.'
                       : 'Local speech failed. Try again.',
-            ),
+                ),
           );
         }
         advance();

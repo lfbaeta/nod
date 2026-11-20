@@ -424,8 +424,15 @@ export function mapLocationUrl(place: { latitude: number; longitude: number }) {
   return `https://www.openstreetmap.org/?mlat=${place.latitude}&mlon=${place.longitude}#map=15/${place.latitude}/${place.longitude}`;
 }
 
-export function presentationText(value: Presentation) {
+export function presentationText(value: Presentation, tables = false) {
   if (value.type === 'schedule-run') return '';
+  const table = (headers: string[], rows: string[][]) => {
+    if (!tables || [...headers, ...rows.flat()].some((cell) => /[|\\\r\n`[\]*_<>]/.test(cell)))
+      return undefined;
+    return [headers, headers.map(() => '---'), ...rows]
+      .map((row) => `| ${row.join(' | ')} |`)
+      .join('\n');
+  };
   const lines = [value.title];
   if (value.caption) lines.push(value.caption);
   if (value.asOf) lines.push(value.asOf);
@@ -554,7 +561,12 @@ export function presentationText(value: Presentation) {
   if (value.type === 'booking') {
     for (const venue of [value, ...(value.alternatives ?? [])]) {
       lines.push(`${venue.name} · ${venue.status}`);
-      for (const fact of venue.facts) lines.push(`${fact.label}: ${fact.value}`);
+      const facts = table(
+        ['Fact', 'Value'],
+        venue.facts.map((fact) => [fact.label, fact.value]),
+      );
+      if (facts) lines.push('', facts, '');
+      else for (const fact of venue.facts) lines.push(`${fact.label}: ${fact.value}`);
       for (const photo of venue.photos ?? []) lines.push(`Image: ${photo.alt}`);
       for (const note of venue.notes ?? []) lines.push(note);
       if (venue.rating) {
@@ -575,10 +587,22 @@ export function presentationText(value: Presentation) {
   }
   if (value.type === 'chart') {
     for (const label of [value.xLabel, value.yLabel]) if (label) lines.push(label);
-    for (const series of value.series)
-      lines.push(
-        `${series.label}: ${series.points.map((point) => `${point.label}: ${point.value}${value.unit ? ` ${value.unit}` : ''}`).join('; ')}`,
-      );
+    const points = table(
+      ['Series', value.xLabel || 'Label', value.yLabel || 'Value'],
+      value.series.flatMap((series) =>
+        series.points.map((point) => [
+          series.label,
+          point.label,
+          `${point.value}${value.unit ? ` ${value.unit}` : ''}`,
+        ]),
+      ),
+    );
+    if (points) lines.push('', points, '');
+    else
+      for (const series of value.series)
+        lines.push(
+          `${series.label}: ${series.points.map((point) => `${point.label}: ${point.value}${value.unit ? ` ${value.unit}` : ''}`).join('; ')}`,
+        );
   }
   if (value.type === 'diagram') {
     let labels = new Map(
@@ -600,6 +624,11 @@ export function presentationText(value: Presentation) {
           .join(': '),
       );
   }
-  for (const source of value.sources) lines.push(`${source.label}: ${source.url}`);
+  for (const source of value.sources)
+    lines.push(
+      tables && !/[\n\r\\[\]*_~`<>]/.test(source.label)
+        ? `[${source.label}](${source.url})`
+        : `${source.label}: ${source.url}`,
+    );
   return lines.join('\n');
 }

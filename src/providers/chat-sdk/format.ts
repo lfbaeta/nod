@@ -62,7 +62,7 @@ function prose(value: string, syntax: Syntax) {
   return result + syntax.text(value.slice(last));
 }
 
-function render(root: Root, syntax: Syntax, source?: string) {
+function render(root: Root, syntax: Syntax, source?: string, units?: string[]) {
   const inline = (nodes: Node[], open: ReadonlySet<string>) =>
     nodes.map((node) => phrase(node, open)).join('');
 
@@ -141,20 +141,21 @@ function render(root: Root, syntax: Syntax, source?: string) {
             `${syntax.quote}${line.startsWith(syntax.quote) ? line.slice(syntax.quote.length) : line}`.trimEnd(),
           )
           .join('\n');
-      case 'list':
-        return node.children
-          .map((item, index) => {
-            const box = item.checked === true ? '☑' : item.checked === false ? '☐' : '';
-            const marker = node.ordered
-              ? `${syntax.number((node.start ?? 1) + index)}${box && ` ${box}`}`
-              : box || syntax.bullet;
-            const content = blocks(item.children, item.spread ? '\n\n' : '\n')
-              .split('\n')
-              .map((line, position) => (position && line ? `  ${line}` : line))
-              .join('\n');
-            return `${marker} ${content}`;
-          })
-          .join('\n');
+      case 'list': {
+        const items = node.children.map((item, index) => {
+          const box = item.checked === true ? '☑' : item.checked === false ? '☐' : '';
+          const marker = node.ordered
+            ? `${syntax.number((node.start ?? 1) + index)}${box && ` ${box}`}`
+            : box || syntax.bullet;
+          const content = blocks(item.children, item.spread ? '\n\n' : '\n')
+            .split('\n')
+            .map((line, position) => (position && line ? `  ${line}` : line))
+            .join('\n');
+          return `${marker} ${content}`;
+        });
+        if (units && root.children[0] === node) for (const item of items) units.push(item);
+        return items.join('\n');
+      }
       case 'table': {
         const [head, ...rows] = node.children.map((row) => row.children);
         if (!head) return '';
@@ -165,20 +166,20 @@ function render(root: Root, syntax: Syntax, source?: string) {
             .filter(Boolean)
             .map((cell) => `${syntax.bullet} ${cell}`)
             .join('\n');
-        return rows
-          .map((row) =>
-            [
-              row[0] && mark(syntax.bold, row[0], none).trim(),
-              ...row.slice(1).map((cell, index) => {
-                const value = inline(cell.children, none).trim();
-                const label = labels[index + 1];
-                return value && `${syntax.bullet} ${label ? `${label}: ` : ''}${value}`;
-              }),
-            ]
-              .filter(Boolean)
-              .join('\n'),
-          )
-          .join('\n\n');
+        const items = rows.map((row) =>
+          [
+            row[0] && mark(syntax.bold, row[0], none).trim(),
+            ...row.slice(1).map((cell, index) => {
+              const value = inline(cell.children, none).trim();
+              const label = labels[index + 1];
+              return value && `${syntax.bullet} ${label ? `${label}: ` : ''}${value}`;
+            }),
+          ]
+            .filter(Boolean)
+            .join('\n'),
+        );
+        if (units && root.children[0] === node) for (const item of items) units.push(item);
+        return items.join('\n\n');
       }
       case 'definition':
         return '';
@@ -202,6 +203,81 @@ export function whatsappText(markdown: string) {
   return render(parseMarkdown(markdown), whatsapp, markdown);
 }
 
+const slackEscape = (value: string) =>
+  value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+const slack: Syntax = {
+  ...whatsapp,
+  text: slackEscape,
+  code: (value) => `\`${slackEscape(value).replaceAll('`', "'")}\``,
+  block: (value) => `\`\`\`\n${slackEscape(value).replaceAll('```', "'''")}\n\`\`\``,
+  link: (label, url) =>
+    `<${slackEscape(url).replaceAll('|', '%7C')}|${label.replaceAll('|', ' ')}>`,
+};
+
+export function slackText(markdown: string | Root) {
+  return render(
+    typeof markdown === 'string' ? parseMarkdown(markdown) : markdown,
+    slack,
+    typeof markdown === 'string' ? markdown : undefined,
+  );
+}
+
+export function slackMessages(markdown: string) {
+  const limit = 3000;
+  const root = parseMarkdown(markdown);
+  const parts: string[] = [];
+  let current = '';
+  const flush = () => {
+    if (current) parts.push(current);
+    current = '';
+  };
+  const pack = (text: string, separator: string) => {
+    if (!text) return;
+    if (current.length + separator.length + text.length > limit) flush();
+    current += (current ? separator : '') + text;
+  };
+  const leaf = (text: string) => {
+    flush();
+    let code = '';
+    let chunk = '';
+    const close = () => (code === '```' ? '\n```' : code);
+    const append = (token: string) => {
+      const next = token === code ? '' : !code && /^`(?:``)?$/.test(token) ? token : code;
+      const suffix = next === '```' ? '\n```' : next;
+      if (chunk.length + token.length + suffix.length > limit) {
+        parts.push(chunk + close());
+        chunk = code === '```' ? '```\n' : code;
+      }
+      chunk += token;
+      code = next;
+    };
+    for (const match of text.matchAll(/```|`|<[^>]*>|&(?:amp|lt|gt);|[\s\S]/gu)) {
+      const token = match[0];
+      if (token.length <= limit - 8) append(token);
+      else {
+        const divider = token.indexOf('|');
+        const value = `${token.slice(divider + 1, -1)} (${token.slice(1, divider)})`;
+        for (const point of value.matchAll(/```|`|&(?:amp|lt|gt);|[\s\S]/gu)) append(point[0]);
+      }
+    }
+    if (chunk) parts.push(chunk + close());
+  };
+  for (const node of root.children) {
+    const units: string[] = [];
+    const text = render({ type: 'root', children: [node] }, slack, markdown, units);
+    if (text.length <= limit) pack(text, '\n\n');
+    else {
+      flush();
+      for (const unit of units.length ? units : [text]) {
+        if (unit.length <= limit) pack(unit, node.type === 'list' ? '\n' : '\n\n');
+        else leaf(unit);
+      }
+      flush();
+    }
+  }
+  flush();
+  return parts;
+}
 export function hasLiteralBlock(markdown: string, literal: string) {
   const root = parseMarkdown(markdown);
   const blocks = root.children.filter((node) => node.type === 'code');

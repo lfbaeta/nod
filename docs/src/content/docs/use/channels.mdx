@@ -1,23 +1,23 @@
 ---
-title: Telegram and WhatsApp
-description: Chat with Nod from Telegram or WhatsApp, set up each channel, and finish private steps such as sign-in and payments in the Nod app.
+title: Telegram, WhatsApp and Slack
+description: Chat with Nod from Telegram, WhatsApp or Slack, and finish private steps such as sign-in and payments in the Nod app.
 sidebar:
   order: 7
 ---
 
 import { Steps, TabItem, Tabs } from '@astrojs/starlight/components';
 
-You can chat with Nod from Telegram or WhatsApp. It's the same conversation, memory and tasks as in the Nod app.
+You can chat with Nod from Telegram, WhatsApp or Slack. It's the same conversation, memory and tasks as in the Nod app.
 
 With the desktop app's local assistant, channels reply only while Nod runs on an awake computer with an internet connection and the channel connected. Closing the window keeps Nod running. Quitting Nod or sleeping the computer stops live replies. Messages sent while Nod is stopped may arrive after it restarts and reconnects, but Nod does not read old WhatsApp history. If no reply appears, send the message again.
 
 With a [self-hosted server](/deploy/self-host/), channels stay connected while the server runs. You can close the web or desktop app.
 
-If the desktop app runs Nod, quitting it stops Telegram and WhatsApp replies. The computer must stay awake. Reconnect cannot receive messages while Nod is stopped.
+If the desktop app runs Nod, quitting it stops channel replies. The computer must stay awake. Reconnect cannot receive messages while Nod is stopped.
 
 Nod replies in the app you wrote from. A message from Telegram gets its answer on Telegram, and a schedule you set up there sends its results there too. Everything also shows in the chat in the Nod app.
 
-Nod uses your conversation language for pairing notices and private-step guidance. Its model writes the message; the server adds permitted file links and keeps private sign-in and payment links out of chat apps. If an attachment cannot be read, its caption still helps set the recovery message’s language; the failed attachment does not start a task.
+Nod uses your conversation language for pairing notices, private-step guidance and attachment recovery. Its model writes the message; an attachment's caption can help set the recovery language, but an unread attachment does not start a task. The server adds a bounded diagnostic to attachment-failure notices and removes links from them. Private sign-in and payment links stay out of chat apps.
 
 ## Before you start
 
@@ -35,7 +35,7 @@ Replies keep their bold text, lists, links, quotes, and code. A table arrives as
 
 ## Set up a channel
 
-Open **Channels** in the sidebar, then select **Connect** on Telegram or WhatsApp. Nod checks your details before it saves them, and keeps them encrypted, outside the chat.
+Open **Channels** in the sidebar, then select **Connect** on your channel. Nod checks your details before it saves them, and keeps them encrypted, outside the chat.
 
 If Telegram or the WhatsApp Cloud API rejects setup, Nod shows the service's HTTP status and reason. If Nod can't reach the service, it says so, and names the network error when it recognizes one, such as `ECONNREFUSED` or a timeout after 15 seconds. Submitted tokens and secrets are replaced with `[redacted]`. If webhook registration fails after setup was saved, the error also states that message delivery is unconfirmed.
 
@@ -95,10 +95,147 @@ Cloud API mode needs a [self-hosted server](/deploy/self-host/) with public HTTP
 </TabItem>
 </Tabs>
 
+## Slack setup
+
+Slack uses [Socket Mode](https://docs.slack.dev/apis/events-api/using-socket-mode/). Nod opens an outbound connection, so your computer needs no public callback address. This is separate from the Slack connection in **Apps**, which gives Nod tools for Slack work.
+
+<Steps>
+
+1. Create a Slack app for your workspace in [Slack's app settings](https://api.slack.com/apps). Enable **Socket Mode**.
+2. Create an app-level token with `connections:write`. Keep the `xapp-` token private.
+3. Under **OAuth & Permissions**, add bot scopes `chat:write`, `im:write`, `im:read`, `im:history`, `users:read`, `reactions:read`, `reactions:write`, `files:read`, and `files:write`. Install the app in your workspace. Copy its `xoxb-` bot token.
+4. Under **Event Subscriptions**, subscribe to bot events `message.im`, `reaction_added`, and `reaction_removed`. Enable messages in the app's **App Home**. Do not add slash commands.
+5. Find your workspace ID, beginning with `T`, and use **Copy member ID** in your Slack profile menu for your own member ID.
+6. In Nod, select **Channels → Connect Slack**. Enter **Bot token**, **App-level token**, **Workspace ID**, and **Your Slack member ID**. Select **Connect Slack**.
+7. Open the app's direct message in Slack and send a message. Keep Nod running and your computer awake.
+
+</Steps>
+
+Nod verifies that both tokens belong to the same app, that the bot belongs to your selected workspace, and that your member is a human in it. It opens and verifies your one-to-one DM. Other workspaces, members, groups, shared channels, bots, and message edits don't start work or download files.
+
+Open **Manage Slack** to reconnect, update the connection, or disconnect. Disconnect deletes Nod's saved tokens, but does not uninstall your Slack app or revoke its tokens. Environment-managed settings must be changed on the server.
+
+### Slack replies and commands
+
+Every Nod message arrives at the top level of the DM, not as a child in a Slack thread. To answer a question or continue a task, open the thread on that exact Nod message. Slack sends the root message, not a selected child, as the reply target. Unknown thread roots cannot answer a different question. A thumbs-up or thumbs-down reaction on a confirmation answers that exact action. Removing it does not undo an action.
+
+This is the default connection. With **Rich Slack**, ordinary replies and task files use session threads. Approval questions still arrive separately at the top level: answer in that exact question's thread, or react to that exact question. A task thread does not select a child approval question. Partially or uncertainly delivered Slack questions cannot approve an action. An unaddressed DM reply cannot approve one either.
+
+Slack replies use native headings, styled text, numbered and nested lists, quotes, and code where the source can be preserved safely. Compatible Markdown tables, booking facts and chart data arrive as native tables. Large tables continue in separate messages with repeated headers. Each part includes labelled text for notifications and screen readers. Empty fields, extra cells or unsupported formatting can use labelled rows or the original Markdown instead. Tables use ordinary messages, not streams. Captions use the same rendering; filenames stay literal. A definite first-message formatting rejection can use the plain equivalent instead; an uncertain or partial send is never repeated automatically. A truncation or other response warning does not count as a fully delivered question.
+
+When Slack formatting can't keep part of a reply exactly, that part shows its original Markdown and the rest keeps its formatting. Bare web and email addresses and images stay plain text inside formatted messages; only Markdown links with a lowercase `http://`, `https://`, `mailto:` or `tel:` address and no parentheses, spaces, HTML entity or character that must be encoded become links. A paragraph, heading, list item or table cell shows its text as written when it has an HTML entity such as `&amp;`, a backslash escape, inline HTML, a reference, an angle-bracket link, or a link whose address doesn't start with lowercase `http://`, `https://`, `mailto:` or `tel:`; a heading and a table's first column stay bold. A heading with `&`, `<` or `>` arrives as bold text. A whole block shows as written when Slack formatting doesn't cover its shape, for example a quote paragraph over several lines, a list item with a second paragraph or a quote, or HTML. A whole reply shows its original Markdown and doesn't stream when it has a carriage return, a byte order mark, `<!`, `<@` or `<#` (Slack mention syntax and HTML comments), an encoded `<` or `>` such as `&lt;`, or is very large. Text with NUL or invalid Unicode is refused before sending.
+
+Use these as ordinary DM text, not workspace slash commands:
+
+| Send                                    | To get                                         |
+| --------------------------------------- | ---------------------------------------------- |
+| `nod usage`                             | Spending and app actions, with a PDF statement |
+| `nod memory`                            | Memory summary and export                      |
+| `nod tasks`                             | Open tasks, one message per task               |
+| `nod status` in a task message's thread | That task's status                             |
+| `nod stop` in a task message's thread   | Stop only that task                            |
+| `nod stop` at the top level             | Stop all active work and close open tasks      |
+
+Slack's own slash commands can have workspace-wide effects. Nod neither registers nor handles slash-command payloads.
+
+Slack supports text, links, images, documents, video, and audio files, including audio clips. Captions stay with attachments. Outgoing audio arrives as a file, not a native Slack recording. Files are limited to 20 MB each in both directions, with the shared ten-file and 50 MB intake caps. Remote files outside Slack's private file service are not downloaded. If a file cannot be sent, open Nod to get it.
+
+Nod transcribes incoming Slack audio on your device, even if you use a cloud voice for playback. In **Settings → Voice & audio**, select **Download** next to **On-device transcription** and wait for **Ready**. M4A and AAC audio and the first audio track of MP4, MOV and WebM video require a local FFmpeg build with support for the `fd` input protocol. On macOS and Linux, Nod looks in `/opt/homebrew/bin`, `/usr/local/bin` and `/usr/bin`. On Windows, add the local folder containing `ffmpeg.exe` to your `PATH` and restart Nod. Nod also uses FFmpeg for WebM audio when available. Clip transcription is limited to five minutes of audio. Videos with no audio track or an unsupported video format stay attached without a transcript. Nod does not send recordings to a cloud speech service; a transcript becomes part of your message to your selected chat model.
+
+Slack has no generic bot typing indicator. Queued messages get Nod's eyes reaction until they are read. Useful progress and results arrive as ordinary messages. Standard reactions supported by Nod's channel emoji library work in both directions; custom workspace emoji and unsupported emoji are ignored. Sign-in, payments, and browser handoffs still finish privately in Nod.
+
+Slack does offer native agent progress. Enable the optional setup below to use it; absence of a generic typing method does not mean native agent status is unavailable.
+
+Slack lets you leave several reactions on one message. Nod tracks only your latest supported reaction; removing it clears Nod's reaction state, even if another remains visible. Removal never reverses an action.
+
+With rich mode, Nod tracks supported reactions separately. Removing one shows your most recently added remaining reaction. This display change never approves or repeats an action. Custom emoji have no inferred meaning. Reactions missed during an outage are not reconstructed from history.
+
+Nod resolves incomplete Slack file metadata before reading the exact file. If this fails, or the download cannot be read, Nod reports a bounded diagnostic instead of silently ignoring your message. The diagnostic distinguishes unavailable metadata, a refused download address, download failure or timeout, a preparation timeout, an HTTP response, empty bytes, a size mismatch and a voice attachment without an audio media type. It includes an HTTP status and a recognized Slack service code when available, never the file's address, name, identifiers or contents. Unknown service errors stay generic. A preparation timeout can happen during transcription; it does not identify a particular stage. A download failure does not establish a decoding or speech-setup problem.
+
+Type the message without the file to continue. Include the diagnostic if you report the failure. Before acknowledging a Slack attachment, Nod saves its downloaded bytes and any caption in an encrypted local queue. If the download fails, Nod saves only the failure and caption for the notice. Transcription happens afterwards. After a restart, Nod resumes queued items for the same verified Slack connection without downloading them again, and does not replay them into a reset conversation. Nod removes staged content once it records the intake outcome. Rejected input with no recorded outcome can stay in the queue until it expires after 24 hours. Unreadable or expired items are not replayed. Attachments waiting for a download slot are held in memory and are not yet acknowledged. A slow download or a full queue can still delay acknowledgement, so Slack can redeliver. Duplicate deliveries do not submit the attachment twice.
+
+For Slack audio and video, the clip size in the message can differ from the downloaded file. Nod checks the complete download and its actual size before accepting the attachment.
+
+After a connection interruption, Nod keeps trying while Slack is configured, with failure waits increasing from two to 30 seconds. Slack's retry-after delay can extend a wait to five minutes. Connection recovery runs in the background without holding up other channels. An explicit authentication, identity, or configuration failure stops recovery until you select **Manage Slack → Reconnect**. Slack can replay recent events; Nod deduplicates saved messages and fences reaction replays. Nod does not fetch old DM history after a restart. If no reply arrives, send a new message. A message or file whose delivery is uncertain is never automatically sent again. Check Slack before asking for another attempt.
+
+Long replies are packed into bounded messages by block, table row, or list item. Table rows retain their original column labels, and ordered lists keep their numbering. Oversized blocks split without breaking code fences, links, or escaped characters; a link too long for one part becomes plain text. A missing file message receipt leaves delivery uncertain. Nod keeps confirmed text and file targets and continues the remaining attachments without uploading any file twice.
+
+### Rich Slack
+
+Rich mode is optional and off by default. It uses [Agent Sessions](https://docs.slack.dev/ai/agent-sessions/) in your verified DM, not a second Nod conversation. Saved tasks keep their own Slack threads. Status reflects working, waiting for you, ready, or closed; closing a stream does not mean a task succeeded.
+
+With rich mode, replies to your main-chat request arrive in its original Slack thread. Nod keeps that thread's identity after reconnecting or changing rich mode. Turning rich mode off sends new replies at the top level of the DM; it does not move old threads or make them answer those new messages. Several Slack threads can address your same Nod conversation. Saved tasks keep their separate threads. Unknown, foreign, closed task, and archived conversation targets fail closed. Results without an exact originating message, such as schedules created within a task, still arrive in your verified DM. They arrive unthreaded and cannot select a task or approve an action, with rich mode on or off.
+
+An in-thread answer uses only that thread's current, fully delivered Nod message. After Stop, failure or an unavailable reply, you can make a new request in the same verified thread. It does not answer or resume the old request. Messages added while Nod works wait as separate requests when no current answer can be identified. If Nod cannot check its current work without waiting, it refuses the new request as busy; try again shortly. If Nod is waiting for an answer, approval or private code and cannot safely identify what your reply answers, it refuses rather than answering a different question. Reply to the current question or send a new direct message. Older threads without saved delivery evidence can start a new request, but cannot supply missing answer context. Approvals still need their exact, fully delivered question; codes keep their private path.
+
+1. In your Slack app settings, declare the app as an agent with **Agent messaging experience** (`agent_view`). Add `assistant:write` alongside the scopes above. Some AI features require a paid Slack plan; settings alone do not prove availability.
+2. Subscribe to `agent_session_stopped` alongside the three existing bot events. Enable **Interactivity**. Keep Socket Mode enabled; no public request URL or slash commands are needed.
+3. Apply the new permissions in Slack, then select **Channels → Manage Slack → Update connection** and select **Rich Slack (requires agent setup)**. Leave unchanged fields blank to keep their saved values. If Slack changed a token, enter its replacement. For a managed connection, set `SLACK_RICH_ENABLED=true` and apply your configuration.
+
+Switching an older `assistant_view` app to `agent_view` is irreversible. Nod does not change your Slack installation for you. **Reconnect** verifies identity again; it does not grant new scopes. Manage shows that rich mode was requested, and reports supported fallback errors without exposing credentials.
+
+This manifest fragment supplements your app's existing identity and permissions:
+
+```yaml
+features:
+  app_home:
+    messages_tab_enabled: true
+    messages_tab_read_only_enabled: false
+  agent_view:
+    agent_description: Chat with Nod in your private direct message
+oauth_config:
+  scopes:
+    bot:
+      - assistant:write
+      - chat:write
+      - im:write
+      - im:read
+      - im:history
+      - users:read
+      - reactions:read
+      - reactions:write
+      - files:read
+      - files:write
+settings:
+  socket_mode_enabled: true
+  interactivity:
+    is_enabled: true
+  event_subscriptions:
+    bot_events:
+      - message.im
+      - reaction_added
+      - reaction_removed
+      - agent_session_stopped
+```
+
+Main-chat and task replies stream only after Nod has saved and privacy-checked the reply. This is buffered delivery, not live model-token streaming. Long replies roll over at complete Markdown block boundaries; oversized single blocks use ordinary split messages. A documented rejection that creates no stream falls back to ordinary delivery, with its specific reason in **Manage Slack**. Unknown or ambiguous failures never resend content: partial text can remain in Slack, while the saved reply remains in Nod. Private steps and approval questions never stream. Approval questions retain their separate, fully delivered message targets; replying to a conversation's parent does not approve a later question inside it.
+
+While a main-chat or task turn is running, its controls offer **Stop** and **Status**, even before any reply text is ready. Each control is bound to that owner, installation, conversation, and exact turn. Old controls cannot stop later work or work in another channel. Native Slack Stop can cancel Nod only when its event names a still-open stream belonging to that exact active turn. Because buffered delivery usually follows model work, native Stop rarely has that binding. Empty or stale stream lists do not cancel Nod, even on a new thread; use the current turn's **Stop** control instead. Slack may stop rendering a partial stream without cancelling Nod. Working and waiting reflect Nod's saved turn state; ready means Nod can take another prompt, not that a task succeeded.
+
+Nod saves each **Stop** or **Status** press, or native Stop, before it acknowledges it to Slack, then applies it once its checks pass. Slack's acknowledgement means Nod received the press, not that work stopped; the card shows what actually happened. A press saved before a restart, or before Slack is reconnected in Channels, is not applied afterwards. If 32 presses are already waiting or the connection is not ready, Nod doesn't acknowledge the press and Slack can show an error, so press again.
+
+Controls expire after 15 minutes and renew while the same work is running. Disconnect invalidates them without cancelling work in other channels. A processing indicator can remain in Slack until Slack's timeout or a verified refresh clears it. Nod doesn't use removed credentials to update it.
+
+While a main-chat turn is queued, Slack's native working indicator appears without a separate control message. Once Nod can offer **Stop**, the in-thread controls don't repeat the native working label. For longer work, the same message shows Nod's brief activity line when one is available. It updates in place and clears when work ends or waits for you. Quick replies do not get an activity line. These lines describe current work, not reasoning, tool arguments or verified results.
+
+After an ordinary main-chat reply succeeds, Nod removes its temporary control message rather than adding a **Ready** card. Native session status still changes. Needs-you, failure and stop notices remain, as do saved task cards.
+
+If a restart leaves task-thread or control delivery uncertain, Nod does not retry that send. Ordinary replies remain available, but that thread can lack rich controls. Check Slack and use Nod's task controls instead.
+
+Task cards show the overall saved task state separately from plan intent. Structured plans list every entry as **Step 1**, **Step 2**, and so on, with **Pending** or **Started (reported)**. Descriptive step titles stay in Nod's ledger. Step outcomes are unverified: a reported start is not proof of continuous execution or an outside effect, and multiple steps can have reported starts. Legacy or invalid plan state is unknown; an empty structured plan says no entries were declared.
+
+While the current task is running, an optional **Reported starts** strip shows only explicitly started entries. Pending entries remain in the complete text list. Waiting, queued work, owner corrections and ended tasks remove the native strip and keep intent as historical text. There are no native pending, completed or failed step states, percentages or inferred completion. Waiting is not success, and closing the overall task does not verify its steps. If Slack definitely rejects the new strip, Nod can remove it once while keeping the text and controls. Ambiguous delivery never creates another control message or retries the task. A view already sent can briefly remain stale until a current refresh replaces it.
+
+Media uses Slack-hosted file uploads in the task thread; outgoing audio is a file, not a claimed native recording. A threaded file receipt without a verified parent remains uncertain. Unsupported cards, workspace policies, missing scopes, and client behavior can reduce native affordances; ordinary messages and private Nod controls remain available.
+
+:::caution[Slack acceptance]
+This channel has not yet been accepted against an owner-authorized Slack test workspace. Native formatting, nested-entity display, no-ping and automatic-link behavior, notifications and accessibility still need desktop and mobile checks, alongside workspace policy, mobile audio, file receipts, and reconnect behavior. Local rendering checks are not native Slack acceptance.
+:::
+
 <details>
 <summary>Configure channels in .env instead</summary>
 
-On a source install or self-hosted server, set the `TELEGRAM_*` or `WHATSAPP_*` values in [Configuration](/deploy/configuration/#channels), then [apply the configuration](/deploy/configuration/#apply-configuration-changes). Any nonempty value makes that channel server-managed. The **Channels** page cannot edit or remove its configuration, and Telegram pairing is unavailable. A managed WhatsApp QR connection still lets you scan or renew its QR code.
+On a source install or self-hosted server, set the `TELEGRAM_*`, `WHATSAPP_*`, or `SLACK_*` values in [Configuration](/deploy/configuration/#channels), then [apply the configuration](/deploy/configuration/#apply-configuration-changes). Any nonempty value makes that channel server-managed. The **Channels** page cannot edit or remove its configuration, and Telegram pairing is unavailable. A managed WhatsApp QR connection still lets you scan or renew its QR code.
 
 To configure and pair the channel in the app, clear all its environment variables and apply the configuration again. This restores any configuration previously saved through **Channels**.
 
@@ -110,9 +247,9 @@ In Nod chat, audio has an inline player with a waveform, play and pause, seek, e
 
 A sticker is a conversation message, not a request to review a file. Static and animated WebP stickers, Telegram TGS animations and WebM video stickers play inline. Animations pause outside the visible chat or when the app is hidden. The reduced-motion setting stops automatic playback. TGS playback uses a local canvas in a sandbox with no network access. Invalid or oversized animations keep their original download. Telegram's thumbnail can still help the model read a sticker; it does not appear as a second message card. A sticker sent as a reply stays linked to that message.
 
-A file message sent before model setup gets a setup notice without a media download or transcription. If a chat model is connected but speech is not set up, Nod directs you to **Settings → Voice & audio** to connect a voice service or download free voices.
+Outside Slack, a file message sent before model setup gets a setup notice without a media download or transcription. Slack can stage the download first, but it still needs a chat model before transcribing ordinary messages. Outside Slack, if a chat model is connected but speech is not set up, Nod directs you to **Settings → Voice & audio** to connect a voice service or download free voices.
 
-With Telegram or the WhatsApp QR connection, send an image, document, video or audio file with your message. Captions stay with the file. Reply directly to a task message or its file to continue that task. A reply to a pending question goes to the session that asked it.
+With Telegram, Slack, or the WhatsApp QR connection, send an image, document, video or audio file with your message. Captions stay with the file. Reply directly to a task message or its file to continue that task. A reply to a pending question goes to the session that asked it.
 
 You can send a photo or file without a caption. Nod uses its content and the conversation to respond, and can ask what you want when that is unclear. It does not add a request to review the file. PNG, JPEG and WebP images reach the selected model directly when it accepts images, within the runtime's [image limits](/how-it-works/agent-runtime/#keeping-the-context-small). If that model cannot read images, Nod looks for an image model in its connected service, then in your other connected services. That model receives the images and your current request. It sends a description to the selected chat model. The chat selection stays the same. If no image model is available, the files stay in the workspace and Nod can explain the missing capability. Other files remain in the workspace for file tools.
 
@@ -122,11 +259,11 @@ Shared contacts show a contact card with the name, organization, title, phone nu
 
 A `.vcf` reply can arrive as a native contact. Telegram supports one native card with a vCard of at most 2048 bytes; larger or grouped cards arrive as a file. A valid `location.json` reply can arrive as a native location. The [Telegram API](https://core.telegram.org/bots/api#sendcontact) defines its native contact limit.
 
-A message usually has one file. An animated Telegram sticker can include its original file and a model-only image preview. Album files arrive as separate messages and are not combined. The shared intake has a safety cap of ten files and 50 MB, and current adapters attach at most an original sticker and its preview. TGS previews accept Telegram's 64 KiB compressed limit, at most 4 MB after decompression, and a bounded vector structure. Telegram's hosted file API limits each incoming file to 20 MB. A voice message has a 25 MB limit. Nod checks the sender before it downloads a file. Files belong to your shared conversation workspace.
+A message usually has one file. An animated Telegram sticker can include its original file and a model-only image preview. Album files arrive as separate messages and are not combined. The shared intake has a safety cap of ten files and 50 MB; Slack can attach up to ten files. TGS previews accept Telegram's 64 KiB compressed limit, at most 4 MB after decompression, and a bounded vector structure. Telegram's hosted file API limits each incoming file to 20 MB. A voice message has a 25 MB limit, or 20 MB on Slack. Nod checks the sender before it downloads a file. Files belong to your shared conversation workspace.
 
 Nod prepares at most four file messages at a time. If the channel is busy, send the message again after the current files finish. A caption and its transcript must fit within 100,000 characters. A failed save removes files that have no saved record.
 
-Voice input reuses a connected OpenAI, OpenRouter or ElevenLabs account, or downloaded free voices. Choosing a local voice keeps transcription local; choosing a direct ElevenLabs voice uses that connection. Otherwise, Nod uses an available OpenAI connection, then OpenRouter, then ElevenLabs, then prepared local models. A connection marked as needing attention is not used. If you have several keys for the same provider, select the connection you want to use. A ChatGPT or Claude subscription alone does not include cloud speech. Source installs can also use `OPENAI_API_KEY` or `OPENROUTER_API_KEY` after the connection is validated. Nod selects one service before sending audio; a failed request does not send the recording to another service.
+Outside Slack, voice input reuses a connected OpenAI, OpenRouter or ElevenLabs account, or prepared on-device transcription. Downloading a voice for playback does not by itself prepare transcription. To set up on-device input, open Nod Chat and select the microphone. Choosing a local voice keeps transcription local; choosing a direct ElevenLabs voice uses that connection. Otherwise, Nod uses an available OpenAI connection, then OpenRouter, then ElevenLabs, then prepared local models. A connection marked as needing attention is not used. If you have several keys for the same provider, select the connection you want to use. A ChatGPT or Claude subscription alone does not include cloud speech. Source installs can also use `OPENAI_API_KEY` or `OPENROUTER_API_KEY` after the connection is validated. Nod selects one service before sending audio; a failed request does not send the recording to another service.
 
 `STT_MODEL` selects the transcription model. The default is `gpt-transcribe` for OpenAI and `openai/gpt-transcribe` for OpenRouter. For OpenRouter, use a full model ID from its [transcription catalog](https://openrouter.ai/models?fmt=cards&output_modalities=transcription). A model ID without `/` gets the `openai/` prefix on OpenRouter. Text-only chat models cannot transcribe audio. Without speech setup, Nod asks you to send text. Text and file messages still work.
 
@@ -136,7 +273,7 @@ When Nod drafts a bug report, reply "send" to share its summary. A diagnostic re
 
 Ask Nod for a voice reply to get the answer as audio. On the WhatsApp QR connection, OpenAI voices arrive as a voice note and OpenRouter or ElevenLabs voices as an audio message. WhatsApp can't play WAV in the chat, so free local voices and other audio formats arrive as a file you can open. Choose a voice in **Settings → Voice & audio**, using a connected OpenAI, OpenRouter or ElevenLabs account, or downloaded free voices. `TTS_MODEL` and `TTS_VOICE` set the default OpenAI speech model and voice. Speech calls have usage records. Voice replies stop at the monthly spending limit; transcribing your own voice message doesn't, so you can still ask Nod to change the limit by voice. OpenRouter reports the transcription cost. Where OpenAI returns supported usage, Nod calculates an API-price estimate. A speech response without a known price shows **No price** in Usage.
 
-Nod sends files up to 50 MB each. Large or unavailable files stay available in Nod. Long replies are split into messages. Nod shows typing status while work runs.
+Nod sends files up to 50 MB each, or 20 MB on Slack. Large or unavailable files stay available in Nod. Long replies are split into messages. Telegram and WhatsApp show typing status while work runs.
 
 For a short reply with one image, video or document, the text is its caption. Longer replies, voice replies and replies with several files send the text in a separate message.
 
@@ -163,6 +300,8 @@ Approval buttons work automatically in Telegram polling mode. If you set up a Te
 ## Private steps happen in the Nod app
 
 Passwords, saved logins, app sign-ins and payment approvals never go through a chat app. When a task started on Telegram or WhatsApp needs one, Nod asks you to open Nod. Finish the step there, and the task carries on and replies in the chat app.
+
+Links to this computer and to Nod's private pages stay out of chat apps too. Nod removes the ones it finds. It also checks each link, image and address the way Markdown reads it, with encoded characters decoded. If one points to this computer (`localhost`, `127.0.0.1` and similar local addresses) or to a private Nod page, the chat app gets a short note to open Nod instead of the reply.
 
 ```mermaid
 sequenceDiagram

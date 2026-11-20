@@ -42,6 +42,7 @@ const providers = [
     name: 'WhatsApp',
     description: 'Chat with Nod in WhatsApp.',
   },
+  { id: 'slack' as const, name: 'Slack', description: 'Chat with Nod in a private Slack DM.' },
 ];
 const channelStatus = {
   'needs-setup': 'Needs setup',
@@ -265,8 +266,9 @@ function ChannelCard({
       (setup.mode === 'linked' && setup.connectionState !== 'connected')),
   );
   const retrying =
-    setup?.mode === 'linked' &&
-    (setup.connectionState === 'connecting' || setup.connectionState === 'disconnected');
+    (setup?.mode === 'linked' &&
+      (setup.connectionState === 'connecting' || setup.connectionState === 'disconnected')) ||
+    (provider.id === 'slack' && configured && available === false && !error);
   const status: keyof typeof channelStatus | null = connected
     ? retrying
       ? 'connecting'
@@ -429,6 +431,8 @@ export function Channels() {
       connected: Boolean(setup?.enabled || configured),
       available: live?.available,
       error: live?.error,
+      rich: live?.rich,
+      richError: live?.richError,
     };
   });
   const telegramSetup = channels[0].setup;
@@ -536,9 +540,11 @@ export function Channels() {
     setRemoving(provider);
   }
   const selected = channels.find((channel) => channel.provider.id === editing);
+  const updatingSlack = editing === 'slack' && selected?.setup?.enabled === true;
   const managing = Boolean(
     selected?.setup?.enabled &&
     !whatsappCloud &&
+    fields.connection !== 'socket' &&
     (editing === 'telegram' ? telegramStatus.paired : selected.setup.mode !== 'linked'),
   );
   function cards(items: typeof channels) {
@@ -632,7 +638,9 @@ export function Channels() {
               )?.focus({ preventScroll: true });
           }}
         >
-          <DialogTitle>Disconnect {removing === 'whatsapp' ? 'WhatsApp' : 'Telegram'}?</DialogTitle>
+          <DialogTitle>
+            Disconnect {providers.find((provider) => provider.id === removing)?.name}?
+          </DialogTitle>
           <DialogDescription>
             Nod will stop receiving messages here. You can connect again later.
           </DialogDescription>
@@ -704,7 +712,11 @@ export function Channels() {
                   )}
                   <span className="app-account-status">
                     <CircleCheck size={12} aria-hidden="true" />
-                    Connected
+                    {editing === 'slack' && selected?.available === false
+                      ? selected.error
+                        ? 'Connection needs attention'
+                        : 'Connecting'
+                      : 'Connected'}
                   </span>
                 </div>
                 <div className="app-account-actions">
@@ -740,6 +752,36 @@ export function Channels() {
                   </div>
                 </div>
               )}
+              {editing === 'slack' && (
+                <>
+                  {(selected?.setup?.richEnabled || selected?.rich) && <p>Rich Slack requested</p>}
+                  {selected?.richError && <Notice kind="error">{selected.richError}</Notice>}
+                  {(error || selected?.error) && (
+                    <Notice kind="error">{error || selected?.error}</Notice>
+                  )}
+                  <div className="dialog-actions app-manage-actions">
+                    <Button
+                      variant="outline"
+                      disabled={busy}
+                      onClick={() => void reconnect('slack')}
+                    >
+                      Reconnect
+                    </Button>
+                    <Button
+                      variant="outline"
+                      disabled={busy}
+                      onClick={() =>
+                        setFields({
+                          connection: 'socket',
+                          richEnabled: String(selected?.setup?.richEnabled === true),
+                        })
+                      }
+                    >
+                      Update connection
+                    </Button>
+                  </div>
+                </>
+              )}
               {editing === 'telegram' && telegramUrl ? (
                 <TelegramChat key={telegramUrl} url={telegramUrl} />
               ) : editing === 'whatsapp' ? (
@@ -757,6 +799,68 @@ export function Channels() {
                   </Button>
                 </div>
               ) : null}
+            </>
+          ) : editing === 'slack' ? (
+            <>
+              <DialogTitle className="channel-wizard-title">
+                <img src="/logos/slack.svg" alt="" width={24} height={24} />
+                {updatingSlack ? 'Update Slack connection' : 'Connect Slack'}
+              </DialogTitle>
+              <DialogDescription>
+                {updatingSlack
+                  ? 'Leave any field blank to keep its saved value.'
+                  : 'Connect a Slack app in Socket Mode to your own direct message.'}
+              </DialogDescription>
+              <p>
+                <ExternalLinkText href="https://nod.n8n.io/docs/use/channels/#slack-setup">
+                  Slack setup and required permissions
+                </ExternalLinkText>
+              </p>
+              <form
+                className="channel-slack-form"
+                onSubmit={(event) => void submit(event)}
+                data-analytics-private
+              >
+                {[
+                  ['botToken', 'Bot token', 'xoxb-', true],
+                  ['appToken', 'App-level token', 'xapp-', true],
+                  ['teamId', 'Workspace ID', 'T...', false],
+                  ['allowedUserId', 'Your Slack member ID', 'U...', false],
+                ].map(([name, label, placeholder, secret]) => (
+                  <Field key={String(name)} label={String(label)}>
+                    <Input
+                      type={secret ? 'password' : 'text'}
+                      value={fields[String(name)] ?? ''}
+                      placeholder={updatingSlack ? 'Saved' : String(placeholder)}
+                      autoComplete="off"
+                      required={!updatingSlack}
+                      disabled={busy || !settings?.ready}
+                      onChange={(event) =>
+                        setFields((current) => ({ ...current, [String(name)]: event.target.value }))
+                      }
+                    />
+                  </Field>
+                ))}
+                <label className="channel-policy">
+                  <Checkbox
+                    checked={fields.richEnabled === 'true'}
+                    disabled={busy || !settings?.ready}
+                    onChange={(event) =>
+                      setFields((current) => ({
+                        ...current,
+                        richEnabled: String(event.target.checked),
+                      }))
+                    }
+                  />
+                  <span>Rich Slack (requires agent setup)</span>
+                </label>
+                {(error || loadError) && <Notice kind="error">{error || loadError}</Notice>}
+                <div className="dialog-actions">
+                  <Button type="submit" disabled={busy || !settings?.ready} aria-busy={busy}>
+                    {updatingSlack ? 'Save changes' : 'Connect Slack'}
+                  </Button>
+                </div>
+              </form>
             </>
           ) : editing === 'telegram' ? (
             <>

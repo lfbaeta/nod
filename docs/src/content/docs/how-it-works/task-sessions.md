@@ -55,6 +55,22 @@ Each turn sees up to 100 tasks of the active conversation, open ones first, then
 
 A model-written task list in the workspace does not replace the ledger. The existing turn queue runs the sessions. The task system does not add another scheduler or cost ledger.
 
+### Plan intent and progress
+
+Tasks can optionally store a structured plan with up to 50 titles, each at most 200 raw UTF-16 code units before trimming. An astral character uses two units. Inputs above the limit are rejected, never truncated. Accepted titles are trimmed and must not be empty. The server assigns opaque step IDs. New steps start as `pending`; the task can explicitly mark a named step `started`. These states record intent, not verified outcomes. There are no completed or failed step states.
+
+The task's `plan` snapshot distinguishes structured plans from legacy strings, whose state is `unknown`. Legacy `stepIndex` is only a focus hint. Neither advancing it nor finishing, waiting, failing, or settling a task completes any step. Older oversized plans remain readable without truncation or inferred state.
+
+The server checks owner and session bindings internally. Public plan snapshots expose only the task ID, step IDs, titles, states, and separate `planRevision` and `progressRevision` values. These do not change the owner-instruction `revision` and `appliedRevision`. A structured write requires both expected plan revisions, the current task turn, and the current applied owner instruction. Stop and the normal turn lock still fence writes. Stale, conflicting, or duplicate progress writes fail without mutation or automatic retry.
+
+A changed or reordered replacement assigns all new step IDs and resets intent to pending. It advances both plan and progress revisions. An identical replacement can leave both unchanged. Starting a step advances only the progress revision. Titles and structured metadata save atomically. Legacy steps cannot overwrite structured state; callers must read the task and use a versioned replacement.
+
+For new bounded multi-step tasks, the task tool instructions prefer a structured plan. After applying the current owner instruction, the worker reads the task and explicitly starts a pending step by its returned ID and both revisions when beginning that work. Legacy callers and quick answers remain supported. Tool activity does not infer a start; omitting the explicit call leaves the step pending.
+
+Rich Slack task views receive a separate bounded presentation projection: revisions, message-local keys, ordinal labels and pending or reported-start intent, never descriptive step titles or internal bindings. Every entry has a text row and outcomes stay unverified. While the task is current and running, an optional **Reported starts** strip shows only explicitly started entries. It is not live execution telemetry or a completion meter. Waiting, corrections, queued work and ended tasks retain historical intent as text and remove the strip. Overall task disposition is separate from step outcomes. Invalid metadata shows unknown state rather than a truncated plan or legacy-title fallback.
+
+The view rechecks revisions, applied owner instructions, lifecycle and current task/turn binding after transport pacing and before dispatch or a definite-rejection fallback. Stale queued views are dropped. A request already dispatched cannot be retracted; a later current refresh can replace it on the same known message. An uncertain receipt never recreates the control view or changes task state. Other channels retain their existing views.
+
 ## Start, reply and finish
 
 1. The owner gives the coordinator an independent goal. The coordinator uses `task start` with a title, completion condition, brief and planned steps.

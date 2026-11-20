@@ -5,6 +5,25 @@
   width: min(280px, 64%);
   gap: 8px;
 }
+.voice-settings .voice-local-input {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+.voice-local-input-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 8px;
+  border-radius: 6px;
+  background: var(--success-soft);
+  color: var(--success);
+  font-size: 12px;
+  font-weight: 500;
+}
+.voice-local-input-status svg {
+  flex: none;
+}
 .voice-microphone-control {
   width: min(280px, 64%);
   min-width: 0;

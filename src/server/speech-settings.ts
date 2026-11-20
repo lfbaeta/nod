@@ -71,12 +71,21 @@ export function registerSpeechSettings(
     return current(reply, true);
   });
   app.post('/api/speech/prepare', async (request, reply) => {
-    const { inputOnly } = z
-      .object({ locale: z.string().max(35).optional(), inputOnly: z.boolean().optional() })
+    const { inputOnly, localInput } = z
+      .object({
+        locale: z.string().max(35).optional(),
+        inputOnly: z.boolean().optional(),
+        localInput: z.literal(true).optional(),
+      })
       .strict()
       .parse(request.body ?? {});
     const saved = await preferences.get();
-    if (inputOnly && !saved.speechVoice?.startsWith('local:') && speech.transcriptionConfigured)
+    if (
+      !localInput &&
+      inputOnly &&
+      !saved.speechVoice?.startsWith('local:') &&
+      speech.transcriptionConfigured
+    )
       return { transcription: true, transcriptionFormat: options.inputFormat?.(saved.speechVoice) };
     if (!options.local) return reply.code(404).send({ error: 'On-device audio is unavailable.' });
     const controller = new AbortController();
@@ -84,7 +93,7 @@ export function registerSpeechSettings(
     const stop = () => controller.abort();
     reply.raw.once('close', stop);
     try {
-      if (inputOnly) await options.local.prepareTranscription(controller.signal);
+      if (inputOnly || localInput) await options.local.prepareTranscription(controller.signal);
       else await options.local.prepare(controller.signal);
       controller.signal.throwIfAborted();
       return {

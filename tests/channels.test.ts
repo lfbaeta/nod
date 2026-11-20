@@ -33,6 +33,7 @@ import {
 } from '../src/providers/elevenlabs/speech.ts';
 import { createLocalSpeechProvider } from '../src/providers/local-speech/index.ts';
 import { decodeLocalAudio } from '../src/providers/local-speech/audio.ts';
+import { slackDecoderProcess } from '../src/providers/local-speech/slack-media.ts';
 import { phonemizeSpeech } from '../src/providers/local-speech/phonemizer.ts';
 import {
   createOpenRouterSpeechProvider,
@@ -3370,6 +3371,25 @@ test('on-device speech decodes a real WAV into bounded mono samples and refuses 
       message: 'format',
     });
   });
+});
+
+test('Slack speech on Windows searches drive-rooted PATH entries without exposing PATH or credentials to FFmpeg', () => {
+  const windows = slackDecoderProcess('win32', {
+    Path: '  "C:\\Program Files\\FFmpeg\\bin"  ;.;C:relative;\\\\server\\share;\\local;D:/Tools;;/usr/bin',
+    SYSTEMROOT: 'C:\\Windows',
+    SLACK_BOT_TOKEN: 'fixture-not-a-real-token',
+    LANG: 'en-GB',
+  });
+  assert.deepEqual(windows.candidates, [
+    'C:\\Program Files\\FFmpeg\\bin\\ffmpeg.exe',
+    'D:\\Tools\\ffmpeg.exe',
+  ]);
+  assert.deepEqual(windows.env, { LANG: 'C', SystemRoot: 'C:\\Windows' });
+  assert.deepEqual(slackDecoderProcess('win32', { PATH: 'relative', SystemRoot: 'C:\\Windows' }), {
+    candidates: [],
+    env: { LANG: 'C', SystemRoot: 'C:\\Windows' },
+  });
+  assert.deepEqual(slackDecoderProcess('win32', {}), { candidates: [], env: { LANG: 'C' } });
 });
 
 test('local speech distinguishes tokenizer overflow before inference from waveform duration failures', async (t) => {
