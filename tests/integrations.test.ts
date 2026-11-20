@@ -3735,12 +3735,84 @@ test(
     let bridgeOrigin = '';
     let returnPath = '';
     let brokerOrigin = '';
+    let bridgeUrl = '';
     let challenge = '';
     let verified = 0;
     let callbacks = 0;
     let brokerFailure: unknown;
     let child: ReturnType<typeof spawn> | undefined;
     let childClosed: Promise<void> | undefined;
+    let debuggerPort: number | undefined;
+    const diagnostics = {
+      version: 1,
+      source: /^[a-f0-9]{40}$/.test(process.env.GITHUB_SHA ?? '')
+        ? process.env.GITHUB_SHA
+        : undefined,
+      launch: {
+        error: 'none',
+        closed: false,
+        exitCode: null as number | null,
+        signal: null as NodeJS.Signals | null,
+      },
+      debugger: {
+        polls: 0,
+        portFile: 'not-read',
+        portReadError: 'none',
+        response: 'not-read',
+        transportError: 'none',
+        httpStatus: null as number | null,
+        targetCount: 0,
+        targetTypes: {} as Record<string, number>,
+        targetMatches: {} as Record<string, number>,
+      },
+      cleanup: {
+        taskkill: process.platform === 'win32' ? 'not-started' : 'not-windows',
+        taskkillExitCode: null as number | null,
+        processAlreadyClosed: false,
+        processClosed: false,
+        bridgeClosed: false,
+        appClosed: false,
+        brokerClosed: false,
+        profileRemoved: false,
+        debugger: 'not-known',
+      },
+    };
+    const targetSummary = (targets: Array<{ type?: string; url: string }>) => {
+      diagnostics.debugger.targetCount = Math.min(targets.length, 1024);
+      diagnostics.debugger.targetTypes = {};
+      diagnostics.debugger.targetMatches = {};
+      for (const target of targets.slice(0, 1024)) {
+        const type = [
+          'page',
+          'iframe',
+          'service_worker',
+          'background_page',
+          'browser',
+          'webview',
+        ].includes(target?.type ?? '')
+          ? target.type!
+          : 'other';
+        let match = 'invalid';
+        try {
+          const url = new URL(target.url);
+          match =
+            target.url === bridgeUrl
+              ? 'exact-bridge'
+              : url.origin === new URL(bridgeUrl).origin
+                ? 'bridge-origin'
+                : url.protocol === 'about:'
+                  ? 'about'
+                  : ['edge:', 'chrome:', 'devtools:'].includes(url.protocol)
+                    ? 'browser-internal'
+                    : ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)
+                      ? 'other-loopback'
+                      : 'other';
+        } catch {}
+        diagnostics.debugger.targetTypes[type] = (diagnostics.debugger.targetTypes[type] ?? 0) + 1;
+        diagnostics.debugger.targetMatches[match] =
+          (diagnostics.debugger.targetMatches[match] ?? 0) + 1;
+      }
+    };
     let complete!: () => void;
     const completed = new Promise<void>((resolve) => {
       complete = resolve;
@@ -3828,36 +3900,70 @@ fetch('/v2/connect/verify',{method:'POST',headers:{'Content-Type':'application/j
       }
     });
     t.after(async () => {
-      if (child) {
-        if (process.platform === 'win32' && child.pid)
-          spawnSync('taskkill.exe', ['/T', '/F', '/PID', String(child.pid)], {
-            env: serviceEnvironment(),
-            stdio: 'ignore',
-            timeout: 3000,
+      try {
+        diagnostics.cleanup.processAlreadyClosed = diagnostics.launch.closed;
+        if (child) {
+          if (process.platform === 'win32') {
+            if (diagnostics.launch.closed) diagnostics.cleanup.taskkill = 'skipped-closed';
+            else if (child.pid) {
+              diagnostics.cleanup.taskkill = 'attempted';
+              diagnostics.cleanup.taskkillExitCode = spawnSync(
+                'taskkill.exe',
+                ['/T', '/F', '/PID', String(child.pid)],
+                {
+                  env: serviceEnvironment(),
+                  stdio: 'ignore',
+                  timeout: 3000,
+                },
+              ).status;
+            } else diagnostics.cleanup.taskkill = 'no-pid';
+          }
+          if (!diagnostics.launch.closed) child.kill('SIGKILL');
+          await new Promise<void>((resolve) => {
+            const timer = setTimeout(resolve, 3000);
+            void childClosed?.then(() => {
+              clearTimeout(timer);
+              resolve();
+            });
           });
-        child.kill('SIGKILL');
-        await new Promise<void>((resolve) => {
-          const timer = setTimeout(resolve, 3000);
-          void childClosed?.then(() => {
-            clearTimeout(timer);
-            resolve();
-          });
-        });
+        }
+        await browser.close();
+        app.closeAllConnections();
+        broker.closeAllConnections();
+        await Promise.all([
+          new Promise<void>((resolve) => app.close(() => resolve())),
+          new Promise<void>((resolve) => broker.close(() => resolve())),
+          rm(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }),
+        ]);
+        diagnostics.cleanup.processClosed = diagnostics.launch.closed;
+        diagnostics.cleanup.bridgeClosed = !browser.owns(bridgeUrl);
+        diagnostics.cleanup.appClosed = !app.listening;
+        diagnostics.cleanup.brokerClosed = !broker.listening;
+        diagnostics.cleanup.profileRemoved = await stat(profile).then(
+          () => false,
+          (error: NodeJS.ErrnoException) => error.code === 'ENOENT',
+        );
+        if (debuggerPort !== undefined)
+          diagnostics.cleanup.debugger = await fetch(`http://127.0.0.1:${debuggerPort}/json/list`, {
+            signal: AbortSignal.timeout(2000),
+          }).then(
+            () => 'responding',
+            (error: Error & { cause?: { code?: string } }) =>
+              error.cause?.code === 'ECONNREFUSED'
+                ? 'refused'
+                : error.name === 'TimeoutError'
+                  ? 'timeout'
+                  : 'unavailable',
+          );
+      } finally {
+        t.diagnostic(JSON.stringify(diagnostics));
       }
-      await browser.close();
-      app.closeAllConnections();
-      broker.closeAllConnections();
-      await Promise.all([
-        new Promise<void>((resolve) => app.close(() => resolve())),
-        new Promise<void>((resolve) => broker.close(() => resolve())),
-        rm(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }),
-      ]);
     });
     app.listen(0, '127.0.0.1');
     broker.listen(0, '127.0.0.1');
     await Promise.all([once(app, 'listening'), once(broker, 'listening')]);
     brokerOrigin = `http://127.0.0.1:${(broker.address() as { port: number }).port}`;
-    const bridgeUrl = await browser.open(state, brokerOrigin, async (key, origin, native) => {
+    bridgeUrl = await browser.open(state, brokerOrigin, async (key, origin, native) => {
       assert.ok(native);
       browserKey = key as import('node:crypto').JsonWebKey;
       bridgeOrigin = origin;
@@ -3884,16 +3990,83 @@ fetch('/v2/connect/verify',{method:'POST',headers:{'Content-Type':'application/j
       { env: serviceEnvironment(), stdio: 'ignore' },
     );
     childClosed = new Promise<void>((resolve) => {
-      child!.once('close', () => resolve());
+      child!.once('close', (code, signal) => {
+        diagnostics.launch.closed = true;
+        diagnostics.launch.exitCode = code;
+        diagnostics.launch.signal = signal;
+        resolve();
+      });
+    });
+    child.once('error', (error: NodeJS.ErrnoException) => {
+      diagnostics.launch.error = ['ENOENT', 'EACCES', 'ENOEXEC', 'ENOMEM', 'ETXTBSY'].includes(
+        error.code ?? '',
+      )
+        ? error.code!
+        : 'other';
     });
     let targets: Array<{ url: string; webSocketDebuggerUrl: string }> = [];
     const targetDeadline = performance.now() + 10_000;
     while (performance.now() < targetDeadline) {
+      diagnostics.debugger.polls++;
       try {
-        const [port] = (await readFile(join(profile, 'DevToolsActivePort'), 'utf8')).split('\n');
-        targets = await (
-          await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(2000) })
-        ).json();
+        const [port] = await readFile(join(profile, 'DevToolsActivePort'), 'utf8').then(
+          (value) => {
+            diagnostics.debugger.portFile = 'read';
+            diagnostics.debugger.portReadError = 'none';
+            return value.split('\n');
+          },
+          (error: NodeJS.ErrnoException) => {
+            diagnostics.debugger.portFile = error.code === 'ENOENT' ? 'missing' : 'read-failed';
+            diagnostics.debugger.portReadError = [
+              'ENOENT',
+              'EACCES',
+              'EPERM',
+              'EIO',
+              'EMFILE',
+              'ENFILE',
+              'EISDIR',
+            ].includes(error.code ?? '')
+              ? error.code!
+              : 'other';
+            throw error;
+          },
+        );
+        if (/^\d+\s*$/.test(port) && Number(port) > 0 && Number(port) <= 65535)
+          debuggerPort = Number(port);
+        else diagnostics.debugger.portFile = 'invalid';
+        diagnostics.debugger.response = 'unavailable';
+        diagnostics.debugger.transportError = 'none';
+        const response = await fetch(`http://127.0.0.1:${port}/json/list`, {
+          signal: AbortSignal.timeout(2000),
+        }).catch((error: Error & { cause?: { code?: string } }) => {
+          diagnostics.debugger.transportError = [
+            'ECONNREFUSED',
+            'ECONNRESET',
+            'ETIMEDOUT',
+            'EHOSTUNREACH',
+            'ENETUNREACH',
+            'EACCES',
+            'EPERM',
+            'UND_ERR_CONNECT_TIMEOUT',
+            'UND_ERR_HEADERS_TIMEOUT',
+            'UND_ERR_SOCKET',
+          ].includes(error.cause?.code ?? '')
+            ? error.cause!.code!
+            : error.name === 'TimeoutError'
+              ? 'timeout'
+              : error.name === 'AbortError'
+                ? 'aborted'
+                : 'other';
+          throw error;
+        });
+        diagnostics.debugger.httpStatus = response.status;
+        diagnostics.debugger.response = 'invalid-json';
+        targets = await response.json();
+        diagnostics.debugger.response = 'invalid-targets';
+        if (Array.isArray(targets)) {
+          targetSummary(targets);
+          diagnostics.debugger.response = 'targets';
+        }
         if (targets.some((target) => target.url === bridgeUrl)) break;
       } catch {}
       await delay(50);
