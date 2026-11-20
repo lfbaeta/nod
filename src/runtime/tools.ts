@@ -1047,7 +1047,7 @@ export function nodTools(
           throw new Error(
             'Write {spent} exactly where the question states what this work has used, then call ask_user again.',
           );
-        text = text.replaceAll('{spent}', cost);
+        text = text.replaceAll('{spent}', cost.spent).replaceAll('{plan}', cost.plan);
       }
       const choices = p.choices
         ? answerChoicesSchema.parse({

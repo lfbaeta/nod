@@ -1935,13 +1935,16 @@ test('past the spending check-in a turn stops working but can ask, and one that 
       );
       emit(usage(0.25));
       await call(tools, 'ask_user', {
-        question: 'This used {spent}. Read 12 of 40 threads. Keep going?',
+        question: 'This used {spent}, {plan} of it plan usage. Read 12 of 40 threads. Keep going?',
       });
     },
     { integration, checkIn },
   );
   assert.equal(asked.result.status, 'waiting_user');
-  assert.equal(asked.result.message, 'This used $5.75. Read 12 of 40 threads. Keep going?');
+  assert.equal(
+    asked.result.message,
+    'This used $5.75, $1.50 of it plan usage. Read 12 of 40 threads. Keep going?',
+  );
   assert.equal(reads.length, 2);
   const kept = await fixture(
     async (tools, emit, options) => {

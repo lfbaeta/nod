@@ -81,7 +81,7 @@ function measure(visual: ChartVisual) {
   const label = visual.yLabel?.trim();
   const unit = visual.unit?.trim();
   if (!label || !unit) return label || unit;
-  return label.includes(unit) || label.endsWith(')') ? label : `${label} (${unit})`;
+  return label.endsWith(')') || label.endsWith(` ${unit}`) ? label : `${label} (${unit})`;
 }
 
 function CartesianChart({ visual }: { visual: ChartVisual }) {
@@ -160,8 +160,10 @@ function CartesianChart({ visual }: { visual: ChartVisual }) {
             ),
           )}
         </div>
-        {visual.chart === 'line' && measure(visual) && (
-          <span className="chart-measure">{measure(visual)}</span>
+        {(visual.chart === 'line' ? measure(visual) : visual.xLabel) && (
+          <span className="chart-measure">
+            {visual.chart === 'line' ? measure(visual) : visual.xLabel}
+          </span>
         )}
       </div>
       <div

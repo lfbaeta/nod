@@ -3,6 +3,7 @@ import {
   createServer,
   request as httpRequest,
   type IncomingMessage,
+  type Server,
   type ServerResponse,
 } from 'node:http';
 import { createServer as createHttpsServer } from 'node:https';
@@ -432,10 +433,9 @@ export async function createFixtureProxy(
     sockets.add(socket);
     socket.once('close', () => sockets.delete(socket));
   };
-  async function forwarder() {
-    let upstream: URL | undefined;
+  const forwarders = new Map<string, Promise<{ url: string; proxy: Server }>>();
+  async function forwarder(upstream: URL) {
     const proxy = createServer((request, response) => {
-      if (!upstream) return void response.writeHead(503).end();
       const forward = httpRequest(
         upstream,
         { method: request.method, path: request.url, headers: request.headers },
@@ -455,7 +455,6 @@ export async function createFixtureProxy(
         https.emit('connection', socket);
         return;
       }
-      if (!upstream) return socket.destroy();
       const forward = httpRequest(upstream, {
         method: 'CONNECT',
         path: request.url,
@@ -490,45 +489,26 @@ export async function createFixtureProxy(
       proxy.once('error', reject);
       proxy.listen(0, '127.0.0.1', resolve);
     });
-    return {
-      url: `http://127.0.0.1:${(proxy.address() as AddressInfo).port}`,
-      set: (target: URL) => {
-        upstream = target;
-      },
-      proxy,
-    };
+    return { url: `http://127.0.0.1:${(proxy.address() as AddressInfo).port}`, proxy };
   }
-  const pool = await Promise.all(Array.from({ length: 16 }, () => forwarder()));
-  const assigned = new Map<string, (typeof pool)[number]>();
-  const proxyUrl = pool[0]!.url;
-  function upstreamProxy(value: string) {
+  async function upstreamProxy(value: string) {
     const target = new URL(value);
     if (target.protocol !== 'http:' || target.hostname !== '127.0.0.1')
       throw new Error('Fixture proxy requires the production loopback guard.');
-    let entry = assigned.get(target.href);
+    let entry = forwarders.get(target.href);
     if (!entry) {
-      entry = pool[assigned.size % pool.length]!;
-      entry.set(target);
-      assigned.set(target.href, entry);
+      entry = forwarder(target);
+      forwarders.set(target.href, entry);
     }
-    return entry.url;
+    return (await entry).url;
   }
   return {
-    proxyUrl,
     certificate,
-    nativeArgs(args: string[]) {
-      const proxyIndex = args.findIndex((arg) => arg.startsWith('--proxy-server='));
-      if (proxyIndex < 0) throw new Error('Fixture browser proxy was missing.');
-      const values = [...args];
-      values[proxyIndex] = `--proxy-server=${upstreamProxy(values[proxyIndex].slice(15))}`;
-      values.splice(values.length - 1, 0, `--ignore-certificate-errors-spki-list=${fingerprint}`);
-      return values;
-    },
     run: (async (command, args, options) => {
       const values = [...args];
       const proxyIndex = values.indexOf('--proxy');
       if (proxyIndex >= 0) {
-        values[proxyIndex + 1] = upstreamProxy(values[proxyIndex + 1]);
+        values[proxyIndex + 1] = await upstreamProxy(values[proxyIndex + 1]);
         const flags = values.indexOf('--args');
         if (flags < 0) throw new Error('Fixture browser arguments were missing.');
         values[flags + 1] += `,--ignore-certificate-errors-spki-list=${fingerprint}`;
@@ -538,7 +518,10 @@ export async function createFixtureProxy(
     close: async () => {
       for (const socket of sockets) socket.destroy();
       await Promise.all(
-        pool.map(({ proxy }) => new Promise<void>((resolve) => proxy.close(() => resolve()))),
+        [...forwarders.values()].map(async (entry) => {
+          const { proxy } = await entry.catch(() => ({ proxy: undefined }));
+          if (proxy) await new Promise<void>((resolve) => proxy.close(() => resolve()));
+        }),
       );
       https.close();
     },

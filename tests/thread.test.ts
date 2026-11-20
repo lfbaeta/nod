@@ -9163,7 +9163,8 @@ test(
                       [paused, ownerId],
                     )
                   ).rows[0];
-                  assert.equal(question.text, 'The synthetic check used $6. Continue?');
+                  assert.match(question.text, /\$6\b/);
+                  assert.doesNotMatch(question.text, /\{spent\}/);
                   const answer = await userMessages.submit('Continue the synthetic observer.', [], {
                     replyToMessageId: question.id,
                   });

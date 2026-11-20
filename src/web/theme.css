@@ -86,8 +86,8 @@
   --chart-11: #44001b;
   --chart-12: var(--gray-30);
   --chart-line-1: var(--pink-70);
-  --chart-line-2: var(--gray-60);
-  --chart-line-3: var(--brand-pink);
+  --chart-line-2: var(--gray-90);
+  --chart-line-3: color-mix(in srgb, var(--pink-70) 30%, var(--brand-pink));
   --overlay: color-mix(in srgb, var(--black) 44%, transparent);
   --shadow-overlay: color-mix(in srgb, var(--black) 12%, transparent);
   --shadow-color: color-mix(in srgb, var(--black) 4%, transparent);

@@ -243,7 +243,7 @@ function Diagram({ visual }: { visual: Visual<'diagram'> }) {
                 const y1 = a.y + 42,
                   y2 = b.y - 44;
                 const slot = railTargets.indexOf(edge.to);
-                const rail = width - 12 - (slot % 6) * 8;
+                const rail = width - 12 - (slot % 6) * 6;
                 const loop = edge.from === edge.to;
                 const direct = b.y - a.y === 140;
                 const path = loop

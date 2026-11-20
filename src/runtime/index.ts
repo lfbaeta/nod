@@ -527,7 +527,7 @@ export function createAgentRuntime(dependencies: {
         ) {
           if (source === execution) checkInBlocked = true;
           throw new Error(
-            `This work has passed the ${dollars(context.checkIn!.budgetUsd)} check-in since the owner's last message.${checkInPlan >= 0.005 ? ' Some of it is ChatGPT plan usage counted at API prices, which costs the owner nothing extra.' : ''} Do no more work now. Call ask_user to state the cost and what continuing would do, then ask whether to keep going. Write {spent} exactly where the question states what this work has used; Nod puts in the current amount when it asks. Follow the shared reporting rules for any result you include.`,
+            `This work has passed the ${dollars(context.checkIn!.budgetUsd)} check-in since the owner's last message.${checkInPlan >= 0.005 ? ' Some of it is ChatGPT plan usage counted at API prices, which costs the owner nothing extra; write {plan} where you state that part.' : ''} Do no more work now. Call ask_user to state the cost and what continuing would do, then ask whether to keep going. Write {spent} exactly where the question states what this work has used; Nod puts in the current amount when it asks. Follow the shared reporting rules for any result you include.`,
           );
         }
         const id = randomUUID();
@@ -949,7 +949,13 @@ export function createAgentRuntime(dependencies: {
           return reply(text, id, replyToMessageId, presentation, handoff);
         },
         pause,
-        checkInCost: () => (overBudget() ? dollars(checkInSpent) : undefined),
+        checkInCost: () =>
+          overBudget()
+            ? {
+                spent: dollars(checkInSpent),
+                plan: dollars(Math.min(checkInPlan, checkInSpent)),
+              }
+            : undefined,
         confirm,
         visited: (browserId: string, url: string) => {
           const host = URL.parse(url)?.host;
