@@ -3,6 +3,7 @@ export class ModelServiceError extends Error {
     message: string,
     readonly reason?: string,
     readonly status?: number,
+    readonly details?: string,
   ) {
     super(message);
   }
@@ -66,11 +67,13 @@ export async function modelServiceError(
     await reader?.cancel().catch(() => {});
     reader?.releaseLock();
   }
+  const details = redact(reason).slice(0, 2000);
   return new ModelServiceError(
-    `${service} failed (HTTP ${response.status})${reason ? `: ${redact(reason).slice(0, 2000)}` : '.'}`,
+    `${service} failed (HTTP ${response.status})${reason ? `: ${details}` : '.'}`,
     serviceReason ? redact(serviceReason) : undefined,
     Number.isInteger(response.status) && response.status >= 100 && response.status <= 599
       ? response.status
       : undefined,
+    details,
   );
 }
