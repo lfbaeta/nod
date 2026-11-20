@@ -3740,6 +3740,7 @@ test('feedback redaction checks original text and structure before masking', asy
       input: 'x'.repeat(5000) + opaque,
       secrets: ['x'],
       privateParts: [opaque],
+      omitted: true,
     },
     {
       id: 'fragment-limit',
@@ -3769,6 +3770,7 @@ test('feedback redaction checks original text and structure before masking', asy
       );
       for (const kept of probe.kept ?? []) assert.ok(encoded.includes(kept), kept);
       if (probe.omitted) assert.equal(output, '[unreadable data omitted]');
+      else assert.notEqual(output, '[unreadable data omitted]');
       if (probe.id === 'technical-control') assert.deepEqual(JSON.parse(encoded), probe.input);
     });
   }
