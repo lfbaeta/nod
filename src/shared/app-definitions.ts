@@ -11,6 +11,11 @@ const text = (max: number) =>
     .min(1)
     .max(max)
     .regex(/^\S(?:[\s\S]*\S)?$/, 'Remove leading and trailing whitespace.');
+const name = (max: number) =>
+  text(max).regex(
+    /^[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}]+$/u,
+    'Use one line without control or format characters.',
+  );
 const fixedServer = { type: z.literal('mcp'), server: text(80) };
 const hints = <const Field extends string>(...fields: Field[]) =>
   z.partialRecord(z.enum(fields), text(200)).optional();
@@ -176,7 +181,7 @@ export const appConnectionSchema = z.union([
 
 export const appDefinitionSchema = z.strictObject({
   $schema: z.literal(appSchemaId),
-  displayName: text(80),
+  displayName: name(80),
   icon: z
     .string()
     .regex(/^\.\/io\.n8n\.nod\/(?:[a-zA-Z0-9_-]+\/)*[a-zA-Z0-9_-]+\.(?:svg|png|webp)$/)

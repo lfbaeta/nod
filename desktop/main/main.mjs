@@ -290,6 +290,7 @@ const startupFeedback = createStartupFeedbackClient({
   },
 });
 const engineWindows = new Set();
+const overlayWindows = new WeakSet();
 const zoomStates = new WeakMap();
 let lastZoomWindow;
 let zoomPersistence = Promise.resolve();
@@ -519,7 +520,7 @@ function publishPreferences() {
   for (const window of [setupWindow, ...engineWindows]) {
     if (!window || window.isDestroyed()) continue;
     window.setBackgroundColor(value.resolvedTheme === 'dark' ? '#191919' : '#fafafa');
-    if (process.platform === 'win32')
+    if (overlayWindows.has(window))
       window.setTitleBarOverlay(windowsTitleBar(value.resolvedTheme === 'dark').titleBarOverlay);
     window.webContents.send('nod:preferences', value);
   }
@@ -941,14 +942,6 @@ async function openExternal(value) {
 
 function protectWindow(window, origin) {
   if (origin) trackZoomFactor(window);
-  if (origin)
-    for (const [name, fullScreen] of [
-      ['enter-full-screen', true],
-      ['leave-full-screen', false],
-    ])
-      window.on(name, () => {
-        if (!window.isDestroyed()) window.webContents.send('nod:fullscreen', fullScreen);
-      });
   window.on('focus', updateReadinessNotice);
   for (const event of ['blur', 'hide', 'closed'])
     window.on(event, () => setTimeout(updateReadinessNotice, 100));
@@ -1064,6 +1057,7 @@ function showSettings(section = 'general', loading = false) {
       partition: 'nod-settings',
     },
   });
+  if (process.platform === 'win32') overlayWindows.add(setupWindow);
   const window = setupWindow;
   let presented;
   const ready = new Promise((resolve) => {
@@ -1205,6 +1199,7 @@ function showEngine({ focus = true } = {}) {
     },
   });
   engineWindows.add(engineWindow);
+  if (process.platform === 'win32') overlayWindows.add(engineWindow);
   protectWindow(engineWindow, engineOrigin);
   const window = engineWindow;
   window.webContents.on('render-process-gone', (_event, details) => {
@@ -1409,6 +1404,7 @@ function baseEnvironment() {
       'NOD_TRACES_TOKEN',
       'NOD_ONBOARDING_EMAIL_URL',
       'OTEL_EXPORTER_OTLP_ENDPOINT',
+      'AWS_BEDROCK_FORCE_HTTP1',
     ]
       .filter((key) => typeof process.env[key] === 'string')
       .map((key) => [key, process.env[key]]),
@@ -1957,7 +1953,13 @@ async function transferWelcome() {
         headers: { 'Content-Type': 'application/json', Origin: engineOrigin },
         body: JSON.stringify({ usageData: saved.welcome.usageData }),
       });
-      if (!response.ok) throw new Error('Nod could not save your choice. Try again.');
+      if (!response.ok) {
+        const failure = await response.json().catch(() => undefined);
+        const reason = typeof failure?.error === 'string' ? failure.error.trim() : '';
+        throw new Error(
+          `Nod could not save your choice (HTTP ${response.status})${reason ? `: ${reason.replace(/[.\s]+$/, '')}` : ''}. Try again.`,
+        );
+      }
       const result = await response.json();
       if (result.settings?.usageData !== saved.welcome.usageData)
         throw new Error('Nod could not confirm your choice. Try again.');
@@ -3449,10 +3451,6 @@ else {
           appUIOpenings.set(distinctId, opening);
         }
         return opening;
-      });
-      ipcMain.handle('nod:fullscreen:get', (event) => {
-        if (!isEngine(event)) throw new Error('This action is unavailable.');
-        return BrowserWindow.fromWebContents(event.sender)?.isFullScreen() ?? false;
       });
       ipcMain.handle('nod:preferences:get', (event) => {
         if (!isSetup(event) && !isEngine(event)) throw new Error('This action is unavailable.');

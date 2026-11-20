@@ -180,6 +180,8 @@ Nod lists the models and inference profiles Bedrock offers in that Region, such 
 
 The key needs to list models (`bedrock:ListFoundationModels` and `bedrock:ListInferenceProfiles`) and call them. Keys made in the Bedrock console get the `AmazonBedrockLimitedAccess` policy, which allows both. Nod doesn't use AWS access keys or profiles.
 
+If the model list loads but every chat fails with `http2 request did not get a response`, your network, such as a VPN or a TLS-inspecting proxy, may be blocking HTTP/2. Set `AWS_BEDROCK_FORCE_HTTP1=1` in the environment Nod starts from to send Bedrock requests over HTTP/1.1 instead. For the desktop app on macOS, run `launchctl setenv AWS_BEDROCK_FORCE_HTTP1 1`, then quit and reopen Nod. The setting lasts until you restart the Mac. On Windows, run `setx AWS_BEDROCK_FORCE_HTTP1 1`, then sign out and back in so Nod starts with it.
+
 </TabItem>
 <TabItem label="Google Vertex AI">
 
@@ -295,11 +297,9 @@ To compare what each model declares with how it scores on computer use, tool sel
 
 ## Decision checks
 
-Nod can use a decision model to check action permission, read confirmation replies, and check emails that give account access. Your selected text model writes most confirmation questions and button labels in your conversation language. The same model checks its wording against the saved action and arguments in a separate request. For permanent Gmail deletion, Nod writes a fixed question and button label from verified target details in English, regardless of your conversation language, without a wording-model request. You can answer in any language. Nod selects each checker before its request. A failed check never switches models.
+Nod can use a decision model to check action permission, read confirmation replies, and check emails that give account access. Your selected text model writes most confirmation questions and button labels in your conversation language. For permanent Gmail deletion, Nod writes a fixed question and button label from verified target details in English, regardless of your conversation language, without a wording-model request. You can answer in any language. Nod selects each checker before its request. A failed check never switches models.
 
 ### Select the action checker
-
-For Perplexity Decider 1.2, Nod checks that the provider and requested model match its selection. The response must also identify version `perplexity/pplx-decider-v1.2-20261016`. These checks must pass before Nod uses an answer for action permission, an app read check or a confirmation reply. A missing or different value fails the check.
 
 Set `NOD_TRUST_MODEL` in the server configuration, then [apply the change](/deploy/configuration/#how-settings-work).
 

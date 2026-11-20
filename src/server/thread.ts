@@ -246,11 +246,6 @@ export interface ThreadDependencies {
     input: unknown,
     show: (image: Uint8Array) => Promise<void>,
   ) => ReturnType<NonNullable<RuntimeContext['requestPayment']>>;
-  checkWorkspaceCommand?: (
-    turn: TurnRef,
-    input: Parameters<NonNullable<RuntimeContext['checkWorkspaceCommand']>>[0],
-    signal: AbortSignal,
-  ) => ReturnType<NonNullable<RuntimeContext['checkWorkspaceCommand']>>;
   integration: (
     turn: TurnRef,
     action: string,
@@ -1480,7 +1475,7 @@ async function scheduleRunNotice(
   return presentationSchema.parse({
     version: 1,
     type: 'schedule-run',
-    title: row.title.slice(0, 120),
+    title: row.title.slice(0, 120).replace(/[\uD800-\uDBFF]$/, ''),
     sources: [],
     scheduleId: row.scheduleId,
     revision: row.revision,
@@ -2427,17 +2422,6 @@ async function executeTurn(turn: any, dependencies: ThreadDependencies) {
                 if (turn.channel === 'web')
                   await attach(image, 'checkout.jpg', 'image/jpeg', '', true, 'browser_screenshot');
               }),
-            ),
-          }
-        : {}),
-      ...(dependencies.checkWorkspaceCommand
-        ? {
-            checkWorkspaceCommand: fenced((input, callSignal) =>
-              dependencies.checkWorkspaceCommand!(
-                ref,
-                input,
-                AbortSignal.any([signal, callSignal]),
-              ),
             ),
           }
         : {}),

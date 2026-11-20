@@ -2761,7 +2761,6 @@ function context(directory: string): RuntimeContext {
       url: '/api/artifacts/fixture',
     }),
     requestCredential: async () => ({ filled: true }),
-    checkWorkspaceCommand: async () => ({ record: async () => {} }),
     integration: async () => ({}),
     manage: async () => ({}),
   };
@@ -9264,10 +9263,22 @@ test('cloud connections list only the account’s models and send each key only 
       }
       if (url === 'https://down.openai.azure.com/openai/v1/models')
         return Response.json({ error: { message: 'Synthetic outage' } }, { status: 503 });
-      if (url.startsWith('https://aiplatform.googleapis.com/v1/publishers/google/models/'))
+      if (url.startsWith('https://aiplatform.googleapis.com/v1/publishers/google/models/')) {
+        if (headers.get('x-goog-api-key') === 'fixture-vertex-busy')
+          return Response.json(
+            {
+              error: {
+                code: 429,
+                message: 'Synthetic fixture-vertex-busy',
+                status: 'RESOURCE_EXHAUSTED',
+              },
+            },
+            { status: 429 },
+          );
         return new Response(null, {
           status: headers.get('x-goog-api-key') === 'fixture-vertex-key' ? 200 : 400,
         });
+      }
       if (url === 'https://fixture.openai.azure.com/openai/v1/models') {
         assert.equal(headers.get('api-key'), 'fixture-azure-key');
         return Response.json({ data: [] });
@@ -9309,6 +9320,13 @@ test('cloud connections list only the account’s models and send each key only 
   await assert.rejects(
     backend.catalog('google-vertex', 'api_key', { type: 'api_key', key: 'fixture-wrong-key' }),
     /didn’t accept this API key/,
+  );
+  await assert.rejects(
+    backend.catalog('google-vertex', 'api_key', { type: 'api_key', key: 'fixture-vertex-busy' }),
+    (error: Error) =>
+      error.message.includes('HTTP 429') &&
+      error.message.includes('Synthetic [redacted]') &&
+      !error.message.includes('fixture-vertex-busy'),
   );
   const azure = await backend.catalog('azure', 'api_key', {
     type: 'azure',
@@ -10520,25 +10538,6 @@ test('OpenAI review output schemas constrain both key and subscription requests 
       await curator.curate({ task: 'review', instructions: 'Review the action.', input: {} });
       assert.deepEqual(payloads[1], { text: { verbosity: 'low' } });
     });
-});
-
-test('an unconfigured curator does not resolve a model selection', async () => {
-  let configured = false;
-  let resolutions = 0;
-  const curator = createPiMemoryCurator({
-    provider: 'openai',
-    configured: () => configured,
-    resolve: async () => {
-      resolutions++;
-      return undefined;
-    },
-  });
-  assert.equal(await curator.select!(), curator);
-  assert.equal(resolutions, 0);
-  assert.equal(curator.configured, false);
-  configured = true;
-  await assert.rejects(curator.select!(), /selected model is unavailable/);
-  assert.equal(resolutions, 1);
 });
 
 test('an unavailable classification resolver never loads a fallback model', async () => {
@@ -11901,59 +11900,6 @@ async function access(provider: ModelAccess['provider'], id: string): Promise<Mo
     read: async () => ({ type: 'api_key', key: 'fixture-model-key' }),
   };
 }
-
-test('a selected Trust curator keeps its model and records both requests', async (t) => {
-  const originalFetch = globalThis.fetch;
-  t.after(() => (globalThis.fetch = originalFetch));
-  let current = smallContextAccess('compatible', 'fixture-trust-original', 32768);
-  let selections = 0;
-  const models: string[] = [];
-  const usage: Array<{ id: string; model?: string }> = [];
-  globalThis.fetch = async (input, init) => {
-    const request = new Request(input, init);
-    assert.equal(new URL(request.url).hostname, '127.0.0.1');
-    models.push(String((await request.json()).model));
-    return reply({ role: 'assistant', content: '{"review":"clear"}' });
-  };
-  const curator = createPiMemoryCurator({
-    provider: current.provider,
-    configured: () => true,
-    resolve: async () => {
-      selections++;
-      return current;
-    },
-  });
-  const selected = await curator.select!();
-  current = smallContextAccess('compatible', 'fixture-trust-replacement', 32768);
-  const signal = new AbortController().signal;
-  await Promise.all(
-    ['grant', 'restriction'].map((purpose) =>
-      selected.curate(
-        { task: 'review', instructions: 'Return synthetic JSON.', input: { purpose } },
-        signal,
-        (value) => usage.push(value),
-      ),
-    ),
-  );
-  assert.equal(selections, 1);
-  assert.deepEqual(models, ['fixture-trust-original', 'fixture-trust-original']);
-  assert.equal(usage.length, 2);
-  assert.notEqual(usage[0].id, usage[1].id);
-  assert.deepEqual(
-    usage.map((value) => value.model),
-    models,
-  );
-  const stopped = new AbortController();
-  stopped.abort();
-  await assert.rejects(
-    selected.curate({ task: 'review', instructions: '', input: {} }, stopped.signal),
-    { name: 'AbortError' },
-  );
-  await assert.rejects(curator.select!(stopped.signal), { name: 'AbortError' });
-  assert.equal(selections, 1);
-  assert.equal(models.length, 2);
-  assert.equal(usage.length, 2);
-});
 
 function reply(content: Record<string, unknown>, finish = 'stop') {
   const chunk = (value: unknown) => `data: ${JSON.stringify(value)}\n\n`;

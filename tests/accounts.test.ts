@@ -929,11 +929,7 @@ test('decision trust never calls an LLM for uncertainty, missing results or fail
     },
     review: async () => assert.fail('Missing configuration must not start an LLM request.'),
   });
-  assert.deepEqual(await unavailable(instructions, input), {
-    run: false,
-    reviewRequired: true,
-    reviewUnavailable: true,
-  });
+  assert.equal(await unavailable(instructions, input), undefined);
   for (const output of [
     undefined,
     {},
@@ -947,11 +943,7 @@ test('decision trust never calls an LLM for uncertainty, missing results or fail
       decisions: { check: async () => output },
       review: async () => assert.fail('Missing results must not select another model.'),
     });
-    const refused = await missing(instructions, input);
-    assert.equal(Object(refused).run, false);
-    assert.equal(Object(refused).reviewRequired, true);
-    assert.equal(Object(refused).reviewUnavailable, true);
-    assert.equal(trustBasis(refused, withOwnerIds(words, ['message'])), undefined);
+    assert.equal(await missing(instructions, input), undefined);
   }
   const unscored = createTrustReview({
     decisions: { check: async () => ({ answer: 'yes' }) },
@@ -1016,22 +1008,11 @@ test('batched trust validates all answers, records one request, and refuses conf
         resolve: async () => ({ provider, key: 'synthetic-batch-key' }),
         fetch: async (_url, init) => {
           const body = JSON.parse(String(init?.body));
-          const questions: Array<{ name: string; instructions: string }> =
-            provider === 'openai'
-              ? body.questions
-              : Object.entries(body.questions).map(([name, question]) => ({
-                  name,
-                  ...Object(question),
-                }));
-          assert.equal(questions.length, 12);
-          const named = (name: string) => {
-            const question = questions.find((question) => question.name === name);
-            assert.ok(question);
-            return question;
-          };
-          assert.doesNotMatch(named('trust').instructions, /Complete permission policy/);
-          assert.match(named('permission').instructions, /Complete permission policy/);
-          assert.doesNotMatch(named('preparation').instructions, /Complete permission policy/);
+          const questions = provider === 'openai' ? body.questions : Object.values(body.questions);
+          assert.equal(questions.length, 11);
+          assert.doesNotMatch(questions[0].instructions, /Complete permission policy/);
+          assert.match(questions[2].instructions, /Complete permission policy/);
+          assert.doesNotMatch(questions[1].instructions, /Complete permission policy/);
           const answers = [
             {
               name: 'trust',
@@ -1052,7 +1033,6 @@ test('batched trust validates all answers, records one request, and refuses conf
               probabilities: { true: conflict ? 0 : 1, false: conflict ? 1 : 0 },
             },
             ...[
-              'messageReview',
               'scope',
               'constraints',
               'time',
@@ -1067,7 +1047,7 @@ test('batched trust validates all answers, records one request, and refuses conf
               choice: provider === 'openai' ? false : 'false',
               probabilities: { true: 0, false: 1 },
             })),
-          ].slice(0, missing ? 1 : 12);
+          ].slice(0, missing ? 1 : 11);
           return Response.json({
             answers:
               provider === 'openai'
@@ -1141,7 +1121,7 @@ test('pure decision checks bind the evaluated model, preserve target checks and 
     }),
     fetch: async (_url, init) => {
       const request = JSON.parse(String(init?.body));
-      assert.equal(Object.keys(request.questions).length, 12);
+      assert.equal(Object.keys(request.questions).length, 11);
       assert.deepEqual(request.state.action, input.action);
       assert.deepEqual(request.state.userMessages, input.userMessages);
       assert.equal(request.provider.allow_fallbacks, false);
@@ -1211,14 +1191,10 @@ test('pure decision checks bind the evaluated model, preserve target checks and 
   source = 'message:0';
   input.action.name = 'send_email';
   probabilities = {};
-  for (const returnedModel of ['perplexity/pplx-decider-v1.3', undefined]) {
-    served = returnedModel;
-    await assert.rejects(allowed(), {
-      code: 'decision_model_mismatch',
-      reviewRequired: true,
-      reviewUnavailable: true,
-    });
-  }
+  served = 'perplexity/pplx-decider-v1.3';
+  assert.equal(await allowed(), undefined);
+  served = undefined;
+  assert.equal(await allowed(), undefined);
   served = 'perplexity/pplx-decider-v1.2-20261016';
   omit = 'targets';
   await assert.rejects(allowed());
@@ -3184,6 +3160,37 @@ test('server model credentials reject invalid destinations and cloud accounts be
     }).credentials.compatible,
     { type: 'endpoint', url: 'http://192.168.1.5:8080/v1', key },
   );
+});
+
+test('adding a model key keeps the service reason and removes the key', async () => {
+  const { createModelService } = await import('../src/server/models.ts');
+  const { createPiModelBackend } = await import('../src/providers/pi/models.ts');
+  const key = 'fixture-add-key-reason';
+  const secret = randomBytes(32);
+  for (const [provider, status] of [
+    ['openrouter', 429],
+    ['mistral', 503],
+  ] as const) {
+    const service = createModelService({
+      database: {} as pg.Pool,
+      ownerId: 'fixture-add-key-owner',
+      keyStore: { id: 'fixture', configured: true, getKey: async () => secret },
+      backend: createPiModelBackend({
+        fetch: async () =>
+          Response.json(
+            { message: `Synthetic ${key}` },
+            { status, headers: { 'content-type': 'application/json' } },
+          ),
+      }),
+      origin: 'http://127.0.0.1:4310',
+    });
+    await assert.rejects(service.addKey(provider, key), (error: Error) => {
+      assert.ok(!error.message.includes(key));
+      assert.ok(error.message.includes(`HTTP ${status}`));
+      assert.match(error.message, /Synthetic \[redacted\]/);
+      return true;
+    });
+  }
 });
 
 test('secret redaction finishes for long malformed Basic credentials', async () => {
