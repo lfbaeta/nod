@@ -1911,7 +1911,7 @@ test(
       threadId: 'telegram:123456',
       replyToMessageId: '123456:7',
       text: `Schedule instruction:\n\n\`\`\`\n${prompt}\n\`\`\`\n\nCreate this schedule?`,
-      approval: true as const,
+      approval: { approve: 'Zeitplan erstellen', decline: 'Abbrechen' },
     };
     try {
       assert.deepEqual(await transport.post(approval), {
@@ -1926,9 +1926,12 @@ test(
       assert.equal(Object(sent.reply_parameters).message_id, 7);
       assert.deepEqual(
         Object(sent.reply_markup).inline_keyboard[0].map(
-          (button: { callback_data: string }) => button.callback_data,
+          (button: { text: string; callback_data: string }) => [button.text, button.callback_data],
         ),
-        ['nod:approval:yes', 'nod:approval:no'],
+        [
+          ['Zeitplan erstellen', 'nod:approval:yes'],
+          ['Abbrechen', 'nod:approval:no'],
+        ],
       );
       rejectMarkdown = true;
       const plain = await transport.post(approval);

@@ -79,6 +79,7 @@ import type { ExecutionEvent } from '../shared/execution.ts';
 import { modelProviderNames, type ModelSelection, type WorkKind } from '../shared/models.ts';
 import { lockKey } from './locks.ts';
 import { redactSecretText } from './redaction.ts';
+import { loadConversationLanguage } from './communication.ts';
 import { resemblesTaskAcknowledgement } from '../shared/task-ack.ts';
 
 const queue = 'thread-drain';
@@ -160,6 +161,7 @@ type ConfirmAction = {
     input: ChatConfirmationInput,
     onInserted?: () => void,
   ): Promise<ChatConfirmationResult>;
+  close(client: PoolClient, sessionId: string, turnId: string): Promise<void>;
 };
 
 export interface ThreadDependencies {
@@ -943,6 +945,7 @@ export async function submitUserMessage(
       ],
     );
     if (taskTarget) await taskTarget.record(turnId);
+    if (live) await confirmAction?.close(client, question?.session_id ?? thread.id, turnId);
     const prepared = (await options.prepareAttachments?.(client, thread.id)) ?? [];
     await client.query(
       "INSERT INTO messages(id,owner_id,role,text,display_text,thread_id,turn_id,attachments,reply_to_message_id,reply_quote,audio_caption,question_answer) VALUES($1,$2,'user',$3,$4,$5,$6,$7,$8,$9,$10,$11)",
@@ -1883,6 +1886,7 @@ async function loadTurnContext(turn: any, dependencies: ThreadDependencies) {
     mcpServers,
     confirmedActions,
     restarted,
+    language,
   ] = await Promise.all([
     loadMessage(sourceMessageId),
     pool.query(
@@ -1927,6 +1931,7 @@ async function loadTurnContext(turn: any, dependencies: ThreadDependencies) {
           [threadId, ownerId],
         )
       : undefined,
+    loadConversationLanguage(pool, ownerId, threadId),
   ]);
   const preference = preferences.rows[0];
   const historyTurnIds = [
@@ -1978,6 +1983,7 @@ async function loadTurnContext(turn: any, dependencies: ThreadDependencies) {
       ...(confirmedActions?.length ? { confirmedActions } : {}),
       ...(credentialRequests.length ? { credentialRequests } : {}),
       ...(related.length ? { relatedConversation: related } : {}),
+      conversationLanguage: language,
       ...(learnedSkills?.length ? { learnedSkills } : {}),
       ...(connectedApps ? { connectedApps } : {}),
       ...(dependencies.localFiles ? { localFiles: true } : {}),

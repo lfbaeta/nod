@@ -40,7 +40,7 @@ import { withoutSchemaPatterns } from '../shared/json-schema.ts';
 import type { Turn } from './turn.ts';
 
 export const taskRouting =
-  'Keep quick answers, simple lookups and status questions in chat. Start a saved task for substantial work, including multi-step work you can finish in one sitting, an outside wait, or work the owner asks you to track. A new independent request during other work starts its own task; keep each goal together and send corrections or related updates to the existing task with task reply. If the owner explicitly asks to retry in response to a finished task’s result, use task reply with that task’s id from taskLedger and retry:true. Start tasks without asking the owner for an execution mode, and let each one finish its assigned work. A task brief grants no permission or schedule.';
+  'Keep quick answers, simple lookups and status questions in chat. Website, sign-in, payment and desktop work always runs in a task you start; its questions belong to that task. Start a saved task for substantial work, including multi-step work you can finish in one sitting, an outside wait, or work the owner asks you to track. A new independent request during other work starts its own task; keep each goal together and send corrections or related updates to the existing task with task reply. If the owner explicitly asks to retry in response to a finished task’s result, use task reply with that task’s id from taskLedger and retry:true. Start tasks without asking the owner for an execution mode, and let each one finish its assigned work. A task brief grants no permission or schedule.';
 
 export const personalActions = [
   'notification_preferences_get',
@@ -267,7 +267,7 @@ export const toolDefinitions = {
   ),
   send_message: defineTool(
     'send_message',
-    'Deliver a new checked result, necessary decision, or task handoff now. A partial result must be useful on its own and worth interrupting for; finish related checks first if they could materially change its meaning. In longer work the owner requests, send the first result that meets this bar as soon as it is ready, subject to their delivery conditions. Do not wait for unrelated work or final presentation; group later related findings. Use intent "final" only when this delivery completes the owner\'s request; successful delivery ends the turn. Use "handoff" only for a short acknowledgement immediately before starting a task, so the task card can reuse it. Omit intent or use "update" for other partial results or remaining work, then continue the full request. Routine activity belongs in the live line. Read visual-replies for itineraries, comparisons and other native views, or to offer Connect buttons for apps. Use empty text for a self-contained visual; otherwise add only missing context, caveats or sources. End without delivery announcements or recaps. Background final text stays private. Completion requires confirmed, inspectable output.',
+    'Deliver a new checked result, necessary decision, or task handoff now. A partial result must be useful on its own and worth interrupting for; finish related checks first if they could materially change its meaning. In longer work the owner requests, send the first result that meets this bar as soon as it is ready, subject to their delivery conditions. Do not wait for unrelated work or final presentation; group later related findings. Use intent "final" only when this delivery completes the owner\'s request; successful delivery ends the turn. Use "handoff" only for a short acknowledgement immediately before starting a task, so the task card can reuse it. Omit intent or use "update" for other partial results or remaining work, then continue the full request. Routine activity belongs in the live line. Deliver results with their element in presentation: flight options or an itinerary → flights; places or locations → map; venues, stays, restaurants or a reservation → booking; numbers across items or over time → chart; a seat layout → seats; a process or relationship → diagram; an image you inspected → image; apps to connect, only when the owner asks for more ideas → apps. Text carries only context, caveats and sources. visual-replies has the field rules. Use empty text for a self-contained visual; otherwise add only missing context, caveats or sources. End without delivery announcements or recaps. Background final text stays private. Completion requires confirmed, inspectable output.',
     Type.Object({
       text: Type.String(),
       presentation: Type.Optional(presentation),
@@ -392,7 +392,7 @@ export const toolDefinitions = {
   ),
   sign_in: defineTool(
     'sign_in',
-    "Private sign-in on the current exact origin. Inspect the page and saved account metadata first. Use the owner's method or a unique matching saved login, which selects password sign-in. For ambiguous methods use kind:method with one {label,selector} per visible method control, by current @eN ref or CSS. Ask only for an ambiguous account. For identifier/password/otp, pass current field refs or CSS selectors and submitSelector if required; omit it for automatic submission. passwordSelector can be an ordered array for split codes. savedLoginId selects a Vault login from manage_apps list; one matching Vault login is used automatically. Otherwise the owner enters values privately. Use emailCode:true and the page's emailRecipient only for a code sent by email; Nod retrieves it privately. Omit emailCode for an authenticator code. Never read codes with apps or ask in chat. message describes private entry; action is its short button label; label names the login. The server checks consent, fills and submits once; the result includes the page when available. Inspect it without submitting again. Read-only scripts need no reload; reload only when entry was refused because a script changed the document.",
+    "Private sign-in on the current exact origin. Inspect the page and saved account metadata first. Use the owner's method or a unique matching saved login, which selects password sign-in. For ambiguous methods use kind:method with one {label,selector} per visible method control, by current @eN ref or CSS. Ask only for an ambiguous account. For identifier/password/otp, pass current field refs or CSS selectors and submitSelector if required; omit it for automatic submission. passwordSelector can be an ordered array for split codes. savedLoginId selects a Vault login from manage_apps list; one matching Vault login is used automatically. Otherwise the owner enters values privately. Use emailCode:true and the page's emailRecipient only for a code sent by email; Nod retrieves it privately. Omit emailCode for an authenticator code. Never read codes with apps or ask in chat. message describes private entry without repeating the button label; action is that short button label; label names the login. The server checks consent, fills and submits once; the result includes the page when available. Inspect it without submitting again. Read-only scripts need no reload; reload only when entry was refused because a script changed the document.",
     Type.Union([
       Type.Object(
         {
@@ -641,7 +641,7 @@ export const toolDefinitions = {
   ),
   task: defineTool(
     'task',
-    'Start or control saved work. Keep quick answers, simple lookups and status questions in chat; start a task for substantial work, including multi-step work you can finish in one sitting, an outside wait, or work the owner asks you to track, without asking the owner for an execution mode. start {title,doneWhen,now,message,key?,brief?,steps?,model?} starts one goal; model {connectionId,modelId,effort?} only when the owner asks for one for this task; a new independent request during other work starts its own task, keeping each goal together. Use a stable key and reuse related tasks. message tells the owner what starts. update {id,now?,steps?,stepIndex?,waitingFor?,nextCheck?} updates progress. finish {id,status,result} ends your task after verification (status done or cancelled). list shows open tasks. reply {ids,retry?} forwards the exact current owner message, including corrections and related updates. Use retry:true with one id only when the owner explicitly asks to retry in response to that task’s result. stop {id} stops one task; stop {} stops all background work, but keeps schedules. A task stops itself with finish cancelled. A task brief grants no permission; nextCheck does not schedule work. Let each task finish its assigned work.',
+    'Start or control saved work. Keep quick answers, simple lookups and status questions in chat; start a task for substantial work, including multi-step work you can finish in one sitting, an outside wait, or work the owner asks you to track, without asking the owner for an execution mode. start {title,doneWhen,now,message,key?,brief?,steps?,model?} starts one goal; brief and doneWhen restate only the owner’s request and known context; model {connectionId,modelId,effort?} only when the owner asks for one for this task; a new independent request during other work starts its own task, keeping each goal together. Use a stable key and reuse related tasks. message tells the owner what starts. update {id,now?,steps?,stepIndex?,waitingFor?,nextCheck?} updates progress. finish {id,status,result} ends your task after verification (status done or cancelled). list shows open tasks. reply {ids,retry?} forwards the exact current owner message, including corrections and related updates. Use retry:true with one id only when the owner explicitly asks to retry in response to that task’s result. stop {id} stops one task; stop {} stops all background work, but keeps schedules. A task stops itself with finish cancelled. A task brief grants no permission; nextCheck does not schedule work. Let each task finish its assigned work.',
     Type.Union([
       Type.Object({ action: Type.Literal('list') }, { additionalProperties: false }),
       Type.Object(
@@ -922,12 +922,13 @@ export function nodTools(
       step.action === 'upload' ? { action: 'click', selector: step.selector } : step,
     );
     signal.throwIfAborted();
+    const control = page.controls?.length === 1 ? page.controls[0]! : undefined;
     if (
-      !page.submits &&
+      control &&
+      inputRoles.has(control.role) &&
+      (!page.submits || (control.role === 'link' && page.submits === 'unknown')) &&
       !page.dialog &&
       ['click', 'press'].includes(step.action) &&
-      page.controls?.length === 1 &&
-      inputRoles.has(page.controls[0]!.role) &&
       !(step.action === 'press' && isEnterKey(step.key))
     )
       return { binding: {} };
@@ -961,6 +962,7 @@ export function nodTools(
     if (appConfirmation in verdict) return { output: await confirm(verdict) };
     return { output: verdict.result };
   };
+  const work = Boolean(context.taskContext || context.background);
   return [
     ...(documentation
       ? [
@@ -1062,159 +1064,176 @@ export function nodTools(
         };
       return context.reactToMessage(p.messageId, p.reaction);
     }),
-    bind(toolDefinitions.browser, async ({ action, name, ...rest }) => {
-      if (action === 'handoff') {
-        if (turn.execution.parentRunId)
-          throw new Error(
-            'Return the browser blocker to the parent agent. A subagent cannot hand over its browser.',
-          );
-        const text = rest.text?.trim();
-        if (!text) throw new Error('Say what the user needs to do on the current page.');
-        await computer.currentPage(browserId);
-        signal.throwIfAborted();
-        await pause('browser', text);
-        return 'The browser is in chat. Wait for the user to return control.';
-      }
-      if (action === 'screenshot') {
-        const bytes = await screenshot();
-        if (!bytes) return 'Open a browser URL first.';
-        return {
-          content: [{ type: 'image', data: bytes.toString('base64'), mimeType: 'image/png' }],
-          details: {},
-        };
-      }
-      if (action === 'share_screenshot') {
-        if (!context.publishScreenshot) throw new Error('Screenshot publishing is unavailable.');
-        const bytes = await screenshot();
-        if (!bytes) throw new Error('The browser does not have an available screenshot.');
-        return {
-          ...(await context.publishScreenshot(bytes, name)),
-          delivery:
-            'Captured and staged for your next message or turn completion. Use this id in an image or booking presentation; do not share the file again.',
-        };
-      }
-      if (action === 'download') {
-        if (!context.publishBrowserFile) throw new Error('Browser file delivery is unavailable.');
-        let file;
-        try {
-          file = await computer.download(
-            browserId,
-            { selector: rest.selector, url: rest.url, name },
-            signal,
-          );
-        } catch (error) {
-          if (!(error instanceof BrowserActionError && error.code === 'browser_download_control'))
-            throw error;
-          const checked = await check({ action: 'click', selector: rest.selector });
-          if ('output' in checked) return checked.output;
-          file = await computer.download(
-            browserId,
-            { selector: rest.selector, name, ...checked.binding },
-            signal,
-          );
-          await checked.record?.();
-        }
-        signal.throwIfAborted();
-        if (!file.bytes.length || file.bytes.length > fileBytes)
-          throw new Error('Browser file delivery exceeds the download limit.');
-        return context.publishBrowserFile(file);
-      }
-      if (action === 'upload') {
-        if (!context.readWorkspaceFile) throw new Error('Browser file upload is unavailable.');
-        if (!rest.selector || !rest.path) throw new Error('Choose a file and upload field.');
-        const bytes = await context.readWorkspaceFile(rest.path, fileBytes);
-        const checked = await check({ action, selector: rest.selector, path: rest.path });
-        if ('output' in checked) return checked.output;
-        const page = await computer.upload(
-          browserId,
-          { selector: rest.selector, name: basename(rest.path), bytes, ...checked.binding },
-          signal,
-        );
-        await checked.record?.();
-        return observed({ action }, page);
-      }
-      const step = { action, ...rest } as BrowserAction;
-      if (action === 'evaluate' && context.browserStep)
-        try {
-          return observed(step, await computer.act(browserId, { ...step, readOnly: true }, signal));
-        } catch (error) {
-          if (!(error instanceof BrowserActionError && error.code === 'browser_script_writes'))
-            throw error;
-        }
-      const checked = commits(step) ? await check(step) : { binding: {} };
-      if ('output' in checked) return checked.output;
-      const page = await computer.act(browserId, { ...step, ...checked.binding }, signal);
-      if ('record' in checked) await checked.record?.();
-      return observed(step, page, checked.choice);
-    }),
-    bind(toolDefinitions.sign_in, async ({ message, action, ...request }) => {
-      const result = await context.requestCredential(request);
-      if (appConfirmation in result) return confirm(result);
-      if ('filled' in result) {
-        signal.throwIfAborted();
-        try {
-          return {
-            filled: true,
-            observation: observed(
-              { action: 'snapshot' },
-              await computer.act(browserId, { action: 'snapshot' }, signal),
-            ),
-          };
-        } catch {
-          signal.throwIfAborted();
-          return { filled: true };
-        }
-      }
-      await pause('credentials', vaultInvitation(request.origin, result.url, message, action));
-      return 'Waiting for secure input.';
-    }),
-    bind(toolDefinitions.pay, async (p) => {
-      if (!context.requestPayment) throw new Error('Payments are unavailable.');
-      const result = await context.requestPayment(p);
-      await pause(
-        'credentials',
-        result.url
-          ? paymentInvitation(result.url, result.question, result.action)
-          : paymentExplanation(result.question),
-      );
-      return 'Waiting for private payment approval.';
-    }),
-    bind(toolDefinitions.browser_session, async (p) => {
-      if (!context.browserConnection) throw new Error('Browser connections are unavailable.');
-      const outcome = await context.browserConnection(p);
-      if (outcome && typeof outcome === 'object' && appConfirmation in outcome)
-        return confirm(outcome);
-      const result = outcome as Record<string, unknown>;
-      if (result.status === 'rejected') {
-        switch (result.code) {
-          case 'invalid_browser_connection_arguments':
-            throw new Error(
-              'Invalid browser session input. Valid forms: connect {url, label?}; use {url, connectionId}; save {url, connectionId, signedIn:true}.',
+    ...(work
+      ? [
+          bind(toolDefinitions.browser, async ({ action, name, ...rest }) => {
+            if (action === 'handoff') {
+              if (turn.execution.parentRunId)
+                throw new Error(
+                  'Return the browser blocker to the parent agent. A subagent cannot hand over its browser.',
+                );
+              const text = rest.text?.trim();
+              if (!text) throw new Error('Say what the user needs to do on the current page.');
+              await computer.currentPage(browserId);
+              signal.throwIfAborted();
+              await pause('browser', text);
+              return 'The browser is in chat. Wait for the user to return control.';
+            }
+            if (action === 'screenshot') {
+              const bytes = await screenshot();
+              if (!bytes) return 'Open a browser URL first.';
+              return {
+                content: [{ type: 'image', data: bytes.toString('base64'), mimeType: 'image/png' }],
+                details: {},
+              };
+            }
+            if (action === 'share_screenshot') {
+              if (!context.publishScreenshot)
+                throw new Error('Screenshot publishing is unavailable.');
+              const bytes = await screenshot();
+              if (!bytes) throw new Error('The browser does not have an available screenshot.');
+              return {
+                ...(await context.publishScreenshot(bytes, name)),
+                delivery:
+                  'Captured and staged for your next message or turn completion. Use this id in an image or booking presentation; do not share the file again.',
+              };
+            }
+            if (action === 'download') {
+              if (!context.publishBrowserFile)
+                throw new Error('Browser file delivery is unavailable.');
+              let file;
+              try {
+                file = await computer.download(
+                  browserId,
+                  { selector: rest.selector, url: rest.url, name },
+                  signal,
+                );
+              } catch (error) {
+                if (!(
+                  error instanceof BrowserActionError && error.code === 'browser_download_control'
+                ))
+                  throw error;
+                const checked = await check({ action: 'click', selector: rest.selector });
+                if ('output' in checked) return checked.output;
+                file = await computer.download(
+                  browserId,
+                  { selector: rest.selector, name, ...checked.binding },
+                  signal,
+                );
+                await checked.record?.();
+              }
+              signal.throwIfAborted();
+              if (!file.bytes.length || file.bytes.length > fileBytes)
+                throw new Error('Browser file delivery exceeds the download limit.');
+              return context.publishBrowserFile(file);
+            }
+            if (action === 'upload') {
+              if (!context.readWorkspaceFile)
+                throw new Error('Browser file upload is unavailable.');
+              if (!rest.selector || !rest.path) throw new Error('Choose a file and upload field.');
+              const bytes = await context.readWorkspaceFile(rest.path, fileBytes);
+              const checked = await check({ action, selector: rest.selector, path: rest.path });
+              if ('output' in checked) return checked.output;
+              const page = await computer.upload(
+                browserId,
+                { selector: rest.selector, name: basename(rest.path), bytes, ...checked.binding },
+                signal,
+              );
+              await checked.record?.();
+              return observed({ action }, page);
+            }
+            const step = { action, ...rest } as BrowserAction;
+            if (action === 'evaluate' && context.browserStep)
+              try {
+                return observed(
+                  step,
+                  await computer.act(browserId, { ...step, readOnly: true }, signal),
+                );
+              } catch (error) {
+                if (!(
+                  error instanceof BrowserActionError && error.code === 'browser_script_writes'
+                ))
+                  throw error;
+              }
+            const checked = commits(step) ? await check(step) : { binding: {} };
+            if ('output' in checked) return checked.output;
+            const page = await computer.act(browserId, { ...step, ...checked.binding }, signal);
+            if ('record' in checked) await checked.record?.();
+            return observed(step, page, checked.choice);
+          }),
+          bind(toolDefinitions.sign_in, async ({ message, action, ...request }) => {
+            const result = await context.requestCredential(request);
+            if (appConfirmation in result) return confirm(result);
+            if ('filled' in result) {
+              signal.throwIfAborted();
+              try {
+                return {
+                  filled: true,
+                  observation: observed(
+                    { action: 'snapshot' },
+                    await computer.act(browserId, { action: 'snapshot' }, signal),
+                  ),
+                };
+              } catch {
+                signal.throwIfAborted();
+                return { filled: true };
+              }
+            }
+            await pause(
+              'credentials',
+              vaultInvitation(request.origin, result.url, message, action),
             );
-          case 'browser_connection_origin_mismatch':
-            throw new Error(
-              'This browser connection belongs to a different website. Use a saved connection for the current origin.',
+            return 'Waiting for secure input.';
+          }),
+          bind(toolDefinitions.pay, async (p) => {
+            if (!context.requestPayment) throw new Error('Payments are unavailable.');
+            const result = await context.requestPayment(p);
+            await pause(
+              'credentials',
+              result.url
+                ? paymentInvitation(result.url, result.question, result.action)
+                : paymentExplanation(result.question),
             );
-          case 'browser_connection_unavailable':
-            throw new Error(
-              'This browser connection is unavailable for the current task. List saved connections and inspect the current page before choosing one.',
-            );
-          case 'browser_connection_busy':
-            throw new Error(
-              'This browser profile is open in another task, waiting for the user to finish signing in. Open public pages with browser instead, or try again later.',
-            );
-          default:
-            throw new Error(
-              'The browser session request was rejected. Check the current page and saved connection before trying again.',
-            );
-        }
-      }
-      if (p.action === 'connect' || result.status === 'needs_sign_in') {
-        const { url: _url, ...safe } = result;
-        return safe;
-      }
-      return result;
-    }),
+            return 'Waiting for private payment approval.';
+          }),
+          bind(toolDefinitions.browser_session, async (p) => {
+            if (!context.browserConnection) throw new Error('Browser connections are unavailable.');
+            const outcome = await context.browserConnection(p);
+            if (outcome && typeof outcome === 'object' && appConfirmation in outcome)
+              return confirm(outcome);
+            const result = outcome as Record<string, unknown>;
+            if (result.status === 'rejected') {
+              switch (result.code) {
+                case 'invalid_browser_connection_arguments':
+                  throw new Error(
+                    'Invalid browser session input. Valid forms: connect {url, label?}; use {url, connectionId}; save {url, connectionId, signedIn:true}.',
+                  );
+                case 'browser_connection_origin_mismatch':
+                  throw new Error(
+                    'This browser connection belongs to a different website. Use a saved connection for the current origin.',
+                  );
+                case 'browser_connection_unavailable':
+                  throw new Error(
+                    'This browser connection is unavailable for the current task. List saved connections and inspect the current page before choosing one.',
+                  );
+                case 'browser_connection_busy':
+                  throw new Error(
+                    'This browser profile is open in another task, waiting for the user to finish signing in. Open public pages with browser instead, or try again later.',
+                  );
+                default:
+                  throw new Error(
+                    'The browser session request was rejected. Check the current page and saved connection before trying again.',
+                  );
+              }
+            }
+            if (p.action === 'connect' || result.status === 'needs_sign_in') {
+              const { url: _url, ...safe } = result;
+              return safe;
+            }
+            return result;
+          }),
+        ]
+      : []),
     ...(context.localFiles
       ? [
           bind(toolDefinitions.files, async ({ action, ...args }) => {
@@ -1236,7 +1255,7 @@ export function nodTools(
           }),
         ]
       : []),
-    ...(context.computerUse && !turn.execution.parentRunId
+    ...(context.computerUse && work && !turn.execution.parentRunId
       ? [
           bind(toolDefinitions.computer, async ({ action, ...args }) => {
             const result = await context.integration(

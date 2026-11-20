@@ -189,6 +189,23 @@ async function fixture(
   }
 }
 
+function taskFixture(...[run, overrides = {}, runtimeOptions]: Parameters<typeof fixture>) {
+  return fixture(
+    run,
+    {
+      taskContext: {
+        id: randomUUID(),
+        title: 'Synthetic task',
+        brief: 'Do the synthetic task.',
+        doneWhen: 'The synthetic task is done.',
+        revision: 1,
+      },
+      ...overrides,
+    },
+    runtimeOptions,
+  );
+}
+
 async function call(tools: Map<string, AgentTool>, name: string, args: Record<string, unknown>) {
   return tools.get(name)!.execute(args);
 }
@@ -311,7 +328,7 @@ test('command output removes whole secrets before taking a bounded tail', async 
   assert.equal(records[5]?.output, '{"name":"password","value":"[redacted]"}');
 });
 
-test('partial delivery continues across browser and app reads in chat and saved tasks', async () => {
+test('partial delivery continues across app reads in chat and browser reads in saved tasks', async () => {
   for (const task of [false, true]) {
     const delivered: string[] = [];
     const first = 'The public plan costs EUR 12 per seat. The account price is not checked yet.';
@@ -319,7 +336,8 @@ test('partial delivery continues across browser and app reads in chat and saved 
     let reads = 0;
     const { result, aborted } = await fixture(
       async (tools, _emit, options) => {
-        await call(tools, 'browser', { action: 'open', url: 'https://example.com/pricing' });
+        if (task)
+          await call(tools, 'browser', { action: 'open', url: 'https://example.com/pricing' });
         await call(tools, 'send_message', { text: first, intent: 'update' });
         assert.deepEqual(delivered, [first]);
         assert.equal(options.shouldStop(), false);
@@ -362,7 +380,7 @@ test('partial delivery continues across browser and app reads in chat and saved 
         }),
       },
     );
-    assert.equal(reads, 2);
+    assert.equal(reads, task ? 2 : 1);
     assert.deepEqual(delivered, [first, final]);
     assert.equal(result.status, 'succeeded');
     assert.equal(aborted, false);
@@ -2064,7 +2082,7 @@ test('outside results reach Pi in one untrusted block, scripts get them raw, and
   const page = (body: string) => async () => ({
     content: [{ type: 'text' as const, text: body }],
   });
-  await fixture(
+  await taskFixture(
     async (tools, _emit, options) => {
       texts.push(text(await call(tools, 'apps', { action: 'GMAIL_FETCH_EMAILS', args: {} })));
       await assert.rejects(call(tools, 'apps', { action: 'CONNECTED_HTTP', args: {} }), (error) => {
@@ -2167,7 +2185,7 @@ test('outside results reach Pi in one untrusted block, scripts get them raw, and
     [{ [appConfirmation]: 'Send this email?' }, 'waiting_user'],
   ] as const) {
     let notice = '';
-    const turn = await fixture(
+    const turn = await taskFixture(
       async (tools) => {
         notice = text(
           await call(tools, 'apps', {
@@ -2187,7 +2205,7 @@ test('outside results reach Pi in one untrusted block, scripts get them raw, and
   const held = new Promise<void>((resolve) => {
     release = resolve;
   });
-  await fixture(
+  await taskFixture(
     async (tools, _emit, options) => {
       const read = options.runTool('fetch_content', { urls: [] }, async () => {
         await held;
@@ -2288,7 +2306,7 @@ test('secure credential pause prevents subsequent tools in the same execution se
   ]) {
     let managed = false;
     const requested: unknown[] = [];
-    const result = await fixture(
+    const result = await taskFixture(
       async (tools) => {
         for (const invalid of [
           { kind: 'method' },
@@ -2369,7 +2387,7 @@ test('browser checks retain successful named checkbox choices only on their page
       ],
     ],
   ]);
-  await fixture(
+  await taskFixture(
     async (tools) => {
       await call(tools, 'browser', { action: 'open', url });
       await call(tools, 'browser', { action: 'fill', selector: '@query', text: 'Synthetic query' });
@@ -2421,13 +2439,52 @@ test('browser checks retain successful named checkbox choices only on their page
   assert.deepEqual(seen.find(({ selector }) => selector === '@other-save')?.typed, []);
 });
 
+test('links navigate without a check unless they send a known form', async () => {
+  const seen: string[] = [];
+  const url = 'https://example.com/results';
+  const pages = new Map<string, Record<string, unknown>>([
+    ['@link', { controls: [{ role: 'link', name: 'Click here' }], submits: 'unknown' }],
+    [
+      '@form-link',
+      {
+        controls: [{ role: 'link', name: 'Continue' }],
+        submits: { method: 'POST', to: 'https://example.com/book' },
+      },
+    ],
+    ['@button', { controls: [{ role: 'button', name: 'Click here' }], submits: 'unknown' }],
+  ]);
+  await taskFixture(
+    async (tools) => {
+      for (const selector of pages.keys())
+        await call(tools, 'browser', { action: 'click', selector });
+    },
+    {
+      browserStep: async ({ step }) => {
+        seen.push(step.selector ?? '');
+        return 'run';
+      },
+    },
+    {
+      computer: fakeComputer({
+        currentPage: async (_id, step) => ({
+          origin: 'https://example.com',
+          url,
+          ...pages.get(step?.selector ?? ''),
+        }),
+        act: async () => ({ url, text: 'Synthetic page' }),
+      }),
+    },
+  );
+  assert.deepEqual(seen, ['@form-link', '@button']);
+});
+
 test('browser handoff requires a live page, binds its session and stops further work without a link', async () => {
   const sessionId = randomUUID();
   let opened = false;
   let pageError: Error | undefined;
   let holdFails = true;
   const held: string[] = [];
-  const result = await fixture(
+  const result = await taskFixture(
     async (tools) => {
       await assert.rejects(
         call(tools, 'browser', { action: 'handoff', text: ' ' }),
@@ -2493,7 +2550,7 @@ test('browser handoff requires a live page, binds its session and stops further 
   assert.equal(result.result.handoffBrowserId, sessionId);
   assert.equal(result.result.message, 'Complete sign-in on this page, then return control.');
   assert.deepEqual(held, [sessionId]);
-  const ordinary = await fixture(async (tools) => {
+  const ordinary = await taskFixture(async (tools) => {
     await call(tools, 'ask_user', { question: 'What did [the browser](/browser) show?' });
   });
   assert.equal(ordinary.result.handoffBrowserId, undefined);
@@ -2505,7 +2562,7 @@ test('private entry returns page data once and stops before an observation after
     let entries = 0;
     let snapshots = 0;
     const run = () =>
-      fixture(
+      taskFixture(
         async (tools) => {
           const result = await call(tools, 'sign_in', {
             origin: 'https://example.com',
@@ -2553,7 +2610,7 @@ test('private entry returns page data once and stops before an observation after
 
 test('a subagent cannot hand over its browser to the owner', async () => {
   let refused = false;
-  const result = await fixture(async (tools, emit, execution) => {
+  const result = await taskFixture(async (tools, emit, execution) => {
     if (execution.parentRunId) {
       assert.equal(tools.has('create_audio'), false);
       await assert.rejects(

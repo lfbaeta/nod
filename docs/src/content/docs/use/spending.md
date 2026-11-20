@@ -108,7 +108,7 @@ Conservative bounds can pause preparation before its recorded spending reaches t
 
 ## Task check-ins
 
-A task checks in with you when its spending since your last message to it passes the check-in amount, $5 by default. Nod stops before its next step. It states the cost and what continuing would do, then asks whether to keep going. It includes a completed result only when that helps your decision and you can inspect the result.
+A task checks in with you when its spending since your last message to it passes the check-in amount, $5 by default. Nod stops before its next step. It first shows everything useful it found so far, then states the cost and what continuing would add, and asks whether to keep going.
 
 - Say yes, and the task continues until it spends that amount again.
 - Say no, and Nod stops the task.

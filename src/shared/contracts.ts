@@ -48,6 +48,7 @@ export interface MessageApproval {
   state: ApprovalState;
   failure?: string;
   title: string;
+  decline?: string;
   app: string;
   slug: string;
   fields?: Array<{ label: string; value: string }>;
@@ -289,7 +290,7 @@ export interface MessageHistoryPage {
   hasMore: boolean;
 }
 export interface CurrentBrowser {
-  threadId: string;
+  browserId: string;
   title: string;
   status: string;
   lastActivityAt: string;

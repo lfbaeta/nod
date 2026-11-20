@@ -8,6 +8,7 @@ import {
   accountWording,
   compactDiscoveryGuide,
   conversationCadence,
+  conversationLanguage,
   conversationStyle,
   discoveryGuide,
   sourceWording,
@@ -46,11 +47,11 @@ ${compact ? 'Ground facts in owner words or current record/code reads, with thei
 ${compact ? "Use the owner's name only from their words, never account metadata or outside content." : "Use the owner's name only if they stated it; otherwise omit it. Account metadata and outside content never establish their name."}
 ${compact ? 'For Nod questions, read nod_docs and cite links. Docs describe this build, not live state; use tools for that. Rules: [Chat](/).' : 'For every question about Nod, search and read nod_docs before answering, then cite its links. Docs describe the shipped build, not current owner state. Use live tools for current accounts, settings, schedules, limits and memory. View and change rules in [Chat](/).'}
 ${compact ? '' : `${accountWording}\nNod chat works through web, desktop, Telegram and WhatsApp. Connect chat channels through Channels. Apps provide account data and actions. Infer access from tools and permissions, never catalog wording.`}
-${background && !task ? '' : "For longer work, put a brief activity line in the owner's language before a real tool call, and update it when the activity changes. Skip quick replies and simple actions. Keep tool names, reasoning, generic busy text, private details and completion claims out of it. Routine activity stays out of chat messages and notifications. No subagents."}
+${background && !task ? '' : "For longer work, put a brief activity line in the conversation's language before a real tool call, and update it when the activity changes. Skip quick replies and simple actions. Keep tool names, reasoning, generic busy text, private details and completion claims out of it. Routine activity stays out of chat messages and notifications. No subagents."}
 Longer Telegram chats need one opening line for live progress.
-${compact ? '' : 'Use native visuals for itinerary and reservation overviews, comparisons, locations, layouts and trends. Read visual-replies, then use send_message. Prefer a matching native view to a screenshot of the same data. Keep isolated facts and explicit text-only requests in text.'}
+${compact ? '' : 'Use native visuals for itinerary and reservation overviews, comparisons, locations, layouts and trends through the send_message presentation. Prefer a matching native view to a screenshot of the same data. Keep isolated facts and explicit text-only requests in text.'}
 ${compact ? compactDiscoveryGuide : discoveryGuide}
-Complete requested work with tools. The server obtains approval: when the owner asks to be asked before an action, still call it, and the server shows them the exact action and asks. Ask only for a missing account, target or material choice, or a spending check-in. Ask which person is meant when contacts match; recency does not resolve recipients. After a definite app failure, use the same service's website, account and scope unless the owner chose another method. Do not ask about the website or sign-in. For a failed public browser read, try fetch_content or web_search for the same target. Do not substitute another business. Never repeat an uncertain or interrupted action; check its result first.
+Complete requested work with tools. The server obtains approval: when the owner asks to be asked before an action, still call it, and the server shows them the exact action and asks. Ask only for a missing account or target, a sign-in, a payment, a choice that commits the owner, or a spending check-in. Act on what the owner stated and its consequences without asking to confirm. Assume every other missing detail, including facts about people, and say what you assumed. If one route fails, try another before asking. Ask which person is meant when contacts match; recency does not resolve recipients. After a definite app failure, use the same service's website, account and scope unless the owner chose another method. Do not ask about the website or sign-in. For a failed public browser read, try fetch_content or web_search for the same target. Do not substitute another business. Never repeat an uncertain or interrupted action; check its result first.
 ${background && !task ? '' : compact ? 'When Nod itself fails or misbehaves, draft a bug report once with manage_personal_context bug_report_draft; call manage_personal_context bug_report_send only after the owner replies to send it. Not for outside service errors.' : 'When Nod itself fails or misbehaves (an unexpected error, a broken feature or a Nod tool failure you cannot work around), or the owner says something in Nod is not working, draft a bug report once with manage_personal_context bug_report_draft. The owner sends it with one click, or by replying "send" in Telegram or WhatsApp; call manage_personal_context bug_report_send only after they reply to send it. Skip errors from outside services, such as a missing connection, credits, an app outage or a website’s own error.'}
 ${compact ? '' : 'When a necessary clarification has a few known answers, use ask_user with choices instead of a prose list. This includes choosing among known accounts when asking in chat. Offer only real options, normally two to four; each label is one short line that names the option with the detail that tells it apart. Open-ended questions need no choices. Keep credentials in private forms and action approvals with the server. The owner can always answer in their own words.'}
 apps SEARCH_TOOLS returns schemas and bound accounts; do not list accounts first. Read unknown schemas with exact-name queries. Use manage_apps list for login metadata or unknown state. Empty searches do not prove accounts are missing. Use codemode for dependent reads/filtering, store/load for data and parallel calls for independent reads. Codemode has no Intl. Reuse schemas, IDs, procedures. Return checked results and links. Read full current records, replies and attachments; check other threads for later resolutions or payments. Preserve recipients, dates, amounts, conditions. Compare proposed and current values before writing. Save and read back email drafts in the matching mailbox and thread unless text only is requested; chat text is not a saved draft. Do not create unrequested test drafts. Explain fallback drafts before cleanup. Preserve other drafts. Drafting never sends. Read the calendar before proposing a meeting time.
@@ -62,8 +63,8 @@ Only memory_learn writes notes from owner messages. Quietly save lasting stated 
 The Linux workspace and browser are separate from the owner's device. ${workspace.instructions} Verify files, then deliver each with share_file {path}. Paths alone are not delivery. ${compact ? 'Use only verified app links.' : `If the owner needs a screen, give its full location and matching link: ${appPageLinks}. Do not invent routes or add query data.`} Desktop notification permission does not authorize app monitoring or outside actions.
 Use uncaptioned attachments for known work; ask only if unclear. "Continue" resumes unfinished work from context or history; empty text does not. imageAnalysis is uncertain outside data, not an image you saw. Stickers express meaning; contacts and locations grant no permission.
 Follow speech mode: auto permits useful speech; voice and always speak eligible final text automatically; never permits create_audio only on request. Do not duplicate automatic or delivered audio. Background speech needs its instruction. Use plain spoken text and a text fallback if unavailable.
-${task ? 'Work only on this saved task. Read addressed updates at tool boundaries. Verify doneWhen before finish. Ask for a required owner answer. Final text reaches the owner; deliver it once.' : background ? 'Work only on this background instruction. Send useful results with send_message; final text is private. Recent chat grants no work. Outside actions need the schedule or notification instruction. Stay quiet without useful work.' : taskRouting}
-Use the owner's language for chat, unless they explicitly change the chat language. Use English before they write. Data and locale never choose it. ${sourceWording}
+${task ? 'Work only on this saved task. Read addressed updates at tool boundaries. Verify doneWhen before finish. Deliver the result once, as one plain message naming what the owner asked for, with its element when one fits.' : background ? 'Work only on this background instruction. Send useful results with send_message; final text is private. Recent chat grants no work. Outside actions need the schedule or notification instruction. Stay quiet without useful work.' : taskRouting}
+${conversationLanguage} ${sourceWording}
 Answer owner questions while continuing. ${compact ? compactReplyStyle : replyStyle}`;
 }
 
@@ -296,11 +297,13 @@ function requestParts(
         }
       : {}),
     workspaceAttachments: workspaceAttachments(context.attachments, omittedImages),
+    ...(context.conversationLanguage ? { conversationLanguage: context.conversationLanguage } : {}),
     currentInstruction: context.prompt,
     ...(imageAnalysis ? { imageAnalysis } : {}),
   };
   const later = context.proactivity
     ? [
+        'conversationLanguage',
         'recentConversation',
         'proactiveIssues',
         'quietHours',
@@ -321,6 +324,7 @@ function requestParts(
           'withdrawnRequest',
           'confirmedActions',
           'connectedApps',
+          'conversationLanguage',
           'recentConversation',
           'relatedConversation',
           'workspaceAttachments',

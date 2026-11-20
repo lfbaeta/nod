@@ -47,6 +47,8 @@ Each step that can change content goes through the same [trust check](/trust/app
 
 Before input, Nod reads the window again. It refuses the step if the window content or control changed after the check. It checks again after waiting to bring an app forward. Keyboard input also stays bound to the focused control. In a list, table, outline, grid, tree or menu of more than 20 items, such as an inbox or a month view, the check sees only the item Nod acts on and the selected item, so new messages arriving elsewhere don't stop the step. When list items are left out, a send or submission runs without asking only when the checked window itself shows its recipients and message and your words cover them. A step can't run when the accessibility service returns an incomplete window, when the control is no longer in the window, or when the checked content exceeds 24,000 characters.
 
+A step that waits for your answer, that you declined, or whose outcome is uncertain still blocks the same control in that app for the rest of the request, even after the window changes. Stopping work cancels its queued steps, and no step starts after its deadline, so a step reported as not run can't run later.
+
 ## What Nod never does
 
 Nod refuses these, without a judgment call. It recognizes apps by their ID and program, so an app that isn't on its list isn't refused automatically; [keep Nod out of it](#keep-nod-out-of-an-app) instead:
@@ -56,6 +58,7 @@ Nod refuses these, without a judgment call. It recognizes apps by their ID and p
 - File managers: Finder, File Explorer, Files (Nautilus) and Dolphin. Nod works with your files only through [local files](/connect/local-files/), with its protections. An app Nod may use can still open and save files through its own Open and Save panels, which local files would refuse; [keep Nod out of that app](#keep-nod-out-of-an-app) if that matters.
 - Password managers, such as Passwords and 1Password, and crypto wallets.
 - Nod itself.
+- An app whose name another running app shares, or on Windows and Linux one with neither an app ID nor a program, because Nod can't tell which app it is.
 - On macOS, the Apple menu, with Restart, Shut Down, Log Out and System Settings, and each app's own menu, with Services. Nod never shows them to the model.
 - System shortcuts, such as Spotlight, Force Quit, Log Out and Lock Screen, any shortcut with the Windows or Super key, Alt+Tab, Ctrl+Alt+Delete and Ctrl+Alt+T.
 - Any app you keep Nod out of.

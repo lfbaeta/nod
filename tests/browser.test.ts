@@ -221,7 +221,7 @@ test(
         [randomUUID(), nextTurnId],
       );
       const fallback = (await request('/api/browser')).json();
-      assert.equal(fallback.currentBrowser.threadId, next.id);
+      assert.equal(fallback.currentBrowser.browserId, next.id);
 
       fail = false;
       const click = { type: 'mouse', event: 'down', x: 0.5, y: 0.25, button: 'left' };
@@ -1353,7 +1353,8 @@ async function runtimeFixture(
   const runtime = createAgentRuntime({ agent, computer, workspace: fakeWorkspace() });
   const context: RuntimeContext = {
     threadId,
-    sessionId: threadId,
+    sessionId: randomUUID(),
+    background: true,
     turnId: randomUUID(),
     prompt: 'Open the synthetic destination after dismissing its covering dialog.',
     history: [],

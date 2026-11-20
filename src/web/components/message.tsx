@@ -240,12 +240,12 @@ export const MessageText = memo(function MessageText({
               if (href === telegramUrl) return <TelegramChatLink href={telegramUrl} />;
               const linkText = messageLinkText(node?.children ?? []);
               const setup = setupLink(link, linkText);
-              if (setup && actions.some((action) => action.href === setup.href))
-                return (
-                  <strong className="setup-phrase">
-                    {linkText.trim() && !linkText.includes(setup.href) ? children : setup.label}
-                  </strong>
-                );
+              if (setup && actions.some((action) => action.href === setup.href)) {
+                const phrase = linkText.trim().replace(/\s+/g, ' ');
+                const bare = !phrase || phrase.includes(setup.href);
+                if (!connected(setup.href) && (bare || phrase === setup.label)) return null;
+                return <strong className="setup-phrase">{bare ? setup.label : children}</strong>;
+              }
               return (
                 <a
                   href={link.kind === 'external' ? href : link.href}

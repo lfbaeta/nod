@@ -1420,7 +1420,7 @@ test(
               sent.push(message.text);
               const id = 'fixture-sent-' + sent.length;
               if (message.approval) approvalMessages.set(message.text, id);
-              return { id, approvalButtons: message.approval };
+              return { id, ...(message.approval ? { approvalButtons: true as const } : {}) };
             },
             close: async () => {},
           };
