@@ -56,6 +56,8 @@ export const settingsSections = [
   { id: 'privacy', label: 'Privacy & data', path: '/settings/privacy', icon: ShieldCheck },
 ] as const;
 
+const settingsHeadingOffset = 32;
+
 export function isSettingsPage(path: string) {
   return settingsSections.some((section) => section.path === path);
 }
@@ -205,7 +207,7 @@ export function AccountSettings({
         heading.getBoundingClientRect().top -
           scroller.getBoundingClientRect().top +
           scroller.scrollTop -
-          32,
+          settingsHeadingOffset,
         scroller.scrollHeight - scroller.clientHeight,
       ),
     );
@@ -267,13 +269,20 @@ export function AccountSettings({
     if (!scroller) return;
     if (jumped.current && Math.abs(scroller.scrollTop - jumped.current.top) < 2)
       return setSection(jumped.current.target);
-    const top = scroller.getBoundingClientRect().top;
-    const reached = settingsSections.filter((candidate) => {
+    const line = scroller.getBoundingClientRect().top + settingsHeadingOffset;
+    let active = 'general';
+    let nearest = Infinity;
+    for (const candidate of settingsSections) {
       const heading = document.getElementById(`${id}-${candidate.id}`);
-      return heading && heading.getBoundingClientRect().top <= top + 108;
-    });
+      if (!heading) continue;
+      const distance = Math.abs(heading.getBoundingClientRect().top - line);
+      if (distance < nearest) {
+        nearest = distance;
+        active = candidate.id;
+      }
+    }
     const atEnd = scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop < 4;
-    setSection(atEnd ? 'privacy' : (reached.at(-1)?.id ?? 'general'));
+    setSection(atEnd ? 'privacy' : active);
   }
   async function saveAll(leave: boolean) {
     if (current.current.busy) return;
