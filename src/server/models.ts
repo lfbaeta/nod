@@ -534,7 +534,7 @@ export function createModelService(options: {
           throw new ConnectionError(
             `${modelProviderNames[row.provider]} failed the last request to ${modelId} (${failure.reason}). Automatic requests to this model are paused until a request succeeds. Check this connection in ${appPages['/settings/models']} or ask again to make a new request.`,
           );
-        return async (error) => {
+        return async (error, status) => {
           if (!tag || closed) return;
           if (
             !error &&
@@ -579,6 +579,8 @@ export function createModelService(options: {
                   .trim()
                   .slice(0, 300),
               };
+              if (status === 401 && !saved.managed && saved.status === 'connected')
+                saved.status = 'reconnect';
             });
             await reload();
           } catch (error) {
@@ -1434,9 +1436,9 @@ export function createModelService(options: {
           const connected = await backend.connectKey(provider, value).catch((error) => {
             if (error instanceof ModelWorkspaceSelectionError) throw error;
             throw new ConnectionError(
-              error instanceof ModelAuthError
-                ? error.message
-                : 'The model list couldn’t be loaded. Try again.',
+              createTextRedactor([...secrets])(
+                error instanceof Error ? error.message : String(error),
+              ).slice(0, 2000),
             );
           });
           return save(provider, 'api_key', connected.credential, connected.models);

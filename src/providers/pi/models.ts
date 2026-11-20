@@ -467,11 +467,13 @@ export function createPiModelBackend(options: { fetch?: typeof fetch } = {}): Mo
         signal: AbortSignal.timeout(15000),
       },
     );
-    await response.body?.cancel();
-    if ([400, 401, 403].includes(response.status))
+    if ([400, 401, 403].includes(response.status)) {
+      await response.body?.cancel();
       throw new ModelAuthError('Google Vertex AI didn’t accept this API key.');
+    }
     if (!response.ok && response.status !== 404)
-      throw new Error('The model service is temporarily unavailable. Try again.');
+      throw await modelServiceError(response, 'Google Vertex AI model discovery', [credential.key]);
+    await response.body?.cancel();
     return local.map(definition);
   }
   async function azureCatalog(local: readonly Model<Api>[], credential: ModelCredential) {
@@ -1228,7 +1230,7 @@ export async function createPiModelRuntime(
     let phase: ModelRequestFacts['requestPhase'] = 'prepare';
     let status: number | undefined;
     let transportCause: string | undefined;
-    let completeRequest: ((error?: string) => Promise<void>) | undefined;
+    let completeRequest: ((error?: string, status?: number) => Promise<void>) | undefined;
     let settleBudget: ((spentUsd: number | null) => Promise<void>) | undefined;
     const silence = new AbortController();
     let silenceTimer: ReturnType<typeof setTimeout> | undefined;
@@ -1456,6 +1458,7 @@ export async function createPiModelRuntime(
           )
             await completeRequest?.(
               message.stopReason === 'error' ? message.errorMessage : undefined,
+              status,
             );
         }
         if (event.type === 'done' || event.type === 'error') {

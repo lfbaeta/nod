@@ -861,12 +861,6 @@ export async function createIntegrations(pool: Pool, options: IntegrationOptions
       .map((row) => connectionAnalytics(row.slug));
   }
 
-  function accountBinding(row: ConnectionRow) {
-    return row.account_id && !row.revoked && row.account_active && configurationMatches(row)
-      ? JSON.stringify([row.account_id, row.provider_id, row.configuration_id, row.watch_revision])
-      : undefined;
-  }
-
   async function binding(connectionId: string, client?: PoolClient) {
     const row = (
       await (client ?? pool).query<ConnectionRow>(
@@ -874,7 +868,15 @@ export async function createIntegrations(pool: Pool, options: IntegrationOptions
         [configuredOwner, z.uuid().parse(connectionId)],
       )
     ).rows[0];
-    if (row) return accountBinding(row);
+    if (row)
+      return row.account_id && !row.revoked && row.account_active && configurationMatches(row)
+        ? JSON.stringify([
+            row.account_id,
+            row.provider_id,
+            row.configuration_id,
+            row.watch_revision,
+          ])
+        : undefined;
     return options.discovered?.binding(connectionId, client);
   }
 
@@ -1619,7 +1621,6 @@ export async function createIntegrations(pool: Pool, options: IntegrationOptions
     signal?: AbortSignal,
     expectedBinding?: string,
     beforeDispatch?: () => Promise<void>,
-    expectedSender?: string,
   ) {
     if (isLocalFilesAction(action)) {
       assertOwner(ownerId);
@@ -1666,20 +1667,15 @@ export async function createIntegrations(pool: Pool, options: IntegrationOptions
           const row = await selectedConnection(ownerId, action, args);
           const { connectionId: _connectionId, ...providerArgs } = args;
           const result = await withAccountSession(ownerId, [row], signal, async (session) => {
-            if (beforeDispatch) await beforeDispatch();
             const current = await selectedConnection(ownerId, action, args);
             if (
               current.account_id !== row.account_id ||
-              (expectedBinding !== undefined && accountBinding(current) !== expectedBinding)
+              (expectedBinding !== undefined && (await binding(row.id)) !== expectedBinding)
             )
               throw Object.assign(new IntegrationError('The selected account changed.', 409), {
                 notRun: true,
               });
-            if (expectedSender !== undefined && current.account_email !== expectedSender)
-              throw Object.assign(
-                new IntegrationError('The Gmail sender address changed after confirmation.', 409),
-                { notRun: true },
-              );
+            if (beforeDispatch) await beforeDispatch();
             signal?.throwIfAborted();
             dispatched = true;
             return session.execute(action, providerArgs, row.account_id!, signal);
