@@ -19,7 +19,7 @@ import { api, errorMessage } from '../lib/api';
 import { isEditingTarget, shortcutLabel } from '../lib/navigation';
 import { Tooltip } from './tooltip';
 import { captureAnalytics } from '../lib/analytics';
-import { createComposerExtensions } from '../lib/composer-editor';
+import { createComposerExtensions, touchKeyboard } from '../lib/composer-editor';
 import {
   composerDisplayMarkdown,
   composerMarkdown,
@@ -187,6 +187,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
         'aria-label': 'Message Nod',
         'aria-multiline': 'true',
         'aria-describedby': 'composer-keyboard-hint',
+        ...(touchKeyboard() ? { enterkeyhint: 'enter' } : {}),
         class: 'composer-editor message-text',
       },
     },
@@ -1067,7 +1068,9 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
         <EditorContent editor={editor} />
         <EditorFormatting editor={editor} underlineShortcut={false} />
         <span className="sr-only" id="composer-keyboard-hint">
-          Enter to send. Shift or Alt plus Enter for a new line or list item.
+          {touchKeyboard()
+            ? 'Return for a new line or list item. Select Send message to send.'
+            : 'Enter to send. Shift or Alt plus Enter for a new line or list item.'}
         </span>
         <div className="composer-tools">
           <div className="composer-left">

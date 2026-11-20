@@ -9,6 +9,13 @@ import { Fragment, Slice } from '@tiptap/pm/model';
 import { AllSelection, Plugin, TextSelection } from '@tiptap/pm/state';
 import { safeMessageLink } from './message-links';
 
+export function touchKeyboard() {
+  return (
+    typeof window !== 'undefined' &&
+    window.matchMedia?.('(hover: none) and (pointer: coarse)').matches === true
+  );
+}
+
 export function clipboardFiles(clipboard: DataTransfer): File[] {
   const files = Array.from(clipboard.files ?? []);
   if (files.length) return files;
@@ -129,7 +136,14 @@ export function createComposerExtensions(callbacks: {
                   event.keyCode === 229
                 )
                   return false;
-                if (event.shiftKey || event.altKey) {
+                if (
+                  event.shiftKey ||
+                  event.altKey ||
+                  (callbacks.mode !== 'feedback' &&
+                    touchKeyboard() &&
+                    !event.metaKey &&
+                    !event.ctrlKey)
+                ) {
                   if (event.metaKey || event.ctrlKey) return false;
                   const { $from, empty } = view.state.selection;
                   const item = $from.depth > 0 ? $from.node(-1).type.name : undefined;
