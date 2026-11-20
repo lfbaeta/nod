@@ -3376,8 +3376,8 @@ test('feedback redaction checks original text and structure before masking', asy
       kept: ['HTTP 503', 'attempt 2'],
     },
     {
-      id: 'encoded-email-lowercase',
-      input: email.replace('@', '%40'),
+      id: 'encoded-email-percent-secret',
+      input: encodeURIComponent(email),
       secrets: ['%'],
       privateParts: ['PrivateMailbox', 'synthetic.invalid'],
     },
