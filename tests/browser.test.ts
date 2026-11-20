@@ -3557,6 +3557,48 @@ test('feedback redaction checks original text and structure before masking', asy
   }
 });
 
+test('feedback redaction advances Unicode overlaps and resets recursive checks between calls', async () => {
+  const { execFileSync } = await import('node:child_process');
+  execFileSync(
+    process.execPath,
+    [
+      '--import',
+      'tsx',
+      '--input-type=module',
+      '--eval',
+      `import assert from 'node:assert/strict';
+    import { createFeedbackRedactor } from ${JSON.stringify(new URL('../src/server/feedback-redaction.ts', import.meta.url).href)};
+    const redactor = createFeedbackRedactor({ secrets: [], profile: { names: ['😀😀😀'] } });
+    assert.equal(redactor.text('😀'.repeat(6)), '[owner]');`,
+    ],
+    { timeout: 3000, maxBuffer: 16_000 },
+  );
+  const { createFeedbackRedactor } = await import('../src/server/feedback-redaction.ts');
+  const redactor = createFeedbackRedactor({ secrets: ['/', '@'], profile: { names: [] } });
+  const encoded = Array.from({ length: 4 }).reduce<string>(
+    (value) => encodeURIComponent(value),
+    '/Users/Synthetic Owner/PrivateLedger.docx',
+  );
+  const input = {
+    status: 503,
+    message: 'HTTP 503 for PrivateMailbox%40synthetic.invalid',
+    detail: encoded,
+  };
+  const expected = JSON.stringify(redactor.value(input));
+  assert.ok(expected.includes('HTTP 503'));
+  for (const privateValue of [
+    'PrivateMailbox',
+    'synthetic.invalid',
+    'Synthetic Owner',
+    'PrivateLedger',
+  ])
+    assert.ok(!expected.includes(privateValue), privateValue);
+  for (let index = 0; index < 8; index++) {
+    redactor.text('%41 '.repeat(130) + encoded);
+    assert.equal(JSON.stringify(redactor.value(input)), expected);
+  }
+});
+
 test('feedback redaction omits values when classification metadata is a getter', async () => {
   const { createFeedbackRedactor } = await import('../src/server/feedback-redaction.ts');
   const redactor = createFeedbackRedactor({ secrets: [], profile: { names: [] } });
