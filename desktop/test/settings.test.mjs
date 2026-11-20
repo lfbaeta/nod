@@ -10598,6 +10598,15 @@ test('the built startup report form requires exact review and keeps uncertain se
   statusValue = { submissionId: olderId, status: 'submitted' };
   button('Check status').click();
   await settle(() =>
+    page.window.document.body.textContent.includes('Synthetic context transport failure.'),
+  );
+  assert.ok(!page.window.document.body.textContent.includes('Your report was sent.'));
+  assert.equal(button('Review'), undefined);
+  assert.equal(button('New report'), undefined);
+  assert.equal(button('Send report'), undefined);
+  failContext = false;
+  button('Check status').click();
+  await settle(() =>
     page.window.document.body.textContent.includes('belongs to a different report'),
   );
   assert.ok(!page.window.document.body.textContent.includes('Your report was sent.'));
