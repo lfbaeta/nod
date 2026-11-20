@@ -3936,7 +3936,7 @@ test('ChatGPT sign-in validates callbacks, exchanges PKCE once, verifies the acc
   const issuer = await chatgptIssuer();
   const grants: URLSearchParams[] = [];
   let tokenStatus = 200;
-  let tokenError = 'fixture-secret fixture-owner fixture-refresh';
+  let tokenError: unknown = 'fixture-secret fixture-owner fixture-refresh';
   let scope = 'openid profile email offline_access resource.invoke chatgpt.tokens.use.direct';
   let identity: { nonce?: string; audience?: string; subject?: string } = {};
   let holdExchange = false;
@@ -4206,6 +4206,31 @@ test('ChatGPT sign-in validates callbacks, exchanges PKCE once, verifies the acc
     assert.match(error.message, /Try again/);
     return true;
   });
+  tokenStatus = 403;
+  tokenError = {
+    code: 'unsupported_country_region_territory',
+    message: 'Country, region, or territory not supported',
+  };
+  const geoBlocked = await start();
+  geoBlocked.complete(
+    new URL(
+      `${redirect(geoBlocked)}?state=${geoBlocked.state}&code=geo-code&client_id=fixture-client`,
+    ),
+  );
+  await assert.rejects(geoBlocked.result, (error: Error) => {
+    assert.ok(error instanceof ModelAuthError);
+    assert.match(error.message, /not available in this country or region/);
+    assert.deepEqual(
+      [
+        (error.cause as { statusCode?: number }).statusCode,
+        (error.cause as { code?: string }).code,
+      ],
+      [403, 'unsupported_country_region_territory'],
+    );
+    return true;
+  });
+  tokenStatus = 200;
+  tokenError = 'fixture-secret fixture-owner fixture-refresh';
 
   holdExchange = true;
   const started = new Promise<void>((resolve) => {

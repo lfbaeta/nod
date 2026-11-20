@@ -12,6 +12,7 @@ export async function copyEngineSource({ root, target, platform = 'darwin' }) {
     'NOTICE',
     'desktop/main/engine.mjs',
     'desktop/main/system-certificates.mjs',
+    'desktop/main/system-proxy.mjs',
     'desktop/main/onepassword.mjs',
     'desktop/runtime/index.mjs',
     'desktop/runtime/assets.mjs',
