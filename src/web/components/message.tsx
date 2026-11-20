@@ -242,8 +242,9 @@ export const MessageText = memo(function MessageText({
               const setup = setupLink(link, linkText);
               if (setup && actions.some((action) => action.href === setup.href)) {
                 const phrase = linkText.trim().replace(/\s+/g, ' ');
-                if (!phrase || phrase === setup.label || phrase.includes(setup.href)) return null;
-                return <strong className="setup-phrase">{children}</strong>;
+                const bare = !phrase || phrase.includes(setup.href);
+                if (!connected(setup.href) && (bare || phrase === setup.label)) return null;
+                return <strong className="setup-phrase">{bare ? setup.label : children}</strong>;
               }
               return (
                 <a
