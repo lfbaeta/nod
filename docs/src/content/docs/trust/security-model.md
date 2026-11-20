@@ -57,7 +57,7 @@ Only the server holds keys and decides what runs. The model, the workspace and a
 - Entry and submission happen in one step that the model can't observe or act during. Scripts on the destination page can read the entered values, as with any form.
 - A page changed by the model's own JavaScript must reload before entry. After a failed entry, the model's view stays locked until the filled page changes.
 - After Nod fills a private value on a page, the model's page scripts stay paused on that page until it reloads or moves on, so a script can't read the value back even once the field is gone.
-- Reloading a page reached by a form submission, or one whose navigation Nod can't read, opens its address again with a GET, so a reload never submits a form again.
+- Reloading a page reached by a form submission, or one whose navigation Nod can't read, opens its address again with a GET, or is refused when no address can be read, so a reload never submits a form again.
 - The browser and the web tools reach only public addresses, never the host, the local network or other containers. The address is checked when each connection opens, so a name can't switch to a private address after the check. Nod drops any proxy for a web tool, whether the model names it or the web extension's settings set it.
 
 ### One use

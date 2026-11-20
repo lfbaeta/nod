@@ -58,7 +58,7 @@ Nod refuses these, without a judgment call. It recognizes apps by their ID and p
 - File managers: Finder, File Explorer, Files (Nautilus) and Dolphin. Nod works with your files only through [local files](/connect/local-files/), with its protections. An app Nod may use can still open and save files through its own Open and Save panels, which local files would refuse; [keep Nod out of that app](#keep-nod-out-of-an-app) if that matters.
 - Password managers, such as Passwords and 1Password, and crypto wallets.
 - Nod itself.
-- An app whose name another running app shares, or one with neither an app ID nor a program, because Nod can't tell which app it is.
+- An app whose name another running app shares, or on Windows and Linux one with neither an app ID nor a program, because Nod can't tell which app it is.
 - On macOS, the Apple menu, with Restart, Shut Down, Log Out and System Settings, and each app's own menu, with Services. Nod never shows them to the model.
 - System shortcuts, such as Spotlight, Force Quit, Log Out and Lock Screen, any shortcut with the Windows or Super key, Alt+Tab, Ctrl+Alt+Delete and Ctrl+Alt+T.
 - Any app you keep Nod out of.
