@@ -3179,6 +3179,367 @@ test('the owner time zone and region reach a new browser launch without injectin
   }
 });
 
+test('feedback redaction checks original text and structure before masking', async (t) => {
+  const { createFeedbackRedactor } = await import('../src/server/feedback-redaction.ts');
+  type Probe = {
+    id: string;
+    input: unknown;
+    secrets?: string[];
+    names?: string[];
+    privateParts: string[];
+    kept?: string[];
+  };
+
+  const path = '/Users/Synthetic Owner/PrivateLedger.docx';
+  const url = 'https://synthetic.invalid/PrivateLedger.docx';
+  const email = 'PrivateMailbox@synthetic.invalid';
+  const opaque = 'PrivateOpaqueValue';
+  const payload = JSON.stringify({ payload: opaque });
+  const password = JSON.stringify({ password: opaque });
+  const unicode = '{"pass\\u0077ord":"PrivateOpaqueValue"}';
+  const tuple = ['Authorization', opaque];
+  const cases: Probe[] = [
+    { id: 'path-control', input: path, privateParts: ['Synthetic Owner', 'PrivateLedger'] },
+    {
+      id: 'path-slash-secret',
+      input: path,
+      secrets: ['/'],
+      privateParts: ['Synthetic Owner', 'PrivateLedger'],
+    },
+    {
+      id: 'path-name-root',
+      input: path,
+      names: ['Users'],
+      privateParts: ['Synthetic Owner', 'PrivateLedger'],
+    },
+    { id: 'url-control', input: url, privateParts: ['synthetic.invalid', 'PrivateLedger'] },
+    {
+      id: 'url-slash-secret',
+      input: url,
+      secrets: ['/'],
+      privateParts: ['synthetic.invalid', 'PrivateLedger'],
+    },
+    {
+      id: 'encoded-url-control',
+      input: encodeURIComponent(url),
+      privateParts: ['synthetic.invalid', 'PrivateLedger'],
+    },
+    {
+      id: 'encoded-url-slash-secret',
+      input: encodeURIComponent(url),
+      secrets: ['/'],
+      privateParts: ['synthetic.invalid', 'PrivateLedger'],
+    },
+    {
+      id: 'encoded-path-control',
+      input: encodeURIComponent(path),
+      privateParts: ['Synthetic Owner', 'PrivateLedger'],
+    },
+    {
+      id: 'encoded-path-slash-secret',
+      input: encodeURIComponent(path),
+      secrets: ['/'],
+      privateParts: ['Synthetic', 'PrivateLedger'],
+    },
+    { id: 'email-control', input: email, privateParts: ['PrivateMailbox', 'synthetic.invalid'] },
+    {
+      id: 'email-at-secret',
+      input: email,
+      secrets: ['@'],
+      privateParts: ['PrivateMailbox', 'synthetic.invalid'],
+    },
+    {
+      id: 'encoded-email-control',
+      input: encodeURIComponent(email),
+      privateParts: ['PrivateMailbox', 'synthetic.invalid'],
+    },
+    {
+      id: 'encoded-email-at-secret',
+      input: encodeURIComponent(email),
+      secrets: ['@'],
+      privateParts: ['PrivateMailbox', 'synthetic.invalid'],
+    },
+    {
+      id: 'literal-overlap-control',
+      input: 'AlphaBridgeOmega',
+      secrets: ['AlphaBridgeOmega'],
+      privateParts: ['Alpha', 'Bridge', 'Omega'],
+    },
+    {
+      id: 'literal-overlap',
+      input: 'AlphaBridgeOmega',
+      secrets: ['AlphaBridge', 'BridgeOmega'],
+      privateParts: ['Alpha', 'Bridge', 'Omega'],
+    },
+    {
+      id: 'object-password-control',
+      input: { password: opaque },
+      secrets: ['pass'],
+      privateParts: [opaque],
+    },
+    { id: 'json-password-control', input: password, privateParts: [opaque] },
+    { id: 'json-password-quote-secret', input: password, secrets: ['"'], privateParts: [opaque] },
+    {
+      id: 'embedded-password-quote-secret',
+      input: `failed: ${password}`,
+      secrets: ['"'],
+      privateParts: [opaque],
+    },
+    {
+      id: 'wrapped-password-quote-secret',
+      input: JSON.stringify(password),
+      secrets: ['"'],
+      privateParts: [opaque],
+    },
+    { id: 'json-unicode-password-control', input: unicode, privateParts: [opaque] },
+    {
+      id: 'json-unicode-password-backslash-secret',
+      input: unicode,
+      secrets: ['\\'],
+      privateParts: [opaque],
+    },
+    { id: 'object-vault-key-control', input: { vaultKey: opaque }, privateParts: [opaque] },
+    {
+      id: 'object-vault-key-literal',
+      input: { vaultKey: opaque },
+      secrets: ['vault'],
+      privateParts: [opaque],
+    },
+    {
+      id: 'object-master-key-literal',
+      input: { masterKey: opaque },
+      secrets: ['master'],
+      privateParts: [opaque],
+    },
+    { id: 'tuple-control', input: tuple, privateParts: [opaque] },
+    { id: 'tuple-literal', input: tuple, secrets: ['Author'], privateParts: [opaque] },
+    {
+      id: 'json-tuple-literal',
+      input: JSON.stringify(tuple),
+      secrets: ['Author'],
+      privateParts: [opaque],
+    },
+    {
+      id: 'named-vault-key-control',
+      input: { name: 'vaultKey', value: opaque },
+      privateParts: [opaque],
+    },
+    {
+      id: 'named-vault-key-literal',
+      input: { name: 'vaultKey', value: opaque },
+      secrets: ['vault'],
+      privateParts: [opaque],
+    },
+    { id: 'cookie-control', input: `Cookie: ${opaque}`, privateParts: [opaque] },
+    { id: 'cookie-name', input: `Cookie: ${opaque}`, names: ['Cookie'], privateParts: [opaque] },
+    { id: 'cookie-literal', input: `Cookie: ${opaque}`, secrets: ['Cook'], privateParts: [opaque] },
+    { id: 'json-payload-name', input: payload, names: ['payload'], privateParts: [opaque] },
+    {
+      id: 'object-payload-name',
+      input: { payload: opaque },
+      names: ['payload'],
+      privateParts: [opaque],
+    },
+    { id: 'query-control', input: `?access_token=${opaque}`, privateParts: [opaque] },
+    {
+      id: 'query-literal',
+      input: `?access_token=${opaque}`,
+      secrets: ['access'],
+      privateParts: [opaque],
+    },
+    {
+      id: 'token-control',
+      input: 'sk-proj-PrivateSyntheticTokenAB',
+      privateParts: ['PrivateSyntheticTokenAB'],
+    },
+    {
+      id: 'token-literal',
+      input: 'sk-proj-PrivateSyntheticTokenAB',
+      secrets: ['sk-'],
+      privateParts: ['PrivateSyntheticTokenAB'],
+    },
+    {
+      id: 'binary-control',
+      input: { type: 'image', data: opaque },
+      secrets: ['image'],
+      privateParts: [opaque],
+    },
+    {
+      id: 'technical-control',
+      input: { status: 503, version: '0.8.0', count: 7, message: 'Engine request failed' },
+      privateParts: [],
+    },
+    {
+      id: 'reason-outside-private-span',
+      input: `HTTP 503 for ${email}; attempt 2`,
+      privateParts: ['PrivateMailbox', 'synthetic.invalid'],
+      kept: ['HTTP 503', 'attempt 2'],
+    },
+    {
+      id: 'encoded-email-lowercase',
+      input: email.replace('@', '%40'),
+      secrets: ['%'],
+      privateParts: ['PrivateMailbox', 'synthetic.invalid'],
+    },
+    {
+      id: 'encoded-payload',
+      input: encodeURIComponent(payload),
+      privateParts: [opaque],
+    },
+    {
+      id: 'nested-encoded-payload',
+      input: encodeURIComponent(encodeURIComponent(payload)),
+      secrets: ['%'],
+      privateParts: [opaque],
+    },
+    {
+      id: 'invalid-encoded-carrier',
+      input: `${opaque}%ZZ`,
+      privateParts: [opaque],
+    },
+    {
+      id: 'encoded-depth-limit',
+      input: Array.from({ length: 5 }).reduce<string>((value) => encodeURIComponent(value), email),
+      privateParts: ['PrivateMailbox', 'synthetic.invalid'],
+    },
+    {
+      id: 'decode-count-limit',
+      input: '%41 '.repeat(130) + encodeURIComponent(email),
+      privateParts: ['PrivateMailbox', 'synthetic.invalid'],
+    },
+    {
+      id: 'sensitive-relative-route',
+      input: `/api/${opaque}`,
+      secrets: ['api'],
+      privateParts: [opaque],
+    },
+    {
+      id: 'json-literal-across-key-value',
+      input: JSON.stringify({ field: opaque }),
+      secrets: [`field":"${opaque}`],
+      privateParts: [opaque],
+    },
+    {
+      id: 'literal-across-embedded-json',
+      input: `failed: ${JSON.stringify({ field: opaque })}`,
+      secrets: [`failed: {"field":"${opaque}`],
+      privateParts: [opaque],
+    },
+    {
+      id: 'json-boolean-literal',
+      input: '{"allowed":false}',
+      secrets: ['false'],
+      privateParts: ['false'],
+    },
+    {
+      id: 'literal-overlap-unicode',
+      input: '😀BridgeΩ',
+      secrets: ['😀Bridge', 'BridgeΩ'],
+      privateParts: ['Bridge', 'Ω'],
+    },
+    {
+      id: 'stack-technical-frame',
+      input: {
+        stack:
+          'Error: HTTP 503\n    at operation (/Users/Synthetic Owner/nod/src/server/worker.ts:12:4)',
+      },
+      privateParts: ['Synthetic Owner', '/Users/'],
+      kept: ['HTTP 503', 'src/server/worker.ts:12:4'],
+    },
+    {
+      id: 'stack-private-frame',
+      input: {
+        stack:
+          'Error: HTTP 503\n    at operation (/Users/Synthetic Owner/nod/src/server/worker.ts:12:4)',
+      },
+      secrets: ['worker'],
+      privateParts: ['Synthetic Owner', '/Users/', 'worker'],
+      kept: ['HTTP 503'],
+    },
+    {
+      id: 'stack-normalized-private-frame',
+      input: {
+        stack:
+          'Error: HTTP 503\n    at operation (C:\\Synthetic Owner\\nod\\src\\server\\worker.ts:12:4)',
+      },
+      secrets: ['src/server'],
+      privateParts: ['Synthetic Owner', 'src/server'],
+      kept: ['HTTP 503'],
+    },
+    {
+      id: 'string-limit',
+      input: 'x'.repeat(32_000) + opaque,
+      privateParts: [opaque],
+    },
+    {
+      id: 'match-limit',
+      input: 'x'.repeat(5000) + opaque,
+      secrets: ['x'],
+      privateParts: [opaque],
+    },
+    {
+      id: 'fragment-limit',
+      input: '{} '.repeat(33) + opaque,
+      privateParts: [opaque],
+    },
+    {
+      id: 'incomplete-structure',
+      input: `failed: {"payload":"${opaque}"`,
+      privateParts: [opaque],
+    },
+  ];
+
+  for (const probe of cases) {
+    await t.test(probe.id, () => {
+      const redactor = createFeedbackRedactor({
+        secrets: probe.secrets ?? [],
+        profile: { names: probe.names ?? [] },
+      });
+      assert.equal(redactor.isReady(), true);
+      const output = redactor.value(probe.input);
+      const encoded = JSON.stringify(output);
+      assert.deepEqual(
+        probe.privateParts.filter((part) => encoded.includes(part)),
+        [],
+        'A private value remained after feedback redaction.',
+      );
+      for (const kept of probe.kept ?? []) assert.ok(encoded.includes(kept), kept);
+      if (probe.id === 'technical-control') assert.deepEqual(JSON.parse(encoded), probe.input);
+    });
+  }
+});
+
+test('feedback redaction omits values when classification metadata is a getter', async () => {
+  const { createFeedbackRedactor } = await import('../src/server/feedback-redaction.ts');
+  const redactor = createFeedbackRedactor({ secrets: [], profile: { names: [] } });
+  let invoked = 0;
+  const named = { value: 'PrivateNamedValue' };
+  const media = { data: 'PrivateBinaryValue', bytes: 'PrivateBytesValue' };
+  const tuple = ['Authorization', 'PrivateTupleValue'];
+  for (const [target, key] of [
+    [named, 'name'],
+    [media, 'type'],
+    [tuple, '0'],
+  ] as const)
+    Object.defineProperty(target, key, {
+      enumerable: true,
+      get() {
+        invoked++;
+        throw new Error('Classification must not call a getter.');
+      },
+    });
+  const output = JSON.stringify(redactor.value({ named, media, tuple, status: 503 }));
+  assert.equal(invoked, 0);
+  for (const privateValue of [
+    'PrivateNamedValue',
+    'PrivateBinaryValue',
+    'PrivateBytesValue',
+    'PrivateTupleValue',
+  ])
+    assert.ok(!output.includes(privateValue), privateValue);
+  assert.ok(output.includes('503'));
+});
+
 test('rich feedback redaction handles embedded JSON, identifying addresses, encoded secrets and binary', async () => {
   const { createFeedbackRedactor } = await import('../src/server/feedback-redaction.ts');
   const redactor = createFeedbackRedactor({
@@ -3469,12 +3830,13 @@ test('rich feedback redaction keeps error classes, frame files, sizes and model 
   assert.ok(safe.error.stack.includes('([path]:5:1)'));
   for (const frame of [
     '(src/server/thread.ts:281:13)',
-    '(node_modules/@fixture/pg/lib/client.js:10:2)',
     '(dist/server/index.js:7:9)',
     'at [path]:18:4',
     'at [path]:3:1',
   ])
     assert.ok(safe.error.stack.includes(frame), frame);
+  assert.ok(safe.error.stack.includes(':10:2'));
+  assert.ok(!safe.error.stack.includes('@fixture'));
   for (const sensitive of [
     'private-owner',
     'private-project',

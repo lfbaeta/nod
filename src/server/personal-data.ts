@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { isIP } from 'node:net';
 import { findPhoneNumbersInText, type CountryCode } from 'libphonenumber-js/max';
+import { addRedactionSpan, redactionMatches, type RedactionSpan } from './redaction-spans.ts';
 
 export interface PersonalProfile {
   names: string[];
@@ -307,5 +308,49 @@ export function createPersonalDataRedactor(profile: PersonalProfile) {
       text = text.replace(pattern, (match) => replaceValid(match, replacement, valid));
     text = phones(text, region);
     return names ? text.replace(names, '[owner]') : text;
+  };
+}
+
+export function createPersonalDataSpans(profile: PersonalProfile) {
+  const names = ownerNames(profile.names);
+  const region = profile.region && /^[A-Z]{2}$/.test(profile.region) ? profile.region : undefined;
+  return (input: string) => {
+    const spans: RedactionSpan[] = [];
+    redactionMatches(input, /"((?:[^"\\]|\\.){1,60})"\s*:\s*/g, (match) => {
+      if (!personalKey(match[1])) return;
+      const start = match.index + match[0].length;
+      const end = valueEnd(input, start);
+      if (end >= 0 && !['null', '""', '[]', '{}'].includes(input.slice(start, end)))
+        addRedactionSpan(spans, start, end, '"[personal]"');
+    });
+    for (const [pattern, replacement, valid] of detectors)
+      redactionMatches(
+        input,
+        pattern,
+        (match) => {
+          for (let end = match[0].length; end > 0; end--) {
+            if (
+              (!valid || end === match[0].length || /[ -]/.test(match[0][end])) &&
+              (!valid || valid(match[0].slice(0, end)))
+            ) {
+              addRedactionSpan(spans, match.index, match.index + end, replacement);
+              break;
+            }
+          }
+        },
+        true,
+      );
+    for (const match of findPhoneNumbersInText(input, {
+      ...(region ? { defaultCountry: region as CountryCode } : {}),
+    }))
+      addRedactionSpan(spans, match.startsAt, match.endsAt, '[phone]');
+    if (names)
+      redactionMatches(
+        input,
+        names,
+        (match) => addRedactionSpan(spans, match.index, match.index + match[0].length, '[owner]'),
+        true,
+      );
+    return spans;
   };
 }
