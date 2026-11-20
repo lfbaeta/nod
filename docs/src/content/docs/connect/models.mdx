@@ -222,7 +222,7 @@ Each deployment is one connection with one model. Add another connection for eac
 
 </Steps>
 
-Nod lists the models your gateway reports as enabled and reads their context sizes, reasoning levels and prices from Neon's public [model catalog](https://neon.com/models.json). Prices are Neon's per-token rates, which Nod counts toward your [spending](/use/spending/). Gemini models aren't included. To use Gemini, connect Google Gemini or Google Vertex AI.
+Nod lists the models your gateway reports as enabled and reads their context sizes, reasoning levels and prices from Neon's public [model catalog](https://neon.com/models.json). Prices are Neon's per-token rates, which Nod counts toward your [spending](/use/spending/). A model the catalog doesn't price isn't listed. Gemini models aren't included. To use Gemini, connect Google Gemini or Google Vertex AI.
 
 Claude models use the gateway's Anthropic endpoint, so prompt caching works as it does with Anthropic. OpenAI's GPT models use its Responses endpoint. Other models use its chat completions endpoint.
 
@@ -429,7 +429,7 @@ Additional settings:
 | Amazon Bedrock    | `AWS_REGION`, such as `us-east-1`. Set `LLM_MODEL` to select a model or inference profile when several are available.                                           |
 | Azure OpenAI      | `AZURE_OPENAI_ENDPOINT` and `AZURE_OPENAI_MODEL`, the model ID your deployment runs. Set `AZURE_OPENAI_DEPLOYMENT` if the deployment has a different name.      |
 | Cloudflare        | `CLOUDFLARE_ACCOUNT_ID`, the 32-character hexadecimal account ID. AI Gateway also requires `CLOUDFLARE_GATEWAY_ID`.                                             |
-| Neon AI Gateway   | `NEON_AI_GATEWAY_BASE_URL`, the branch's HTTPS `neon.tech` gateway address from the Neon Console.                                                               |
+| Neon AI Gateway   | `NEON_AI_GATEWAY_BASE_URL`, the branch's HTTPS `*.neon.tech` gateway address from the Neon Console.                                                             |
 | OpenAI-compatible | `OPENAI_COMPATIBLE_BASE_URL` and optional `OPENAI_COMPATIBLE_API_KEY`. Use `LLM_PROVIDER=compatible` for the initial choice.                                    |
 
 Set the cloud provider's required fields before starting Nod. A Cloudflare gateway ID has one to 64 lowercase letters, digits, or hyphens, starting with a letter or digit. Both Cloudflare connections use the same account ID from `.env`; connections saved in **Models** can use separate accounts and gateways.
@@ -461,7 +461,7 @@ flowchart LR
 - Nod encrypts saved keys and sign-ins with the Vault key. macOS uses Keychain, the Windows app uses Windows DPAPI, and the Linux Flatpak uses Secret Service. Linux source installs use a private file. The self-hosting stack generates `NOD_VAULT_KEY` in its private `.env`. See [Vault configuration](/deploy/configuration/#vault).
 - Nod checks credential storage before starting a connection. If storage is unavailable, check the Vault configuration, permissions and database connection, then try again.
 - Keys from `.env` stay in server memory and aren't copied into the database.
-- Each key goes only to its own service: Amazon Bedrock in the Region you entered, Google Vertex AI, the Azure OpenAI endpoint you entered, or the Neon AI Gateway base URL you entered. Nod accepts only an HTTPS `neon.tech` address for Neon. Reading Neon's public model catalog sends no key.
+- Each key goes only to its own service: Amazon Bedrock in the Region you entered, Google Vertex AI, the Azure OpenAI endpoint you entered, or the Neon AI Gateway base URL you entered. Nod accepts only an HTTPS `*.neon.tech` address for Neon, without a port, path or query. Reading Neon's public model catalog sends no key.
 - Your browser doesn't store the key, and Nod removes it from provider errors.
 
 ## Related resources

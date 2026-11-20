@@ -463,6 +463,14 @@ export const cloudflareGatewayPattern = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
 export function neonGatewayAddress(address: string) {
   const value = address.trim();
+  if (
+    /[?#@]/.test(value) ||
+    value
+      .replace(/^[a-z][a-z\d+.-]*:\/\//i, '')
+      .split('/')[0]!
+      .includes(':')
+  )
+    return undefined;
   let url: URL;
   try {
     url = new URL(/^[a-z][a-z\d+.-]*:\/\//i.test(value) ? value : `https://${value}`);

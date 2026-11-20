@@ -174,20 +174,18 @@ const neonModelSchema = z.object({
     context: z.number().int().positive().max(100_000_000),
     output: z.number().int().positive().max(100_000_000),
   }),
-  cost: z
-    .object({
-      ...neonPrice,
-      tiers: z
-        .array(
-          z.object({
-            ...neonPrice,
-            tier: z.object({ type: z.literal('context'), size: z.number().int().positive() }),
-          }),
-        )
-        .max(10)
-        .optional(),
-    })
-    .optional(),
+  cost: z.object({
+    ...neonPrice,
+    tiers: z
+      .array(
+        z.object({
+          ...neonPrice,
+          tier: z.object({ type: z.literal('context'), size: z.number().int().positive() }),
+        }),
+      )
+      .max(10)
+      .optional(),
+  }),
 });
 
 export function neonCredential(credential: ModelCredential) {
@@ -253,19 +251,17 @@ function neonModel(
     input: model.modalities.input.includes('image') ? ['text', 'image'] : ['text'],
     contextWindow: model.limit.context,
     maxTokens: Math.min(model.limit.output, model.limit.context),
-    cost: model.cost
-      ? {
-          ...rates(model.cost),
-          ...(model.cost.tiers?.length
-            ? {
-                tiers: model.cost.tiers.map((tier) => ({
-                  inputTokensAbove: tier.tier.size,
-                  ...rates(tier),
-                })),
-              }
-            : {}),
-        }
-      : { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    cost: {
+      ...rates(model.cost),
+      ...(model.cost.tiers?.length
+        ? {
+            tiers: model.cost.tiers.map((tier) => ({
+              inputTokensAbove: tier.tier.size,
+              ...rates(tier),
+            })),
+          }
+        : {}),
+    },
     compat: anthropic
       ? {
           forceAdaptiveThinking: known
