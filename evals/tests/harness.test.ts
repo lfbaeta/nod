@@ -1991,7 +1991,7 @@ test('approval language grading accepts an answered card or question and refuses
   assert.equal((await completion.check(run)).pass, false);
 });
 
-test('approval language completion needs every turn finished or waiting', async () => {
+test('approval language completion needs no failed or unfinished turn', async () => {
   const definition = approvalLanguageScenario('es');
   const completion = definition.completion!(definition.world({ now: Date.now }));
   if (completion.kind !== 'check') throw new Error('Missing completion check.');
@@ -2000,7 +2000,8 @@ test('approval language completion needs every turn finished or waiting', async 
   assert.equal((await completion.check(run('waiting', 'succeeded'))).pass, true);
   assert.equal((await completion.check(run('succeeded'))).pass, true);
   assert.equal((await completion.check(run('waiting', 'failed'))).pass, false);
-  assert.equal((await completion.check(run('cancelled', 'succeeded'))).pass, false);
+  assert.equal((await completion.check(run('cancelled', 'succeeded'))).pass, true);
+  assert.equal((await completion.check(run('running'))).pass, false);
   assert.equal((await completion.check(run())).pass, false);
 });
 

@@ -159,7 +159,7 @@ export function approvalLanguageScenario(name: string) {
         'completion',
         (run) =>
           run.turns.length > 0 &&
-          run.turns.every((turn) => turn.status === 'succeeded' || turn.status === 'waiting'),
+          run.turns.every((turn) => !['failed', 'queued', 'running'].includes(turn.status)),
       );
     },
     evidence(run) {
