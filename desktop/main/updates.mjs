@@ -71,7 +71,9 @@ async function json(url, request, signal, accept = 'application/json') {
       await response.body?.cancel();
       continue;
     }
-    if (!response.ok || !response.body) throw new Error('Desktop updates are unavailable.');
+    if (!response.ok)
+      throw new Error(`The desktop update request failed (HTTP ${response.status}).`);
+    if (!response.body) throw new Error('The desktop update response is empty.');
     const chunks = [];
     let bytes = 0;
     for await (const chunk of response.body) {
@@ -91,6 +93,8 @@ async function githubReleaseTag(repository, name, request, signal) {
     redirect: 'manual',
   });
   await response.body?.cancel();
+  if (response.status >= 400)
+    throw new Error(`The desktop update request failed (HTTP ${response.status}).`);
   const target = new URL(response.headers.get('location') || '', alias);
   const prefix = `/${repository}/releases/download/`;
   const path = target.pathname.slice(prefix.length);
@@ -512,7 +516,7 @@ export function startDesktopUpdateChecks({
   powerMonitor,
   defer = false,
   interval = 6 * 60 * 60 * 1000,
-  retry = 15 * 60 * 1000,
+  retry = 60_000,
 }) {
   let timer;
   let failures = 0;
@@ -534,7 +538,7 @@ export function startDesktopUpdateChecks({
       const delay = resumePending
         ? 0
         : failures
-          ? Math.min(interval, retry * 2 ** (failures - 1))
+          ? Math.min(interval, 15 * 60_000, retry * 2 ** Math.min(failures - 1, 10))
           : interval;
       resumePending = false;
       due = Date.now() + delay;
@@ -545,14 +549,15 @@ export function startDesktopUpdateChecks({
     }
   };
   const resume = () => {
-    if (Date.now() < due || stopped) return;
+    if (stopped || (!failures && Date.now() < due)) return;
     if (pending) resumePending = true;
     else void run();
   };
   powerMonitor.on('resume', resume);
   if (defer) {
-    due = Date.now() + retry;
-    timer = setTimeout(run, retry);
+    const delay = 15 * 60_000;
+    due = Date.now() + delay;
+    timer = setTimeout(run, delay);
     timer.unref?.();
   } else void run();
   return () => {
