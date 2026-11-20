@@ -3188,6 +3188,7 @@ test('feedback redaction checks original text and structure before masking', asy
     names?: string[];
     privateParts: string[];
     kept?: string[];
+    omitted?: boolean;
   };
 
   const path = '/Users/Synthetic Owner/PrivateLedger.docx';
@@ -3314,6 +3315,126 @@ test('feedback redaction checks original text and structure before masking', asy
       privateParts: [opaque],
     },
     { id: 'tuple-control', input: tuple, privateParts: [opaque] },
+    {
+      id: 'private-tuple-tail',
+      input: ['Authorization', opaque, 'PrivateTrailingValue'],
+      privateParts: [opaque, 'PrivateTrailingValue'],
+    },
+    {
+      id: 'private-tuple-tail-with-literal',
+      input: ['Authorization', opaque, 'PrivateTrailingValue'],
+      secrets: ['Author'],
+      privateParts: [opaque, 'PrivateTrailingValue'],
+    },
+    {
+      id: 'encoded-secret-key',
+      input: { 'pass%77ord': opaque },
+      privateParts: [opaque],
+    },
+    {
+      id: 'encoded-tuple-label',
+      input: ['Authoriz%61tion', opaque],
+      privateParts: [opaque],
+    },
+    {
+      id: 'json-escaped-tuple-label',
+      input: ['"\\u0041uthorization"', opaque],
+      privateParts: [opaque],
+    },
+    {
+      id: 'encoded-name-alias',
+      input: { 'n%61me': 'Authorization', value: opaque },
+      privateParts: [opaque],
+    },
+    {
+      id: 'encoded-media-alias',
+      input: { 't%79pe': 'image', data: opaque },
+      privateParts: [opaque],
+    },
+    {
+      id: 'encoded-media-value',
+      input: { type: 'im%61ge', data: opaque },
+      privateParts: [opaque],
+    },
+    {
+      id: 'encoded-data-alias',
+      input: { type: 'image', 'd%61ta': opaque },
+      privateParts: [opaque],
+    },
+    {
+      id: 'encoded-name-vault-alias',
+      input: { 'n%61me': 'vaultKey', value: opaque },
+      privateParts: [opaque],
+    },
+    {
+      id: 'json-media-value-with-literal',
+      input: { type: '"\\u0069mage"', data: opaque },
+      secrets: ['"'],
+      privateParts: [opaque],
+    },
+    {
+      id: 'json-uri-named-value',
+      input: { name: '"vault%4Bey"', value: opaque },
+      privateParts: [opaque],
+    },
+    {
+      id: 'invalid-tuple-label',
+      input: ['Authoriz%61tion%ZZ', opaque, 'PrivateTrailingValue'],
+      privateParts: [opaque, 'PrivateTrailingValue'],
+    },
+    {
+      id: 'invalid-media-label',
+      input: { type: 'im%61ge%ZZ', data: opaque },
+      privateParts: [opaque],
+    },
+    {
+      id: 'metadata-uri-depth-limit',
+      input: [
+        Array.from({ length: 3 }).reduce<string>(
+          (value) => encodeURIComponent(value),
+          'Authoriz%61tion',
+        ),
+        opaque,
+      ],
+      privateParts: [opaque],
+      omitted: true,
+    },
+    {
+      id: 'metadata-json-depth-limit',
+      input: [
+        Array.from({ length: 11 }).reduce<string>(
+          (value) => JSON.stringify(value),
+          'Authorization',
+        ),
+        opaque,
+      ],
+      privateParts: [opaque],
+      omitted: true,
+    },
+    {
+      id: 'metadata-byte-limit',
+      input: [JSON.stringify(' '.repeat(31_981) + '"Authorization"'), opaque],
+      privateParts: [opaque],
+      omitted: true,
+    },
+    {
+      id: 'metadata-count-limit',
+      input: Array.from({ length: 100 }, (_, index) => [
+        ' '.repeat(index) + '%41uthorization',
+        opaque,
+      ]),
+      privateParts: [opaque],
+      omitted: true,
+    },
+    {
+      id: 'metadata-after-rendered-field-limit',
+      input: Object.assign(
+        { value: opaque, data: opaque },
+        Object.fromEntries(Array.from({ length: 100 }, (_, index) => ['field' + index, index])),
+        { name: 'Authorization', type: 'image' },
+      ),
+      privateParts: [opaque],
+    },
     { id: 'tuple-literal', input: tuple, secrets: ['Author'], privateParts: [opaque] },
     {
       id: 'json-tuple-literal',
@@ -3558,6 +3679,7 @@ test('feedback redaction checks original text and structure before masking', asy
         'A private value remained after feedback redaction.',
       );
       for (const kept of probe.kept ?? []) assert.ok(encoded.includes(kept), kept);
+      if (probe.omitted) assert.equal(output, '[unreadable data omitted]');
       if (probe.id === 'technical-control') assert.deepEqual(JSON.parse(encoded), probe.input);
     });
   }
@@ -3589,6 +3711,7 @@ test('feedback redaction advances Unicode overlaps and resets recursive checks b
     status: 503,
     message: 'HTTP 503 for PrivateMailbox%40synthetic.invalid',
     detail: encoded,
+    headers: ['Authoriz%61tion', 'PrivateRecursiveCredential'],
   };
   const expected = JSON.stringify(redactor.value(input));
   assert.ok(expected.includes('HTTP 503'));
@@ -3597,6 +3720,7 @@ test('feedback redaction advances Unicode overlaps and resets recursive checks b
     'synthetic.invalid',
     'Synthetic Owner',
     'PrivateLedger',
+    'PrivateRecursiveCredential',
   ])
     assert.ok(!expected.includes(privateValue), privateValue);
   for (let index = 0; index < 8; index++) {
@@ -3625,7 +3749,7 @@ test('feedback redaction omits values when classification metadata is a getter',
   let invoked = 0;
   const named = { value: 'PrivateNamedValue' };
   const media = { data: 'PrivateBinaryValue', bytes: 'PrivateBytesValue' };
-  const tuple = ['Authorization', 'PrivateTupleValue'];
+  const tuple = ['Authorization', 'PrivateTupleValue', 'PrivateTupleTail'];
   for (const [target, key] of [
     [named, 'name'],
     [media, 'type'],
@@ -3645,6 +3769,7 @@ test('feedback redaction omits values when classification metadata is a getter',
     'PrivateBinaryValue',
     'PrivateBytesValue',
     'PrivateTupleValue',
+    'PrivateTupleTail',
   ])
     assert.ok(!output.includes(privateValue), privateValue);
   assert.ok(output.includes('503'));

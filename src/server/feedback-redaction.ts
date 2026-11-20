@@ -260,6 +260,46 @@ export function createFeedbackRedactor(options: { secrets: string[]; profile: Pe
     const text = (input: string, stack = false) =>
       renderRedactionSpans(input, textSpans(input, stack, budget));
     const seen = new WeakSet<object>();
+    const labels = new Map<string, string[] | null>();
+
+    function labelViews(input: string): string[] | null {
+      const cached = labels.get(input);
+      if (cached !== undefined) return cached;
+      if (input.length > maxString) return null;
+      const views = [input];
+      let current = input;
+      let jsonDepth = 0;
+      let uriDepth = 0;
+      while (true) {
+        const trimmed = current.trim();
+        const json = trimmed.startsWith('"');
+        if (!json && !/%[0-9a-f]{2}/i.test(current)) {
+          labels.set(input, views);
+          return views;
+        }
+        if (
+          (json ? ++jsonDepth > 10 : ++uriDepth > 3) ||
+          ++budget.carriers > 128 ||
+          (budget.decoded += Buffer.byteLength(current)) > maxScanned
+        )
+          throw new Error('Metadata decode limit exceeded.');
+        let decoded: unknown;
+        try {
+          decoded = json ? JSON.parse(trimmed) : decodeURIComponent(current);
+        } catch {
+          labels.set(input, null);
+          return null;
+        }
+        if (typeof decoded !== 'string') {
+          labels.set(input, null);
+          return null;
+        }
+        if ((budget.decoded += Buffer.byteLength(decoded)) > maxScanned)
+          throw new Error('Metadata decode limit exceeded.');
+        views.push(decoded);
+        current = decoded;
+      }
+    }
 
     function structured(input: string, parsed: unknown, depth: number) {
       const strings: Array<{ start: number; end: number }> = [];
@@ -356,9 +396,19 @@ export function createFeedbackRedactor(options: { secrets: string[]; profile: Pe
         const result: unknown[] = [];
         const length = Object.getOwnPropertyDescriptor(input, 'length')?.value;
         const first = Object.getOwnPropertyDescriptor(input, '0');
+        const names =
+          first && 'value' in first && typeof first.value === 'string'
+            ? labelViews(first.value)
+            : undefined;
         const privateTuple =
-          first &&
-          (!('value' in first) || (typeof first.value === 'string' && secretField(first.value)));
+          first && (!('value' in first) || names === null || names?.some(secretField));
+        if (privateTuple)
+          return [
+            first && 'value' in first && names !== null
+              ? visit(first.value, depth + 1)
+              : '[omitted]',
+            hidden,
+          ];
         for (
           let index = 0;
           index < Math.min(typeof length === 'number' ? length : 0, 100);
@@ -366,11 +416,7 @@ export function createFeedbackRedactor(options: { secrets: string[]; profile: Pe
         ) {
           const property = Object.getOwnPropertyDescriptor(input, String(index));
           result.push(
-            privateTuple && index === 1
-              ? hidden
-              : property && 'value' in property
-                ? visit(property.value, depth + 1)
-                : '[omitted]',
+            property && 'value' in property ? visit(property.value, depth + 1) : '[omitted]',
           );
         }
         if (length > 100) result.push('[truncated]');
@@ -380,26 +426,41 @@ export function createFeedbackRedactor(options: { secrets: string[]; profile: Pe
       const error = input instanceof Error;
       const binary = ['type', 'mimeType', 'mime_type'].some((key) => {
         const property = Object.getOwnPropertyDescriptor(input, key);
+        const types =
+          property && 'value' in property && typeof property.value === 'string'
+            ? labelViews(property.value)
+            : undefined;
         return (
           property &&
           (!('value' in property) ||
-            (typeof property.value === 'string' &&
-              property.value.length < 100 &&
-              /^(?:(?:input_|output_)?(?:image|audio|video|base64)$|(?:image|audio|video)\/|application\/(?:octet-stream|pdf))/i.test(
-                property.value,
-              )))
+            types === null ||
+            types?.some(
+              (type) =>
+                type.length < 100 &&
+                /^(?:(?:input_|output_)?(?:image|audio|video|base64)$|(?:image|audio|video)\/|application\/(?:octet-stream|pdf))/i.test(
+                  type,
+                ),
+            ))
         );
       });
       const named = Object.getOwnPropertyDescriptor(input, 'name');
+      const names =
+        named && 'value' in named && typeof named.value === 'string' && named.value.length <= 200
+          ? labelViews(named.value)
+          : undefined;
       const privateValue =
         named &&
         (!('value' in named) ||
           typeof named.value !== 'string' ||
           named.value.length > 200 ||
-          privateNames.test(normalize(named.value)) ||
-          secretField(named.value) ||
-          personalKey(named.value) ||
-          privateKeys.test(normalize(named.value)));
+          names === null ||
+          names?.some(
+            (name) =>
+              privateNames.test(normalize(name)) ||
+              secretField(name) ||
+              personalKey(name) ||
+              privateKeys.test(normalize(name)),
+          ));
       const errorStack = Object.getOwnPropertyDescriptor(input, 'stack')?.value;
       let count = 0;
       const keys = error
@@ -420,6 +481,11 @@ export function createFeedbackRedactor(options: { secrets: string[]; profile: Pe
           result['[oversized key omitted]'] = '[omitted]';
           continue;
         }
+        if (
+          /%[0-9a-f]{2}|\\(?:u[0-9a-f]{4}|["\\/bfnrt])/i.test(key) ||
+          key.trimStart().startsWith('"')
+        )
+          return '[structured data omitted]';
         const safeKey = text(key);
         const normalized = normalize(key);
         const nativeStack =
