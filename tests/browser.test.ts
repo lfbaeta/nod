@@ -3836,7 +3836,11 @@ test('feedback redaction advances Unicode overlaps and resets recursive checks b
       `import assert from 'node:assert/strict';
     import { createFeedbackRedactor } from ${JSON.stringify(new URL('../src/server/feedback-redaction.ts', import.meta.url).href)};
     const redactor = createFeedbackRedactor({ secrets: [], profile: { names: ['😀😀😀'] } });
-    assert.equal(redactor.text('😀'.repeat(6)), '[owner]');`,
+    assert.equal(redactor.text('😀'.repeat(6)), '[owner]');
+    const plain = createFeedbackRedactor({ secrets: [], profile: { names: [] } });
+    assert.equal(plain.text('1.2.3.4/EZZZ '.repeat(2400)), '[url]');
+    assert.equal(plain.text('1.2.3.4/ECONNREFUSED '.repeat(1400)), '[url] (ECONNREFUSED)');
+    assert.equal(plain.text('a /home/x/ENOENT '.repeat(1800)), 'a [path] (ENOENT)');`,
     ],
     { timeout: 3000, maxBuffer: 16_000 },
   );
@@ -3956,6 +3960,15 @@ test('rich feedback redaction handles embedded JSON, identifying addresses, enco
     'Open example%2Ecom%2FReport%09synthetic-tab-record.pdf failed with HTTP 414.',
     'Open example.com:8443/private?label=Case%20synthetic-query-record failed with HTTP 415.',
     'Open example.com./private#Case%0Asynthetic-fragment-record failed with HTTP 416.',
+    'Open example.com/Synthetic Spaced/Raw Return.pdf failed with HTTP 417.',
+    'Open 192.168.1.20:8080/synthetic-ip-path failed.',
+    'Open localhost:5678/synthetic-localhost-path failed.',
+    'Open 127.0.0.1:8080/synthetic-loopback-path failed.',
+    'request to http://localhost:5678/Synthetic Spaced Folder/mcp failed, reason: connect ECONNREFUSED 127.0.0.1:5678, HTTP/1.1 503',
+    'GET https://x.example.com/ERR_TAX_RETURN_SYNTHETIC_OWNER failed',
+    'open /Users/synthetic/EAI_SYNTHETICOWNER/x failed: ENOENT',
+    "can't load '/Users/synthetic/Library/Caches/https://cdn.example.com/a' from clinic.example.com/patients/synthetic-patient",
+    JSON.stringify({ site: 'example.com/Synthetic Json Folder/x', note: 'HTTP 418 kept' }),
     { type: 'image', data: 'synthetic-private-image' },
     {
       content: [
@@ -4016,6 +4029,20 @@ test('rich feedback redaction handles embedded JSON, identifying addresses, enco
     'synthetic-tab-record',
     'synthetic-query-record',
     'synthetic-fragment-record',
+    'Raw Return',
+    'synthetic-ip-path',
+    'synthetic-localhost-path',
+    'synthetic-loopback-path',
+    '192.168.1.20',
+    'Open localhost',
+    'Open 127.0.0.1',
+    'Spaced Folder',
+    'ERR_TAX_RETURN',
+    'SYNTHETIC_OWNER',
+    'EAI_SYNTHETICOWNER',
+    'clinic.example.com',
+    'synthetic-patient',
+    'Synthetic Json Folder',
     'fixture',
     'marta.vidal',
     '00000000-1111',
@@ -4051,7 +4078,12 @@ test('rich feedback redaction handles embedded JSON, identifying addresses, enco
     'HTTP 414',
     'HTTP 415',
     'HTTP 416',
-    'Book a slot at [url] please',
+    'Book a slot at [url]',
+    'Open [url] (HTTP 417)',
+    'request to [url] (ECONNREFUSED, HTTP 503)',
+    'open [path] (ENOENT)',
+    "can't load [path] from [url]",
+    'HTTP 418 kept',
   ])
     assert.ok(encoded.includes(useful), useful);
   const { timeZoneRegion } = await import('../src/shared/date-locale.ts');
@@ -4064,7 +4096,7 @@ test('rich feedback redaction handles embedded JSON, identifying addresses, enco
   const chained = createFeedbackRedactor({ secrets: [], profile: { names: [] } }).text(
     `${'a.zz/'.repeat(6000)} then example.com:8443 and example.com./synthetic-chained?q=1 at example.com.`,
   );
-  assert.ok(chained.endsWith(' then [host] and [url] at [host].'), chained.slice(-60));
+  assert.ok(chained.endsWith(' then [host] and [url]'), chained.slice(-60));
   const concealedType = createFeedbackRedactor({ secrets: ['image'], profile: { names: [] } });
   assert.ok(
     !JSON.stringify(concealedType.value({ type: 'image', data: 'c3ludGhldGljIGltYWdl' })).includes(

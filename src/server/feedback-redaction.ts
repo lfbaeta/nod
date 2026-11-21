@@ -1,3 +1,6 @@
+import * as dns from 'node:dns';
+import { constants } from 'node:os';
+import { getSystemErrorMap } from 'node:util';
 import { parse } from 'tldts';
 import { secretField, secretTextSpans } from './redaction.ts';
 import {
@@ -30,8 +33,24 @@ const appFile =
   /^(?:src\/(?:server|providers|ports|shared|web|runtime)|dist|desktop\/main|node_modules)\/[\w@.+-]+(?:\/[\w@.+-]+)*$/;
 const className = /^[A-Za-z][A-Za-z0-9_$]{0,80}$/;
 const hostPattern =
-  /\b((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,24})\b(?:\.(?=[:/?#]))?(?::\d{1,5})?/gi;
-const linkTail = /[/?#][^\s<>"']*/y;
+  /(?:\b((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,24})\b(?:\.(?=[:/?#]))?|\blocalhost\b|(?<![\d.])\d{1,3}(?:\.\d{1,3}){3}(?![\d.]))(?::\d{1,5})?/gi;
+const errorCodes = new Set<string>([
+  ...Object.keys(constants.errno),
+  ...[...getSystemErrorMap().values()].map(([name]) => name),
+  ...Object.values<unknown>(dns).filter((code): code is string => typeof code === 'string'),
+]);
+const reasonPattern =
+  /\b(?:(E[A-Z0-9_]{2,20})|(?:HTTP(?:\/[0-9.]{1,3})?|[Ss]tatus(?:[ _-]?[Cc]ode)?)[ :=]{0,3}([1-5]\d\d))\b/g;
+
+function joined<T extends { start: number; end: number }>(spans: T[]) {
+  const result: T[] = [];
+  for (const span of [...spans].sort((a, b) => a.start - b.start)) {
+    const previous = result.at(-1);
+    if (previous && span.start < previous.end) previous.end = Math.max(previous.end, span.end);
+    else result.push({ ...span });
+  }
+  return result;
+}
 
 function normalize(key: string) {
   return key.replace(/[^a-z0-9]/gi, '').toLowerCase();
@@ -122,6 +141,47 @@ export function createFeedbackRedactor(options: { secrets: string[]; profile: Pe
     const spans: RedactionSpan[] = [];
     for (const span of [...personalSpans(input), ...literalSpans(input), ...secretTextSpans(input)])
       addRedactionSpan(spans, span.start, span.end, span.replacement);
+    const sensitive = joined(spans);
+    const codes: Array<{ start: number; end: number; label: string }> = [];
+    const codePattern = new RegExp(reasonPattern);
+    let next = 0;
+    for (
+      let match = codePattern.exec(input), count = 0;
+      match && count < 8192;
+      match = codePattern.exec(input), count++
+    ) {
+      const [found, code, status] = match;
+      const start = match.index;
+      const end = start + found.length;
+      while (next < sensitive.length && sensitive[next]!.end <= start) next++;
+      if (next < sensitive.length && sensitive[next]!.start < end) continue;
+      if (status) codes.push({ start, end, label: `HTTP ${status}` });
+      else if (errorCodes.has(code!)) codes.push({ start, end, label: code! });
+    }
+    const reasons = (start: number, end: number) => {
+      let low = 0;
+      let high = codes.length;
+      while (low < high) {
+        const middle = (low + high) >> 1;
+        if (codes[middle]!.start < start) low = middle + 1;
+        else high = middle;
+      }
+      const found = new Set<string>();
+      for (
+        let index = low;
+        index < codes.length && index < low + 32 && found.size < 4 && codes[index]!.end <= end;
+        index++
+      )
+        found.add(codes[index]!.label);
+      return found.size ? ` (${[...found].join(', ')})` : '';
+    };
+    const lines: RedactionSpan[] = [];
+    const line = (start: number, end: number, replacement: string) => {
+      if (end > start) lines.push({ start, end, replacement });
+    };
+    const lineBreak = /[\r\n"]/g;
+    let lineEnd = -1;
+    const links: Array<{ start: number; end: number }> = [];
     const whole = (pattern: RegExp, replacement: string) =>
       redactionMatches(input, pattern, (match) =>
         addRedactionSpan(spans, match.index, match.index + match[0].length, replacement),
@@ -135,22 +195,23 @@ export function createFeedbackRedactor(options: { secrets: string[]; profile: Pe
     );
     whole(/\b[A-Za-z0-9+/=_-]{128,}\b/g, '[encoded data omitted]');
     redactionMatches(input, hostPattern, (match) => {
-      const domain = parse(match[1], { allowPrivateDomains: true });
-      if (
-        !domain.isIcann &&
-        !domain.isPrivate &&
-        !/\.(?:internal|local|localhost|test|invalid)$/i.test(match[1])
-      )
-        return;
-      const tailPattern = new RegExp(linkTail);
-      tailPattern.lastIndex = match.index + match[0].length;
-      const tail = tailPattern.exec(input)?.[0] ?? '';
-      addRedactionSpan(
-        spans,
-        match.index,
-        match.index + match[0].length + tail.length,
-        tail ? '[url]' : '[host]',
-      );
+      if (match[1]) {
+        const domain = parse(match[1], { allowPrivateDomains: true });
+        if (
+          !domain.isIcann &&
+          !domain.isPrivate &&
+          !/\.(?:internal|local|localhost|test|invalid)$/i.test(match[1])
+        )
+          return;
+      }
+      const end = match.index + match[0].length;
+      if ('/?#'.includes(input[end] ?? ' ')) {
+        if (lineEnd < end) {
+          lineBreak.lastIndex = end;
+          lineEnd = lineBreak.exec(input)?.index ?? input.length;
+        }
+        links.push({ start: match.index, end: lineEnd });
+      } else if (match[1]) addRedactionSpan(spans, match.index, end, '[host]');
     });
     redactionMatches(input, /[^\s<>"']*%[0-9a-f]{2}[^\s<>"']*/gi, (match) => {
       const encoded = match[0];
@@ -230,7 +291,7 @@ export function createFeedbackRedactor(options: { secrets: string[]; profile: Pe
           )
             return;
           const position = stack ? (match[0].match(/:\d+:\d+[),;]*$/)?.[0] ?? '') : '';
-          addRedactionSpan(spans, start, end - position.length, replacement);
+          line(start, end - position.length, replacement);
         },
         true,
       );
@@ -247,7 +308,31 @@ export function createFeedbackRedactor(options: { secrets: string[]; profile: Pe
       '[path]',
     );
     for (const frame of frames) addRedactionSpan(spans, frame.start, frame.end, frame.replacement);
-    return spans;
+    const quoted = joined(quotedLocations);
+    let quote = 0;
+    let linked = -1;
+    for (const link of links) {
+      if (link.start < linked) continue;
+      while (quote < quoted.length && quoted[quote]!.end <= link.start) quote++;
+      if (quote < quoted.length && quoted[quote]!.start <= link.start) continue;
+      linked = link.end;
+      line(link.start, link.end, '[url]');
+    }
+    const masks = joined(lines);
+    for (const mask of masks) mask.replacement += reasons(mask.start, mask.end);
+    let mask = 0;
+    const kept = [...spans]
+      .sort((a, b) => a.start - b.start)
+      .filter((span) => {
+        while (mask < masks.length && masks[mask]!.end <= span.start) mask++;
+        return !(
+          mask < masks.length &&
+          masks[mask]!.start <= span.start &&
+          span.end <= masks[mask]!.end
+        );
+      });
+    for (const span of masks) addRedactionSpan(kept, span.start, span.end, span.replacement);
+    return kept;
   }
 
   function value(input: unknown): unknown {
