@@ -65,16 +65,42 @@ function uncachedInput(payload: unknown) {
   };
 }
 
-function json(text: string) {
-  const parse = (body: string) => {
-    const start = body.indexOf('{');
-    try {
-      return start < 0 ? null : JSON.parse(body.slice(start, body.lastIndexOf('}') + 1));
-    } catch {
-      return null;
+function closingBrace(text: string, start: number, quotedBraces: Set<number>) {
+  let depth = 0;
+  let quoted = false;
+  let escaped = false;
+  const inside: number[] = [];
+  for (let index = start; index < text.length; index++) {
+    const char = text[index];
+    if (quoted) {
+      if (escaped) escaped = false;
+      else if (char === '\\') escaped = true;
+      else if (char === '"') quoted = false;
+      else if (char === '{') inside.push(index);
+    } else if (char === '"') quoted = true;
+    else if (char === '{') depth++;
+    else if (char === '}' && --depth === 0) {
+      for (const position of inside) quotedBraces.add(position);
+      return index;
     }
-  };
-  return parse(text) ?? parse(/```(?:json)?\s*([\s\S]*)```/.exec(text)?.[1] ?? '');
+  }
+  return -1;
+}
+
+function json(text: string): unknown {
+  const quotedBraces = new Set<number>();
+  for (let start = text.indexOf('{'); start >= 0; start = text.indexOf('{', start + 1)) {
+    if (quotedBraces.has(start)) continue;
+    const end = closingBrace(text, start, quotedBraces);
+    if (end < 0) continue;
+    try {
+      const value: unknown = JSON.parse(text.slice(start, end + 1));
+      if (value && typeof value === 'object' && !Array.isArray(value)) return value;
+    } catch {
+      continue;
+    }
+  }
+  return null;
 }
 
 export function createPiMemoryCurator(options: {

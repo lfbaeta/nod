@@ -10392,6 +10392,32 @@ test('OpenAI review output schemas constrain both key and subscription requests 
     });
 });
 
+test('the memory model answer is the first JSON object in a reply with other braces', async () => {
+  const plan = { mode: 'recall', paths: [], queries: ['synthetic dentist'] };
+  const replies = [
+    `${JSON.stringify(plan)}\n\nNote: {paths} is empty.`,
+    `<think>Return {mode, paths, queries}.</think>\n${JSON.stringify(plan)}`,
+    `<think>{"draft": "{}", unfinished}</think>\n${JSON.stringify(plan)}`,
+    '```json\n' + JSON.stringify(plan) + '\n```\nAlternative:\n```json\n{"mode":"none"}\n```',
+  ];
+  for (const reply of replies) {
+    const curator = createPiMemoryCurator({
+      provider: 'openai',
+      model: 'gpt-6.1-sol',
+      apiKey: 'fixture',
+      runtime: {
+        setRuntimeApiKey: async () => {},
+        getModel: () => ({ provider: 'openai', id: 'gpt-6.1-sol' }),
+        completeSimple: async () => fauxAssistantMessage(reply),
+      } as never,
+    });
+    assert.deepEqual(
+      await curator.curate({ task: 'recall', instructions: 'Plan a recall', input: {} }),
+      plan,
+    );
+  }
+});
+
 test('an unavailable classification resolver never loads a fallback model', async () => {
   let fallbackLoads = 0;
   const curator = createPiMemoryCurator({
