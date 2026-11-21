@@ -1252,6 +1252,7 @@ export function createLedger({
              AND created_at>=${monthStart}) AS plan_usage,
            ${monthStart} AS start,
            extract(day FROM date_trunc('month', now() AT TIME ZONE ${zone}) + interval '1 month - 1 day')::int AS days,
+           extract(day FROM now() AT TIME ZONE ${zone})::int AS today,
            extract(epoch FROM now()-${monthStart})::float8/86400 AS elapsed`,
         [ownerId],
       ),
@@ -1285,7 +1286,7 @@ export function createLedger({
     ]);
     const row = summary.rows[0];
     const elapsed = Math.min(row.days, Math.max(row.elapsed, 0));
-    const days: number[] = Array.from({ length: Math.ceil(elapsed) || 1 }, () => 0);
+    const days: number[] = Array.from({ length: row.today }, () => 0);
     for (const { day, cost } of daily.rows) if (day <= days.length) days[day - 1] = cost ?? 0;
     const spent = days.reduce((sum, value) => sum + value, 0);
     const outside = new Map<TrustOutside['kind'], number>();
