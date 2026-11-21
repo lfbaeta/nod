@@ -70,6 +70,24 @@ test('notification previews extract readable message text without link targets o
   assert.ok(!attachment.includes('synthetic-capability-token'));
 });
 
+test('notification previews keep escaped tags as text and links with parenthesised targets', () => {
+  assert.equal(
+    assistantNotificationPreview({ text: 'Use &lt;b&gt; for bold text' }),
+    'Use <b> for bold text',
+  );
+  assert.equal(assistantNotificationPreview({ text: 'Typed &amp;lt; once' }), 'Typed &lt; once');
+  assert.equal(
+    assistantNotificationPreview({
+      text: 'Open [Foo](https://en.wikipedia.org/wiki/Foo_(bar)) now',
+    }),
+    'Open Foo now',
+  );
+  assert.equal(
+    assistantNotificationPreview({ text: 'See https&#58;//example.com/private/path?id=7 now' }),
+    'See example.com now',
+  );
+});
+
 test('notification previews redact configured credentials after decoding formatting', () => {
   const known = 'synthetic-notification-secret/123456=';
   const encoded = [...known].map((character) => `&#${character.codePointAt(0)};`).join('');
