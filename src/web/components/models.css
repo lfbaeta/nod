@@ -188,6 +188,7 @@
 }
 .model-connection {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 12px;
   min-height: 62px;
@@ -216,6 +217,10 @@
 .model-connection-selected {
   color: var(--accent);
   font-size: 11px;
+}
+.model-connection-light {
+  flex-basis: 100%;
+  padding-left: 36px;
 }
 .model-service-actions,
 .model-dialog-actions {
