@@ -4807,6 +4807,11 @@ test('server connections encrypt their token, preserve local keys, and never rev
   ])
     await assert.rejects(f.store.saveConnection({ url, token }));
   assert.equal((await f.store.connection()).url, 'https://assistant.example.test');
+  await f.store.saveConnection({ url: 'https://assistant.example.test', token: `  ${token}\n` });
+  assert.deepEqual(await f.reopen().connection(), { url: 'https://assistant.example.test', token });
+  await assert.rejects(
+    f.store.saveConnection({ url: 'https://assistant.example.test', token: '  ' }),
+  );
   f.encryption.isEncryptionAvailable = () => false;
   await assert.rejects(f.store.saveConnection({ url: 'https://other.example.test', token }));
   await assert.rejects(f.reopen().connection());

@@ -1898,6 +1898,7 @@ async function saveConnection(input) {
   if (input !== null) {
     if (!input || typeof input !== 'object' || Array.isArray(input))
       throw new Error('Enter your server address and authentication token.');
+    if (typeof input.token === 'string') input = { ...input, token: input.token.trim() };
     await checkRemoteConnection(input);
   }
   if (!(await confirmRestart())) return;

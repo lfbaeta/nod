@@ -291,11 +291,11 @@ export function createSettingsStore(path, encryption, platform = process.platfor
             Array.isArray(input) ||
             Object.keys(input).some((field) => !['url', 'token'].includes(field)) ||
             typeof input.token !== 'string' ||
-            !/^[A-Za-z0-9_-]{43,}$/.test(input.token)
+            !/^[A-Za-z0-9_-]{43,}$/.test(input.token.trim())
           )
             throw new Error('Enter the authentication token configured on your server.');
           value.serverUrl = serverOrigin(input.url);
-          value.secrets.serverToken = await protect(input.token);
+          value.secrets.serverToken = await protect(input.token.trim());
         }
         await write(value);
         return redacted(value);
