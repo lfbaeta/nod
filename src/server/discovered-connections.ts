@@ -23,7 +23,7 @@ import { logFailure } from './failure-log.ts';
 import type { createAppGrantVault } from './vault-app-grants.ts';
 import type { TurnRef } from './thread.ts';
 import { isIntegrationFile } from './integration-files.ts';
-import { redactSecretText } from './redaction.ts';
+import { environmentSecrets, redactSecretText } from './redaction.ts';
 import type { AnalyticsEvent, CaptureAnalytics } from './analytics.ts';
 import {
   captureConnection,
@@ -864,17 +864,17 @@ export async function createDiscoveredConnections(
           error: cause,
           path,
         });
-        const values = typeof entered === 'string' ? [entered] : Object.values(entered);
         const reason =
           cause instanceof Error && cause.message
             ? cause.message
             : status
               ? `The service answered ${status}.`
               : 'The service did not confirm access.';
-        const safe = [token, ...values].reduce(
-          (value, secret) => String(redact(value, secret)),
-          reason,
-        );
+        const safe = (
+          path.kind === 'cli'
+            ? environmentSecrets(typeof entered === 'string' ? { [path.env[0]]: entered } : entered)
+            : [token]
+        ).reduce((value, secret) => String(redact(value, secret)), reason);
         throw error(`The connection could not be verified: ${safe}`, 409);
       }
     }
@@ -1689,14 +1689,14 @@ export async function createDiscoveredConnections(
           token = await tokenFor(row, path, signal);
           await assertBinding(row, expectedBinding);
           signal?.throwIfAborted();
-          secrets.push(token);
           const environment =
             path.kind !== 'cli' || !path.env
               ? {}
               : path.env.length > 1
                 ? z.record(envName, z.string()).parse(JSON.parse(token))
                 : { [path.env[0]]: token };
-          secrets.push(...Object.values(environment));
+          if (path.kind === 'cli') secrets.push(...environmentSecrets(environment));
+          else secrets.push(token);
           let result: unknown;
           if (call.kind === 'http')
             result = await via(call.path).transport.http(

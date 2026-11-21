@@ -4,7 +4,7 @@ export function environmentSecrets(environment) {
       ([key, value]) =>
         typeof value === 'string' &&
         value.length > 0 &&
-        /(?:API_KEY|SECRET|PASSWORD|VAULT_KEY)$|(?:^|_)(?:KEY|SECRET|PASSWORD|PASSWD|PASSPHRASE|CREDENTIALS?|PWD|TOKEN)(?:_|$)/i.test(
+        /(?:SECRET|PASSWORD|TOKEN|KEY)$|(?:^|_)(?:KEY|SECRET|PASSWORD|PASSWD|PASSPHRASE|CREDENTIALS?|PWD|TOKEN)(?:_|$)/i.test(
           key,
         ),
     )

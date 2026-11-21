@@ -73,7 +73,7 @@ import { transaction } from '../src/server/transaction.ts';
 import { registerLocalAccess } from '../src/server/access.ts';
 import { createIntegrations, initializeIntegrationSchema } from '../src/server/integrations.ts';
 import { cachedIcons } from '../src/server/link-previews.ts';
-import { createErrorRedactor } from '../src/server/redaction.ts';
+import { createErrorRedactor, environmentSecrets } from '../src/server/redaction.ts';
 import { createFeedbackRedactor } from '../src/server/feedback-redaction.ts';
 import { createLedger } from '../src/server/ledger.ts';
 import { createActivityLog } from '../src/server/activity-log.ts';
@@ -577,7 +577,7 @@ test(
                     ]),
                   )
                 : { token: 'synthetic-private-api-token' };
-            const secrets = Object.values(values);
+            const secrets = environmentSecrets(values);
             let failure: 'permission' | 'rate' | 'invalid-json' | undefined;
             let calls = 0;
             const transport = createDiscoveredTransport(
@@ -11450,11 +11450,26 @@ test(
         oauth: {} as Parameters<typeof createDiscoveredConnections>[1]['oauth'],
         runCli: async (_thread, _cli, _argv, environment) => {
           environments.push(environment);
+          const accountId = environment.FIXTURE_ACCOUNT_ID;
           return {
             exitCode: 0,
-            output: `signed in as ${Object.values(environment).join(' and ')}`,
+            output:
+              accountId === undefined
+                ? JSON.stringify({ values: environment })
+                : JSON.stringify({
+                    account: { id: accountId },
+                    invoices: [{ number: `INV-10${accountId}`, total: 420.5 }],
+                    token: environment.FIXTURE_TOKEN ?? null,
+                  }),
           };
         },
+        verifyCli: async (_cli, _args, environment) => ({
+          exitCode: 7,
+          output: JSON.stringify({
+            account: { id: environment.FIXTURE_ACCOUNT_ID ?? 'unknown' },
+            token: environment.FIXTURE_TOKEN ?? null,
+          }),
+        }),
       });
       discovered.registerRoutes(app);
       const cli = {
@@ -11554,6 +11569,148 @@ test(
         new AbortController().signal,
       );
       assert.deepEqual(environments.at(-1), { FIXTURE_TOKEN: 'synthetic-tool-token' });
+      const identified = await discovered.propose({
+        service: 'fixture-identified',
+        name: 'Fixture identified',
+        paths: [{ ...cli, env: ['FIXTURE_ACCOUNT_ID', 'FIXTURE_TOKEN'] }],
+      });
+      const identifiedId = new URL(identified.url, 'http://localhost:4310').searchParams.get(
+        'connect',
+      );
+      assert.equal(
+        (
+          await app.inject({
+            method: 'POST',
+            url: `/api/apps/discovery/${identifiedId}/complete`,
+            payload: {
+              token: { FIXTURE_ACCOUNT_ID: '42', FIXTURE_TOKEN: 'synthetic-identifier-token' },
+              accountName: 'Identified',
+            },
+          })
+        ).statusCode,
+        200,
+      );
+      const identifiedRow = await pool.query<{ id: string; paths: Array<{ id: string }> }>(
+        "SELECT id,paths FROM discovered_connections WHERE owner_id=$1 AND service='fixture-identified'",
+        [owner],
+      );
+      const identifiedResult = await discovered.execute(
+        'CONNECTED_CLI',
+        {
+          connectionId: identifiedRow.rows[0].id,
+          pathId: identifiedRow.rows[0].paths[0].id,
+          argv: ['whoami'],
+        },
+        { threadId: randomUUID(), turnId: randomUUID() },
+        new AbortController().signal,
+      );
+      assert.deepEqual(environments.at(-1), {
+        FIXTURE_ACCOUNT_ID: '42',
+        FIXTURE_TOKEN: 'synthetic-identifier-token',
+      });
+      assert.deepEqual(JSON.parse((identifiedResult as { output: string }).output), {
+        account: { id: '42' },
+        invoices: [{ number: 'INV-1042', total: 420.5 }],
+        token: '[redacted]',
+      });
+      const singleIdentifier = await discovered.propose({
+        service: 'fixture-single-identifier',
+        name: 'Fixture single identifier',
+        paths: [{ ...cli, env: ['FIXTURE_ACCOUNT_ID'] }],
+      });
+      const singleIdentifierId = new URL(
+        singleIdentifier.url,
+        'http://localhost:4310',
+      ).searchParams.get('connect');
+      assert.equal(
+        (
+          await app.inject({
+            method: 'POST',
+            url: `/api/apps/discovery/${singleIdentifierId}/complete`,
+            payload: { token: '42', accountName: 'Single identifier' },
+          })
+        ).statusCode,
+        200,
+      );
+      const singleIdentifierRow = await pool.query<{ id: string; paths: Array<{ id: string }> }>(
+        "SELECT id,paths FROM discovered_connections WHERE owner_id=$1 AND service='fixture-single-identifier'",
+        [owner],
+      );
+      const singleIdentifierResult = (await discovered.execute(
+        'CONNECTED_CLI',
+        {
+          connectionId: singleIdentifierRow.rows[0].id,
+          pathId: singleIdentifierRow.rows[0].paths[0].id,
+          argv: ['whoami'],
+        },
+        { threadId: randomUUID(), turnId: randomUUID() },
+        new AbortController().signal,
+      )) as { exitCode: number; output: string };
+      assert.deepEqual(environments.at(-1), { FIXTURE_ACCOUNT_ID: '42' });
+      assert.deepEqual(JSON.parse(singleIdentifierResult.output), {
+        account: { id: '42' },
+        invoices: [{ number: 'INV-1042', total: 420.5 }],
+        token: null,
+      });
+      const shortSecret = await discovered.propose({
+        service: 'fixture-short-secret',
+        name: 'Fixture short secret',
+        paths: [{ ...cli, env: ['FIXTURE_ACCOUNT_ID', 'FIXTURE_TOKEN'] }],
+      });
+      const shortSecretId = new URL(shortSecret.url, 'http://localhost:4310').searchParams.get(
+        'connect',
+      );
+      assert.equal(
+        (
+          await app.inject({
+            method: 'POST',
+            url: `/api/apps/discovery/${shortSecretId}/complete`,
+            payload: {
+              token: { FIXTURE_ACCOUNT_ID: '42', FIXTURE_TOKEN: 'x7' },
+              accountName: 'Short secret',
+            },
+          })
+        ).statusCode,
+        200,
+      );
+      const shortSecretRow = await pool.query<{ id: string; paths: Array<{ id: string }> }>(
+        "SELECT id,paths FROM discovered_connections WHERE owner_id=$1 AND service='fixture-short-secret'",
+        [owner],
+      );
+      const shortSecretResult = (await discovered.execute(
+        'CONNECTED_CLI',
+        {
+          connectionId: shortSecretRow.rows[0].id,
+          pathId: shortSecretRow.rows[0].paths[0].id,
+          argv: ['whoami'],
+        },
+        { threadId: randomUUID(), turnId: randomUUID() },
+        new AbortController().signal,
+      )) as { exitCode: number; output: string };
+      assert.deepEqual(JSON.parse(shortSecretResult.output), {
+        account: { id: '42' },
+        invoices: [{ number: 'INV-1042', total: 420.5 }],
+        token: '[redacted]',
+      });
+      const setupCheck = await discovered.propose({
+        service: 'fixture-setup-check',
+        name: 'Fixture setup check',
+        paths: [{ ...cli, env: ['FIXTURE_ACCOUNT_ID', 'FIXTURE_TOKEN'], testArgv: ['whoami'] }],
+      });
+      const setupCheckId = new URL(setupCheck.url, 'http://localhost:4310').searchParams.get(
+        'connect',
+      );
+      const denied = await app.inject({
+        method: 'POST',
+        url: `/api/apps/discovery/${setupCheckId}/complete`,
+        payload: {
+          token: { FIXTURE_ACCOUNT_ID: '42', FIXTURE_TOKEN: 'x7' },
+          accountName: 'Setup check',
+        },
+      });
+      assert.equal(denied.statusCode, 409, denied.body);
+      assert.equal(denied.body.includes('42'), true);
+      assert.equal(denied.body.includes('x7'), false);
     } finally {
       await app.close();
       await pool.end();

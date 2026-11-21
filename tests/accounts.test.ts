@@ -8695,6 +8695,10 @@ test('environment secret collection covers every model key and token segment bef
       'ENCRYPTION_KEY',
       'PASSPHRASE',
       'ACCESS_KEY_ID',
+      'CLIENTSECRET',
+      'CLIENTPASSWORD',
+      'CLIENTTOKEN',
+      'CLIENTKEY',
     ].map((key, index) => [`SYNTHETIC_${key}`, `synthetic-legacy-key-${index}`]),
   );
   const environment = {
@@ -8707,11 +8711,22 @@ test('environment secret collection covers every model key and token segment bef
     SYNTHETIC_PASSWORD: 'synthetic-password-value',
     NOD_VAULT_KEY: 'synthetic-vault-key',
     DATABASE_URL: 'postgresql://synthetic:synthetic%2Bdatabase%2Fpassword@127.0.0.1/nod_synthetic',
+    SYNTHETIC_ACCOUNT_ID: 'synthetic-account-id',
+    SYNTHETIC_ACCOUNT_USERNAME: 'synthetic-account-username',
+    SYNTHETIC_CONTACT_EMAIL: 'synthetic@example.test',
+    SYNTHETIC_SERVICE_URL: 'https://synthetic.example.test',
     PORT: '1234',
   };
   const secrets = environmentSecrets(environment);
+  const passthrough = new Set([
+    'PORT',
+    'SYNTHETIC_ACCOUNT_ID',
+    'SYNTHETIC_ACCOUNT_USERNAME',
+    'SYNTHETIC_CONTACT_EMAIL',
+    'SYNTHETIC_SERVICE_URL',
+  ]);
   for (const [key, value] of Object.entries(environment))
-    assert.equal(secrets.includes(value), key !== 'PORT', key);
+    assert.equal(secrets.includes(value), !passthrough.has(key), key);
   assert.ok(secrets.includes('synthetic+database/password'));
   const malformed = 'synthetic%2Gprivate-password';
   assert.ok(

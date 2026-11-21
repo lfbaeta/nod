@@ -107,6 +107,8 @@ The environment object maps provider variable names to user-facing labels. It co
 
 Names use uppercase letters, digits, and underscores. They must end in `TOKEN`, `KEY`, `SECRET`, `PASSWORD`, `_ID`, `_SID`, `USERNAME`, `USER`, `EMAIL`, or `URL`. Runtime control variables such as `LD_PRELOAD` are rejected.
 
+The setting name decides what Nod treats as a credential when it shows CLI output or a setup error. A setting whose name has `TOKEN`, `KEY`, `SECRET`, `PASSWORD`, `PASSWD`, `PASSPHRASE`, `CREDENTIAL`, `CREDENTIALS`, or `PWD` as an underscore-separated part, or ends in `SECRET`, `PASSWORD`, `TOKEN`, or `KEY`, is redacted wherever it appears. A setting named as an identifier, such as one ending in `_ID`, `_SID`, `USERNAME`, `USER`, `EMAIL`, or `URL`, passes through unchanged only when its name has no credential marker; for example, `ACCESS_KEY_ID` is still redacted. `DATABASE_URL` is redacted as a whole, together with the password inside it. Do not put a genuine credential under an identifier name: Nod cannot tell it apart from an account ID, and the value can reach the model or an error message.
+
 Add this fixture:
 
 ```json
