@@ -4842,6 +4842,60 @@ describe('model connections', { skip: !process.env.TEST_DATABASE_URL }, () => {
     });
   });
 
+  test('recall uses its own OpenRouter model while classification keeps the memory model', async (t) => {
+    const f = await fixture(t);
+    const original = await f.backend.catalog('openai', 'api_key', {
+      type: 'api_key',
+      key: 'fixture-recall-model-catalog',
+    });
+    const recall = original.find((definition) => definition.choice.id === 'gpt-6-luna')!;
+    let recallAvailable = true;
+    const owner = await f.create('fixture-recall-model', {
+      ...f.backend,
+      catalog: async (provider) =>
+        provider === 'openai'
+          ? original
+          : [
+              ...original.map((definition) => {
+                const id =
+                  definition.choice.id === 'gpt-6.1-sol'
+                    ? 'openai/gpt-6.1-sol'
+                    : 'openai/gpt-6-luna';
+                return {
+                  choice: { ...definition.choice, id },
+                  spec: { ...definition.spec, provider: 'openrouter', id },
+                };
+              }),
+              ...(recallAvailable
+                ? [
+                    {
+                      choice: { ...recall.choice, id: 'minimax/minimax-m3.1-flash' },
+                      spec: {
+                        ...recall.spec,
+                        provider: 'openrouter',
+                        id: 'minimax/minimax-m3.1-flash',
+                      },
+                    },
+                  ]
+                : []),
+            ],
+    });
+    const connectionId = await owner.addKey('openrouter', 'fixture-recall-model-key');
+    await owner.select({ connectionId, modelId: 'openai/gpt-6.1-sol', effort: 'high' });
+    const recallAccess = await owner.resolveRecall();
+    assert.equal(recallAccess.definition.choice.id, 'minimax/minimax-m3.1-flash');
+    assert.ok(['off', 'low', 'medium'].includes(recallAccess.effort));
+    assert.equal((await owner.resolve(true)).definition.choice.id, 'openai/gpt-6-luna');
+    assert.equal((await owner.resolveClassification())?.definition.choice.id, 'openai/gpt-6-luna');
+    assert.equal(owner.view().light?.modelId, 'openai/gpt-6-luna');
+    recallAvailable = false;
+    await owner.refreshCatalog(connectionId);
+    const fallbackAccess = await owner.resolveRecall();
+    assert.equal(fallbackAccess.definition.choice.id, 'openai/gpt-6.1-sol');
+    assert.ok(['off', 'low', 'medium'].includes(fallbackAccess.effort));
+    assert.equal((await owner.resolveClassification())?.definition.choice.id, 'openai/gpt-6-luna');
+  });
+
   test('automatic preparation names the model it cannot price until a priced model does the work', async (t) => {
     const f = await fixture(t);
     const original = await f.backend.catalog('openai', 'api_key', {

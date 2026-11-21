@@ -53,6 +53,14 @@ export const memoryModels: Partial<Record<ModelProvider, string>> = {
   radius: 'cheap',
 };
 
+export const recallModels: Partial<Record<ModelProvider, string>> = {
+  openrouter: 'minimax/minimax-m3.1-flash',
+};
+
+export function recallModel(provider: ModelProvider) {
+  return recallModels[provider] ?? memoryModels[provider];
+}
+
 export function defaultModel(provider: ModelProvider, models: ModelChoice[], method?: ModelMethod) {
   if (provider === 'amazon-bedrock' && models.length > 1) return undefined;
   const preferred =

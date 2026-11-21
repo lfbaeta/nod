@@ -259,6 +259,7 @@ export interface ApplicationAdapters {
   keepAwake?: KeepAwake;
   localFilesHome?: string;
   memoryCurator?: MemoryCurator;
+  recallCurator?: MemoryCurator;
   classificationCurator?: MemoryCurator;
   imageCurator?: MemoryCurator;
   onboardingCurator?: MemoryCurator;
@@ -404,6 +405,14 @@ export function createDefaultAdapters(
       return models.current.provider;
     },
     resolve: () => models.resolve(true),
+    configured: () => models.configured,
+    traces,
+  });
+  const recallCurator = createPiMemoryCurator({
+    get provider() {
+      return models.current.provider;
+    },
+    resolve: () => models.resolveRecall(),
     configured: () => models.configured,
     traces,
   });
@@ -616,6 +625,7 @@ export function createDefaultAdapters(
     integrationBrowser,
     keyStore,
     memoryCurator: modelCurator,
+    recallCurator,
     trustCurator: createPiMemoryCurator({
       get provider() {
         return models.current.provider;
@@ -900,6 +910,7 @@ async function initializeApplication(
   adapters.models?.setRequestBudget?.(ledger.reserve);
   const { computer, workspace } = adapters;
   const curator = ledger.curator(memoryCurator);
+  const recall = ledger.curator(adapters.recallCurator ?? memoryCurator);
   const taskClassification = createTaskClassification({
     pool,
     ownerId,
@@ -1064,7 +1075,7 @@ async function initializeApplication(
           }
         : undefined,
   });
-  const memoryRecall = createMemoryRecall({ pool, ownerId, memory, curator });
+  const memoryRecall = createMemoryRecall({ pool, ownerId, memory, curator: recall });
   const writingStyle = createWritingStyleLearning({ memory, curator });
   let channels: Awaited<ReturnType<typeof createChannels>> | undefined;
   const communication = createCommunication({

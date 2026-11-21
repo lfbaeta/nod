@@ -21,6 +21,10 @@ const dataRule =
 const planInstructions = `Select memory for the current request. ${dataRule} Select facts that change a useful answer, including indirect links between the request, interests, possessions, preferences and constraints. A question can need personal context without asking to remember it. Do not force unrelated personal details into a general answer. Keep plans, completed events and possessions distinct. Use dates and explicit corrections. A tentative label means mentioned once, not disproved; a precise source can still support an answer. Return {"mode":"none"|"personalize"|"recall"|"aggregate","paths":[existing note paths],"queries":[up to four short searches using source names, synonyms, related concepts and earlier wording]}. Choose aggregate for counts, totals, comparisons or intervals requiring several sources. Select every relevant distinct fact up to 100 for aggregate, including earlier events and corrections. Select at most 12 notes for other modes. Choose recall for what the owner or assistant said earlier. Choose none when memory cannot help. Search terms find evidence; they do not establish facts. Do not supply answers or new facts.`;
 const rankInstructions = `Select the source records needed to answer the current request. ${dataRule} Return {"paths":[existing note paths],"messages":[existing message IDs]}. Prefer exact supported facts over loose word matches. Select relevant personal constraints for advice, even through indirect associations. Include corrections and the statements they correct. For aggregate, retain all relevant distinct events, including evidence that excludes an event. For recall of earlier assistant advice, keep assistant messages as statements by the assistant, never as owner facts or verified world facts. Do not select unrelated records. Do not compose an answer.`;
 
+function stepDeadline(deadline: AbortSignal) {
+  return AbortSignal.any([AbortSignal.timeout(1_000), deadline]);
+}
+
 function selectionText(value: string, limit: number) {
   if (value.length <= limit) return value;
   const marker = '\n[Middle of message omitted]\n';
@@ -92,7 +96,7 @@ export function createMemoryRecall(options: {
       });
     if (!notes.length && !recent.length && !context.relatedConversation?.length) return;
     const fallback = await options.memory.find({ query: context.prompt });
-    const selectionDeadline = AbortSignal.timeout(1_000);
+    const selectionDeadline = AbortSignal.timeout(1_700);
     const parsed = planSchema.safeParse(
       options.curator.configured && canContinue()
         ? await ask(
@@ -105,7 +109,7 @@ export function createMemoryRecall(options: {
               notes: notes.map(({ path, text, status, fact }) => ({ path, text, status, fact })),
             },
             signal,
-            selectionDeadline,
+            stepDeadline(selectionDeadline),
           )
         : undefined,
     );
@@ -171,7 +175,7 @@ export function createMemoryRecall(options: {
             rankInstructions,
             { request, mode: plan.mode, notes: facts, messages: candidates },
             signal,
-            selectionDeadline,
+            stepDeadline(selectionDeadline),
           )
         : undefined,
     );

@@ -51,6 +51,7 @@ import {
   defaultEffort,
   defaultModel,
   memoryModels,
+  recallModel,
 } from '../shared/model-defaults.ts';
 import { createDatabaseModelStore, type ModelRecord, type ModelState } from './model-store.ts';
 import { analyticsModel, snapshotAnalytics, type CaptureAnalytics } from './analytics.ts';
@@ -680,7 +681,7 @@ export function createModelService(options: {
       void reload().catch((error: unknown) => logFailure('model_settings_reload_failed', error));
     });
   }
-  function chosen(auxiliary: boolean, choice: ModelSelection | null) {
+  function chosen(auxiliary: boolean, choice: ModelSelection | null, recall = false) {
     const selected = auxiliary ? selection && { ...selection } : choice && { ...choice };
     const row = rows.find((row) => row.id === selected?.connectionId);
     if (!row || !selected)
@@ -690,7 +691,10 @@ export function createModelService(options: {
     if (row.status !== 'connected') throw attention(row);
     const definition =
       (auxiliary
-        ? row.models.find((model) => model.choice.id === memoryModels[row.provider])
+        ? row.models.find(
+            (model) =>
+              model.choice.id === (recall ? recallModel(row.provider) : memoryModels[row.provider]),
+          )
         : undefined) ?? row.models.find((model) => model.choice.id === selected.modelId);
     if (!definition || (!definition.choice.efforts.includes(selected.effort) && !auxiliary))
       throw new ConnectionError(
@@ -1610,8 +1614,9 @@ export function createModelService(options: {
     async resolve(
       auxiliary = false,
       choice: ModelSelection | null = selection,
+      recall = false,
     ): Promise<ModelAccess> {
-      const { selected, row, definition, companion } = chosen(auxiliary, choice);
+      const { selected, row, definition, companion } = chosen(auxiliary, choice, recall);
       return {
         provider: row.provider,
         method: row.method,
@@ -1633,6 +1638,9 @@ export function createModelService(options: {
         ...requestAccess(row),
         needsReconnect: (credential) => needsReconnect(row.id, { models: row.models, credential }),
       };
+    },
+    async resolveRecall(): Promise<ModelAccess> {
+      return service.resolve(true, selection, true);
     },
     start,
     cancel,

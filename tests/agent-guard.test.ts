@@ -3453,7 +3453,10 @@ test(
               id: 'fixture',
               configured: true,
               async curate({ input }, signal) {
-                if ('mode' in input) return { paths: [path], messages: [] };
+                if ('mode' in input) {
+                  await delay(10_000, undefined, { signal });
+                  return { paths: [path], messages: [] };
+                }
                 await delay(10_000, undefined, { signal });
                 return {
                   mode: explicit ? 'recall' : 'none',
@@ -3475,7 +3478,7 @@ test(
               emit({ type: 'final', text: 'Synthetic answer.' });
             },
             {
-              prompt: explicit ? 'What light do I prefer?' : 'what can you help me with?',
+              prompt: explicit ? 'What light do I prefer?' : 'Tell me about amber light.',
               history: [{ role: 'user', text: 'I prefer amber light.' }],
               emit: async (type) => {
                 if (type === 'agent_start') agentStartedAt = performance.now();
@@ -3503,6 +3506,43 @@ test(
     }
   },
 );
+
+test('a timed-out memory plan does not starve the rank step', { timeout: 30_000 }, async () => {
+  const pool = { query: async () => ({ rows: [] }) } as unknown as Pool;
+  const memory = createMemoryService({
+    pool,
+    ownerId: 'memory-rank-owner',
+    store: memoryObjectStore(),
+  });
+  const kept = await memory.add({ area: 'preferences', text: 'Prefers amber light for reading.' });
+  const dropped = await memory.add({
+    area: 'preferences',
+    text: 'Prefers amber light for evenings.',
+  });
+  const recall = createMemoryRecall({
+    pool,
+    ownerId: 'memory-rank-owner',
+    memory,
+    curator: {
+      id: 'fixture',
+      configured: true,
+      async curate({ input }, signal) {
+        if ('mode' in input) return { paths: [kept], messages: [] };
+        await delay(10_000, undefined, { signal });
+        return { mode: 'recall', paths: [kept, dropped], queries: [] };
+      },
+    },
+  });
+  const brief = await recall.prepare({
+    prompt: 'What light do I prefer?',
+    history: [{ role: 'user', text: 'I prefer amber light.' }],
+    signal: new AbortController().signal,
+  } as Parameters<typeof recall.prepare>[0]);
+  assert.deepEqual(
+    brief?.facts.map((fact) => fact.path),
+    [kept],
+  );
+});
 
 test('memory planning bounds pasted requests and recent owner messages', async () => {
   const longText = (start: string, middle: string, end: string) =>

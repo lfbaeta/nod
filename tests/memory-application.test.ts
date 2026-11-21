@@ -74,6 +74,7 @@ test(
     const skillDrafts: string[] = [];
     const contexts: string[] = [];
     const rememberInputs: string[] = [];
+    const recallRequests: string[] = [];
     type Remembered = {
       current: { m: number; text: string };
       earlier: Array<{ m: number; text: string }>;
@@ -150,6 +151,7 @@ test(
           configured: true,
           curate: async ({ task, input }, signal) => {
             if (task === 'review') reviews.push(JSON.stringify(input));
+            if (task === 'recall') recallRequests.push(JSON.stringify(input));
             if (task === 'remember') {
               rememberInputs.push(JSON.stringify(input));
               await whilePreparing?.(signal);
@@ -383,6 +385,7 @@ test(
       const explicitTurn = await ask(explicit, [learn()]);
       assert.deepEqual((await savedEntry(explicit))?.sources, [await sourceOf(explicitTurn)]);
       await assertSilent(explicitTurn);
+      assert.ok(recallRequests.length > 0);
 
       const punctuation = 'Remember that I prefer “compact reports”.';
       const support = punctuation.replace(/[“”]/g, '"');

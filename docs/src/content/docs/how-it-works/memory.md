@@ -80,7 +80,7 @@ Counts need all relevant searches, event dates, duplicate removal and the reques
 `complete` covers one search's matches, not every real event or change. Partial or unknown coverage cannot establish an exhaustive total or that nothing exists or changed outside the searched scope.
 :::
 
-Selection uses up to two model calls with a shared one-second deadline. When that deadline expires, Nod uses word matches and any evidence already found. These calls count in **Usage** and the session's spending check-in. Stop ends waiting at once, including when a provider ignores cancellation. A new owner message during the turn clears the old selection.
+Selection uses up to two model calls. Each call has a one-second deadline, and both calls share an overall 1.7-second deadline, so a slow memory model adds at most 1.7 seconds of model waiting. Note lookup and history search run outside that deadline, so selection can take longer than 1.7 seconds in total. When a deadline expires, Nod uses word matches and any evidence already found. These calls count in **Usage** and the session's spending check-in. Stop ends waiting at once, including when a provider ignores cancellation. A new owner message during the turn clears the old selection.
 
 :::caution[Model limits]
 Selection can make mistakes. If a call fails or returns invalid data, Nod keeps its word-search fallback.
