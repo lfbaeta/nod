@@ -25,11 +25,11 @@ test(
       await nod.release('hold: plan the week');
       await nod.settle();
       assert.deepEqual(
-        (await results()).map(({ title, result }) => [title, result]),
+        (await results()).map(({ title, status, result }) => [title, status, result]),
         [
-          ['compare Lisbon hotels', 'Done: task: compare Lisbon hotels'],
-          ['write a packing list', 'Done: task: write a packing list'],
-          ['research the Charles Bridge', 'Done: task: research the Charles Bridge'],
+          ['compare Lisbon hotels', 'done', 'Done: task: compare Lisbon hotels'],
+          ['write a packing list', 'done', 'Done: task: write a packing list'],
+          ['research the Charles Bridge', 'done', 'Done: task: research the Charles Bridge'],
         ],
       );
       assert.ok(first.turnId);

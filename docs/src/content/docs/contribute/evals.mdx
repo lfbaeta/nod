@@ -14,7 +14,7 @@ The short version: each attempt boots its own Nod with a real model. The apps, w
 For the landing-page results, benchmark definitions, and measurement limits, read [How we evaluate Nod](/how-it-works/benchmarks/).
 
 :::caution[Evals cost money]
-They call live models. An attempt costs about $0.10 to $0.50. A full controlled run has 363 attempts before time-window skips. The unit tests never call them.
+They call live models. An attempt costs about $0.10 to $0.50. A full controlled run has 369 attempts before time-window skips. The unit tests never call them.
 :::
 
 The collector requires a captured prompt for each successful background turn that opened the agent or recorded an agent request. A recorded source-screen result with no agent start or request needs no agent prompt. Missing records alone do not prove that a source screen ran. Its source reads and model usage still count. Missing prompts from executed agent work are measurement errors.

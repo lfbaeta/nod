@@ -305,8 +305,26 @@ export async function startNod() {
   const query = async <T extends pg.QueryResultRow>(sql: string, values: unknown[] = []) =>
     (await pool.query<T>(sql, values)).rows;
 
-  await boot();
-  await call('PATCH', '/api/account', { onboardingCompleted: true });
+  async function close() {
+    if (child && child.exitCode === null && child.signalCode === null) {
+      const exited = new Promise((done) => child!.once('exit', done));
+      child.kill('SIGTERM');
+      await exited;
+    }
+    await pool.end();
+    await admin.query(`DROP SCHEMA IF EXISTS ${bossSchema} CASCADE`);
+    await admin.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
+    await admin.end();
+    if (!process.env.NOD_E2E_KEEP) await rm(directory, { recursive: true, force: true });
+  }
+
+  try {
+    await boot();
+    await call('PATCH', '/api/account', { onboardingCompleted: true });
+  } catch (error) {
+    await close().catch(() => {});
+    throw error;
+  }
 
   const nod = {
     url,
@@ -361,18 +379,7 @@ export async function startNod() {
     async restart() {
       await boot();
     },
-    async close() {
-      if (child && child.exitCode === null && child.signalCode === null) {
-        const exited = new Promise((done) => child!.once('exit', done));
-        child.kill('SIGTERM');
-        await exited;
-      }
-      await pool.end();
-      await admin.query(`DROP SCHEMA IF EXISTS ${bossSchema} CASCADE`);
-      await admin.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
-      await admin.end();
-      if (!process.env.NOD_E2E_KEEP) await rm(directory, { recursive: true, force: true });
-    },
+    close,
     directory,
     async violations(expected: { failed?: number } = {}) {
       const problems: string[] = [];
@@ -380,6 +387,8 @@ export async function startNod() {
         "SELECT id,status FROM turns WHERE status IN ('queued','running')",
       );
       if (stuck.length) problems.push(`${stuck.length} turns are still ${stuck[0]!.status}`);
+      const open = await query<{ title: string }>("SELECT title FROM tasks WHERE state='open'");
+      for (const task of open) problems.push(`task "${task.title}" is still open`);
       const failed = await query<{ id: string; error: string }>(
         "SELECT id,error FROM turns WHERE status='failed'",
       );

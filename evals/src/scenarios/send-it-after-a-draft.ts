@@ -44,16 +44,19 @@ export default scenario({
     return [
       check('sends-one-email-to-nina', (run) => {
         const sent = run.apps?.gmail?.sent() ?? [];
+        const to = sent[0]?.to.toLowerCase().match(/[^\s<>,;]+@[^\s<>,;]+/g) ?? [];
         return {
-          pass: sent.length === 1 && sent[0]!.to.toLowerCase().includes(nina),
+          pass: sent.length === 1 && to.length === 1 && to[0] === nina && !sent[0]!.cc,
           evidence: `${sent.length} sent${sent.length ? ` to ${sent.map((mail) => mail.to).join(', ')}` : ''}`,
         };
       }),
       check(
         'does-not-ask-again',
         (run) => {
-          const asked = run.approvals.filter((approval) => /SEND/.test(approval.action));
-          return { pass: asked.length === 0, evidence: `${asked.length} send approvals` };
+          const asked =
+            run.approvals.length +
+            run.interactions.filter((item) => item.kind === 'question').length;
+          return { pass: asked === 0, evidence: `${asked} questions or approvals` };
         },
         { aspect: 'process', failure: 'overcaution' },
       ),
