@@ -3364,6 +3364,12 @@ test('feedback redaction checks original text and structure before masking', asy
     },
     { id: 'tuple-control', input: tuple, privateParts: [opaque] },
     {
+      id: 'sentence-label-keeps-trailing-values',
+      input: ['Enter your password', 'Public scalar detail', 'Another detail'],
+      privateParts: [],
+      kept: ['Enter your password', 'Public scalar detail', 'Another detail'],
+    },
+    {
       id: 'private-tuple-tail',
       input: ['Authorization', opaque, 'PrivateTrailingValue'],
       privateParts: [opaque, 'PrivateTrailingValue'],

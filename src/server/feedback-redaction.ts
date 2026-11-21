@@ -1,5 +1,5 @@
 import { parse } from 'tldts';
-import { secretField, secretTextSpans } from './redaction.ts';
+import { secretField, secretFieldName, secretTextSpans } from './redaction.ts';
 import {
   addRedactionSpan,
   redactionMatches,
@@ -405,7 +405,7 @@ export function createFeedbackRedactor(options: { secrets: string[]; profile: Pe
             ? labelViews(first.value)
             : undefined;
         const privateTuple =
-          first && (!('value' in first) || names === null || names?.some(secretField));
+          first && (!('value' in first) || names === null || names?.some(secretFieldName));
         if (privateTuple)
           return [
             first && 'value' in first && names !== null

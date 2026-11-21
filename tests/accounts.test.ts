@@ -49,6 +49,7 @@ import {
   createRedactor,
   createTextRedactor,
   redactSecretText,
+  withoutSecretKeys,
 } from '../src/server/redaction.ts';
 
 test('decision failures retain bounded HTTP and response details', async (t) => {
@@ -3220,6 +3221,44 @@ test('secret redaction hides every bearer token character', () => {
   );
   const basic = Buffer.from('synthetic-user:synthetic-password').toString('base64');
   assert.equal(redactSecretText(`Rejected Basic ${basic}~tail`), 'Rejected [redacted]~tail');
+});
+
+test('secret redaction covers prefixed assignment names and object keys', () => {
+  const redact = createRedactor([]);
+  assert.equal(
+    redactSecretText('DATABASE_PASSWORD=hunter2hunter2'),
+    'DATABASE_PASSWORD=[redacted]',
+  );
+  assert.equal(redactSecretText('GITHUB_TOKEN=abcdef123456'), 'GITHUB_TOKEN=[redacted]');
+  assert.equal(
+    redactSecretText('https://example.test/?auth_token=abcd1234'),
+    'https://example.test/?auth_token=[redacted]',
+  );
+  assert.equal(
+    JSON.stringify(redact({ db_password: 'x', GITHUB_TOKEN: 'y', password: 'z' })),
+    '{"db_password":"[redacted]","GITHUB_TOKEN":"[redacted]","password":"[redacted]"}',
+  );
+  assert.deepEqual(withoutSecretKeys({ db_password: 'x', GITHUB_TOKEN: 'y', password: 'z' }), {
+    db_password: '[redacted]',
+    GITHUB_TOKEN: '[redacted]',
+    password: '[redacted]',
+  });
+  assert.equal(redactSecretText('span=safe japan=safe'), 'span=safe japan=safe');
+  assert.equal(
+    JSON.stringify(redact({ span: 'safe', japan: 'safe' })),
+    '{"span":"safe","japan":"safe"}',
+  );
+  assert.deepEqual(redact(['Enter your password', 'one', 'two']), [
+    'Enter your password',
+    'one',
+    'two',
+  ]);
+  assert.deepEqual(withoutSecretKeys(['Enter your password', 'one', 'two']), [
+    'Enter your password',
+    'one',
+    'two',
+  ]);
+  assert.deepEqual(redact(['password', 'one', 'two']), ['password', '[redacted]']);
 });
 
 test('secret redaction keeps valid tokens when another token is missing', () => {

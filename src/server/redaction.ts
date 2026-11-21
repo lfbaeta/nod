@@ -6,11 +6,18 @@ const hidden = '[redacted]';
 const secretNames =
   'password|passwd|pwd|passphrase|secret|clientsecret|authorization|proxyauthorization|cookie|setcookie|apikey|xapikey|xauthtoken|xcsrftoken|csrftoken|sessiontoken|accesskey|privatekey|signingkey|masterkey|vaultkey|token|accesstoken|refreshtoken|idtoken|bottoken|credential|credentials|otp|otpcode|verificationcode|totp|totpsecret|cvv|cvc|pan|cardnumber';
 const secretKey = new RegExp(`^(?:${secretNames})$`, 'i');
+const secretSuffix = new RegExp(
+  `(?:${secretNames
+    .split('|')
+    .filter((name) => name.length >= 5)
+    .join('|')})$`,
+  'i',
+);
 const secretAssignment = new RegExp(
-  String.raw`((["']?)\b(?:${secretNames
+  String.raw`((["']?)(?:[-_]|\b)(?:${secretNames
     .split('|')
     .map((name) => name.split('').join('[-_]?'))
-    .join('|')})\2\s*[:=]\s*)(?:"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'|[^\s,;}&]+)`,
+    .join('|')})["']?\s*[:=]\s*)(?:"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'|[^\s,;}&]+)`,
   'gi',
 );
 
@@ -32,8 +39,13 @@ const base64Data = /\bdata:[^,\s]+;base64,[A-Za-z0-9+/=]+/g;
 const tokenShapes = String.raw`\b(?:sk-(?:proj-|ant-)?[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{12,}|(?:AKIA|ASIA)[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{30,}|glpat-[A-Za-z0-9_-]{20,}|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)\b|${privateKeyStart}`;
 export const secretToken = new RegExp(tokenShapes);
 
-export function secretField(key: string) {
+export function secretFieldName(key: string) {
   return secretKey.test(key.replace(/[^a-z0-9]/gi, ''));
+}
+
+export function secretField(key: string) {
+  const normalized = key.replace(/[^a-z0-9]/gi, '');
+  return secretKey.test(normalized) || secretSuffix.test(normalized);
 }
 
 function validBasic(token: string) {
@@ -195,21 +207,16 @@ function compileRedactor(
       if (Buffer.isBuffer(item) || item instanceof Uint8Array) return '[binary omitted]';
       if (item instanceof Date) return Number.isFinite(item.getTime()) ? item.toISOString() : null;
       if (Array.isArray(item)) {
-        if (typeof item[0] === 'string' && secretKey.test(item[0].replace(/[^a-z0-9]/gi, '')))
-          return [text(item[0]), hidden];
+        if (typeof item[0] === 'string' && secretFieldName(item[0])) return [text(item[0]), hidden];
         const result = item.slice(0, 100).map((entry) => visit(entry, depth + 1));
         if (item.length > 100) result.push('[truncated]');
         return result;
       }
       const result: Record<string, unknown> = Object.create(null);
-      const namedSecret =
-        'name' in item &&
-        typeof item.name === 'string' &&
-        secretKey.test(item.name.replace(/[^a-z0-9]/gi, ''));
+      const namedSecret = 'name' in item && typeof item.name === 'string' && secretField(item.name);
       for (const [key, entry] of Object.entries(item).slice(0, 100)) {
-        const normalized = key.replace(/[^a-z0-9]/gi, '');
         result[text(key)] =
-          secretKey.test(normalized) || (namedSecret && key === 'value')
+          secretField(key) || (namedSecret && key === 'value')
             ? hidden
             : (key === 'data' &&
                   'type' in item &&
@@ -273,23 +280,17 @@ export function createCommandRedactor(secrets: string[]) {
 
 export function withoutSecretKeys(value: unknown): unknown {
   if (Array.isArray(value)) {
-    const namedSecret =
-      typeof value[0] === 'string' && secretKey.test(value[0].replace(/[^a-z0-9]/gi, ''));
+    const namedSecret = typeof value[0] === 'string' && secretFieldName(value[0]);
     return value.map((entry, index) =>
       namedSecret && index === 1 ? hidden : withoutSecretKeys(entry),
     );
   }
   if (!value || typeof value !== 'object') return value;
-  const namedSecret =
-    'name' in value &&
-    typeof value.name === 'string' &&
-    secretKey.test(value.name.replace(/[^a-z0-9]/gi, ''));
+  const namedSecret = 'name' in value && typeof value.name === 'string' && secretField(value.name);
   return Object.fromEntries(
     Object.entries(value).map(([key, entry]) => [
       key,
-      secretKey.test(key.replace(/[^a-z0-9]/gi, '')) || (namedSecret && key === 'value')
-        ? hidden
-        : withoutSecretKeys(entry),
+      secretField(key) || (namedSecret && key === 'value') ? hidden : withoutSecretKeys(entry),
     ]),
   );
 }
