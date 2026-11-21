@@ -160,14 +160,28 @@ export function cloudflareCredential(provider: ModelProvider, credential: ModelC
   return credential;
 }
 
+export function discoveryCause(error: unknown) {
+  if (Object(error).name === 'TimeoutError') return 'the request timed out';
+  let cause = error;
+  for (let depth = 0; depth < 4 && cause instanceof Error; depth++) {
+    const code = (cause as Error & { code?: unknown }).code;
+    if (typeof code === 'string' && /^(?:E[A-Z_]+|UND_ERR_[A-Z_]+)$/.test(code))
+      return `the connection failed (${code})`;
+    cause = cause.cause;
+  }
+  return error instanceof SyntaxError || Object(error).name === 'ZodError'
+    ? 'it returned an invalid model list'
+    : 'the connection failed';
+}
+
 export async function nativeCatalog(
   provider: ModelProvider,
   local: Model<Api>[],
   credential: ModelCredential,
   request: typeof fetch,
 ): Promise<Model<Api>[]> {
-  const failed = () =>
-    new Error(`${modelProviderNames[provider]} couldn’t load its models. Try again.`);
+  const failed = (cause = 'it returned an invalid model list') =>
+    new Error(`${modelProviderNames[provider]} couldn’t load its models: ${cause}. Try again.`);
   const denied = () =>
     new ModelAuthError(
       provider === 'cloudflare-ai-gateway'
@@ -175,32 +189,31 @@ export async function nativeCatalog(
         : `${modelProviderNames[provider]} didn’t accept this API key. Check its permissions and try again.`,
     );
   const read = async (url: string | URL, headers: Record<string, string>) => {
-    try {
-      const response = await request(url, {
-        headers,
-        redirect: 'error',
-        signal: AbortSignal.timeout(15000),
-      });
-      if (!response.ok) {
-        const error = await modelServiceError(
-          response,
-          `${modelProviderNames[provider]} model discovery`,
-          Object.values(headers).map((value) => value.replace(/^Bearer /, '')),
-        );
-        if (
-          response.status === 401 ||
-          response.status === 403 ||
-          (provider === 'google' && response.status === 400) ||
-          (provider === 'cloudflare-ai-gateway' && response.status === 404)
-        )
-          throw new ModelAuthError(`${denied().message} ${error.message}`);
-        throw error;
-      }
-      return (await response.json()) as unknown;
-    } catch (error) {
-      if (error instanceof ModelAuthError || error instanceof ModelServiceError) throw error;
-      throw failed();
+    const response = await request(url, {
+      headers,
+      redirect: 'error',
+      signal: AbortSignal.timeout(15000),
+    }).catch((error: unknown) => {
+      throw failed(discoveryCause(error));
+    });
+    if (!response.ok) {
+      const error = await modelServiceError(
+        response,
+        `${modelProviderNames[provider]} model discovery`,
+        Object.values(headers).map((value) => value.replace(/^Bearer /, '')),
+      );
+      if (
+        response.status === 401 ||
+        response.status === 403 ||
+        (provider === 'google' && response.status === 400) ||
+        (provider === 'cloudflare-ai-gateway' && response.status === 404)
+      )
+        throw new ModelAuthError(`${denied().message} ${error.message}`);
+      throw error;
     }
+    return (await response.json().catch((error: unknown) => {
+      throw failed(discoveryCause(error));
+    })) as unknown;
   };
   const parse = <T>(schema: z.ZodType<T>, value: unknown) => {
     const result = schema.safeParse(value);
