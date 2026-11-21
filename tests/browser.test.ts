@@ -8639,7 +8639,7 @@ test('analytics follow visible Settings sections, Apps tabs and the Scheduled pa
         const scroller = document.querySelector('.settings-scroll');
         Object.defineProperties(scroller, { scrollHeight: { value: 2000 }, clientHeight: { value: 400 } });
         document.querySelectorAll('.settings-category > h2').forEach((heading, index) => {
-          heading.getBoundingClientRect = () => ({ top: index * 100 });
+          heading.getBoundingClientRect = () => ({ top: [-480, 32, 560, 1040, 1520, 2000, 2480][index] });
         });
         await act(async () => {
           scroller.dispatchEvent(new Event('wheel'));
@@ -8685,6 +8685,112 @@ test('analytics follow visible Settings sections, Apps tabs and the Scheduled pa
         assert.ok(!JSON.stringify(sent).includes('PRIVATE_'));
       } finally {
         consent(false);
+        await act(async () => root.unmount());
+        pageDataCache.clear();
+        dom.window.close();
+      }
+    `,
+  });
+  assert.equal(result.exitCode, 0, result.stdout + result.stderr);
+});
+
+test('Settings nav highlights the last heading that has reached the top line', async () => {
+  const result = await runProcess(process.execPath, ['--import', 'tsx', '--input-type=module'], {
+    timeoutMs: 20_000,
+    input: String.raw`
+      import assert from 'node:assert/strict';
+      import { JSDOM } from 'jsdom';
+      const dom = new JSDOM('<!doctype html><div id="root"></div>', {
+        url: 'https://nod.fixture.invalid/settings', pretendToBeVisual: true,
+      });
+      Object.assign(globalThis, {
+        window: dom.window, document: dom.window.document,
+        IS_REACT_ACT_ENVIRONMENT: true, localStorage: dom.window.localStorage,
+        getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
+        requestAnimationFrame: dom.window.requestAnimationFrame.bind(dom.window),
+        cancelAnimationFrame: dom.window.cancelAnimationFrame.bind(dom.window),
+      });
+      for (const name of ['Node', 'Element', 'HTMLElement', 'HTMLInputElement', 'HTMLTextAreaElement',
+        'HTMLButtonElement', 'Event', 'CustomEvent', 'MutationObserver', 'NodeFilter', 'DocumentFragment'])
+        globalThis[name] = dom.window[name];
+      Object.defineProperty(globalThis, 'navigator', { configurable: true, value: dom.window.navigator });
+      window.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
+      window.HTMLElement.prototype.getClientRects = function() { return [{ top: 0, bottom: 40, left: 0, right: 640 }]; };
+      window.HTMLElement.prototype.scrollTo = function() {};
+      const responses = {
+        '/api/preferences': { quietHoursEnabled: false, quietStart: '22:00', quietEnd: '08:00',
+          locale: 'en-GB', timeZone: 'Europe/Lisbon', hourCycle: 'h23', speechReply: 'auto', speechVoice: null },
+        '/api/models': { connections: [], selection: null },
+        '/api/speech': { transcription: false, synthesis: false, voices: [], speechVoice: null, speechReply: 'auto' },
+        '/api/memory': { saving: true, sensitive: false, notes: [], skills: [], archive: [] },
+        '/api/computer-use': { available: false },
+        '/api/local-files/keep-out': { available: false, paths: [] },
+      };
+      globalThis.fetch = async (path) => Response.json(responses[String(path).split('?')[0]] ?? {});
+      const { createElement, act } = await import('react');
+      const { createRoot } = await import('react-dom/client');
+      const { AccountSettings } = await import('./src/web/components/account-settings.tsx');
+      const { pageDataCache } = await import('./src/web/lib/page-data-cache.ts');
+      const { setRequestAccount } = await import('./src/web/lib/api.ts');
+      setRequestAccount('synthetic-owner');
+      const account = { user: { id: 'synthetic-owner', email: null, name: 'Synthetic owner', avatarUrl: null },
+        theme: 'system', usageData: true, saving: false, onSettings() {}, async onTheme() {},
+        async onUsageData() {}, async onTraces() {} };
+      const root = createRoot(document.querySelector('#root'));
+      const settle = async check => {
+        for (let i = 0; i < 100 && !check(); i++)
+          await act(async () => new Promise(resolve => setTimeout(resolve, 10)));
+        assert.ok(check(), 'Expected settings to render');
+      };
+      const highlighted = () => document.querySelector('.settings-nav-item[aria-current="location"]').textContent;
+      try {
+        await act(async () => root.render(createElement(AccountSettings, {
+          account, open: true, initialTab: 'General', openRequest: 0, onOpenChange() {},
+        })));
+        await settle(() => document.querySelectorAll('.settings-category > h2').length === 7);
+        const scroller = document.querySelector('.settings-scroll');
+        const scrollerTop = 80;
+        scroller.getBoundingClientRect = () => ({ top: scrollerTop });
+        Object.defineProperties(scroller, {
+          scrollHeight: { value: 4000, configurable: true },
+          clientHeight: { value: 640, configurable: true },
+          scrollTop: { value: 1200, writable: true, configurable: true },
+        });
+        const tops = [
+          scrollerTop - 1800, scrollerTop - 1400, scrollerTop - 900, scrollerTop - 520,
+          scrollerTop + 32, scrollerTop + 760, scrollerTop + 1300,
+        ];
+        const place = () => document.querySelectorAll('.settings-category > h2').forEach((heading, index) => {
+          heading.getBoundingClientRect = () => ({ top: tops[index] });
+        });
+        const scroll = async () => {
+          await act(async () => {
+            scroller.dispatchEvent(new Event('wheel'));
+            scroller.dispatchEvent(new Event('scroll'));
+          });
+        };
+        place();
+        await scroll();
+        assert.equal(highlighted(), 'Memory');
+        tops[3] = scrollerTop - 16;
+        tops[4] = scrollerTop + 480;
+        place();
+        await scroll();
+        assert.equal(highlighted(), 'Voice & audio');
+        tops[0] = scrollerTop - 2200;
+        tops[1] = scrollerTop - 1700;
+        tops[2] = scrollerTop - 1100;
+        tops[3] = scrollerTop + 32 - 500;
+        tops[4] = scrollerTop + 32 + 400;
+        tops[5] = scrollerTop + 900;
+        tops[6] = scrollerTop + 1400;
+        place();
+        await scroll();
+        assert.equal(highlighted(), 'Voice & audio');
+        scroller.scrollTop = 4000 - 640;
+        await scroll();
+        assert.equal(highlighted(), 'Privacy & data');
+      } finally {
         await act(async () => root.unmount());
         pageDataCache.clear();
         dom.window.close();
