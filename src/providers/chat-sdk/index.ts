@@ -1,7 +1,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { Chat, ConsoleLogger, convertEmojiPlaceholders, type Root } from 'chat';
 import { TelegramAdapter, TelegramFormatConverter } from '@chat-adapter/telegram';
-import { WhatsAppAdapter, WhatsAppApiError, splitMessage } from '@chat-adapter/whatsapp';
+import { WhatsAppAdapter, WhatsAppApiError } from '@chat-adapter/whatsapp';
 import { createPostgresState } from '@chat-adapter/state-pg';
 import type { Pool } from 'pg';
 import { z } from 'zod';
@@ -26,8 +26,10 @@ import { modelServiceError } from '../model-error.ts';
 import {
   canDeliverWhatsAppLiteral,
   hasLiteralBlock,
+  splitText,
   telegramText,
   whatsappText,
+  whatsappTextLimit,
 } from './format.ts';
 import { contactCards, sharedLocation } from '../../shared/channel-content.ts';
 
@@ -135,8 +137,8 @@ class Telegram extends TelegramAdapter {
 
   chunks(text: string): string[] {
     const fit = (part: string): string[] =>
-      this.fits(part, 4096) ? [part] : chunks(part, Math.floor(part.length / 2)).flatMap(fit);
-    return chunks(text).flatMap(fit);
+      this.fits(part, 4096) ? [part] : splitText(part, Math.floor(part.length / 2)).flatMap(fit);
+    return splitText(text, telegramTextLimit).flatMap(fit);
   }
 
   canDeliverLiteral(text: string) {
@@ -245,9 +247,10 @@ class WhatsApp extends WhatsAppAdapter {
   }
 
   chunks(text: string) {
-    return splitMessage(convertEmojiPlaceholders(whatsappText(text), 'whatsapp')).filter((part) =>
-      part.trim(),
-    );
+    return splitText(
+      convertEmojiPlaceholders(whatsappText(text), 'whatsapp'),
+      whatsappTextLimit,
+    ).filter((part) => part.trim());
   }
 
   async typing(messageId: string) {
@@ -302,29 +305,6 @@ const whatsappEnvelope = z.object({
     }),
   ),
 });
-
-function chunks(text: string, limit = telegramTextLimit) {
-  const parts: string[] = [];
-  let rest = text;
-  const graphemes = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
-  while (rest.length > limit) {
-    const slice = rest.slice(0, limit);
-    let cut = slice.lastIndexOf('\n\n');
-    if (cut < limit / 2) cut = slice.lastIndexOf('\n');
-    if (cut < limit / 2) cut = limit;
-    let boundary = 0;
-    for (const { index, segment } of graphemes.segment(rest)) {
-      if (index + segment.length > cut) break;
-      boundary = index + segment.length;
-    }
-    cut = boundary || cut;
-    const last = rest.charCodeAt(cut - 1);
-    if (last >= 0xd800 && last <= 0xdbff) cut--;
-    parts.push(rest.slice(0, cut).trimEnd());
-    rest = rest.slice(cut).trimStart();
-  }
-  return rest ? [...parts, rest] : parts;
-}
 
 function sameSecret(actual: string | undefined, expected: string) {
   if (!actual) return false;

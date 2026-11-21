@@ -13,7 +13,6 @@ import makeWASocket, {
   type WAMessage,
 } from '@whiskeysockets/baileys';
 import { randomUUID } from 'node:crypto';
-import { splitMessage } from '@chat-adapter/whatsapp';
 import type { ChannelSession, ChannelSessionStore } from '../../ports/channel-session.ts';
 import { MessagingAttachmentError } from '../../ports/messaging.ts';
 import type {
@@ -25,7 +24,7 @@ import type {
 } from '../../ports/messaging.ts';
 import type { ChannelLinkStatus } from '../../shared/contracts.ts';
 import { contactAttachment, locationAttachment } from './content.ts';
-import { canDeliverWhatsAppLiteral, whatsappText } from './format.ts';
+import { canDeliverWhatsAppLiteral, splitText, whatsappText, whatsappTextLimit } from './format.ts';
 import { contactCards, sharedLocation } from '../../shared/channel-content.ts';
 
 const silent: SocketConfig['logger'] = {
@@ -706,7 +705,7 @@ export function createWhatsAppLinkedTransport(options: {
         text.length <= 1024
           ? text
           : '';
-      for (const part of splitMessage(caption ? '' : text))
+      for (const part of splitText(caption ? '' : text, whatsappTextLimit))
         if (part.trim())
           ids.push(await send(input.threadId, { text: part, linkPreview: null }, quote));
       for (const file of input.attachments ?? []) {
@@ -787,11 +786,11 @@ export function createWhatsAppLinkedTransport(options: {
       }
       if (unsent.length) {
         if (caption)
-          for (const part of splitMessage(text))
+          for (const part of splitText(text, whatsappTextLimit))
             if (part.trim())
               ids.push(await send(input.threadId, { text: part, linkPreview: null }, quote));
         const notice = await input.attachmentFailure?.(unsent.map((name) => ({ name })));
-        for (const part of splitMessage(whatsappText(notice ?? '')))
+        for (const part of splitText(whatsappText(notice ?? ''), whatsappTextLimit))
           if (part.trim())
             ids.push(await send(input.threadId, { text: part, linkPreview: null }, quote));
       }
