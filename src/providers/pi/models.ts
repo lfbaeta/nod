@@ -406,15 +406,21 @@ export function createPiModelBackend(options: { fetch?: typeof fetch } = {}): Mo
     }
     return models;
   }
-  async function cloudResponse(url: string, init: RequestInit, rejected: string) {
+  async function cloudResponse(
+    url: string,
+    init: RequestInit,
+    service: string,
+    key: string,
+    rejected: string,
+  ) {
     const response = await request(url, {
       ...init,
       redirect: 'error',
       signal: AbortSignal.timeout(15000),
     });
     if ([400, 401, 403, 404].includes(response.status)) {
-      await response.body?.cancel();
-      throw new ModelAuthError(rejected);
+      const error = await modelServiceError(response, `${service} model discovery`, [key]);
+      throw new ModelAuthError(`${rejected} ${error.message}`);
     }
     return response;
   }
@@ -427,6 +433,8 @@ export function createPiModelBackend(options: { fetch?: typeof fetch } = {}): Mo
         await cloudResponse(
           `${root}${path}`,
           { headers: { Authorization: `Bearer ${credential.key}` } },
+          'Amazon Bedrock',
+          credential.key,
           'Amazon Bedrock didn’t accept this key in that Region. Check both, and that the key can list models.',
         ),
       );
@@ -468,8 +476,10 @@ export function createPiModelBackend(options: { fetch?: typeof fetch } = {}): Mo
       },
     );
     if ([400, 401, 403].includes(response.status)) {
-      await response.body?.cancel();
-      throw new ModelAuthError('Google Vertex AI didn’t accept this API key.');
+      const error = await modelServiceError(response, 'Google Vertex AI model discovery', [
+        credential.key,
+      ]);
+      throw new ModelAuthError(`Google Vertex AI didn’t accept this API key. ${error.message}`);
     }
     if (!response.ok && response.status !== 404)
       throw await modelServiceError(response, 'Google Vertex AI model discovery', [credential.key]);
@@ -484,6 +494,8 @@ export function createPiModelBackend(options: { fetch?: typeof fetch } = {}): Mo
       await cloudResponse(
         `${credential.url}/models`,
         { headers: { 'api-key': credential.key } },
+        'Azure OpenAI',
+        credential.key,
         'This Azure OpenAI endpoint didn’t accept the key. Check the endpoint and the key.',
       ),
     );
