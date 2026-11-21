@@ -680,6 +680,76 @@ test('About accepts multiple choices and records only confirmed sharing', async 
   assert.equal(readStored('about-shared'), null);
 });
 
+test('the task title editor keeps its draft when Escape cancels an IME candidate', async (t) => {
+  const { JSDOM } = await import('jsdom');
+  const { act, createElement } = await import('react');
+  const dom = new JSDOM('<!doctype html><div id="root"></div>', {
+    url: 'https://nod.example.test/tasks',
+  });
+  const globals = {
+    window: dom.window,
+    document: dom.window.document,
+    HTMLElement: dom.window.HTMLElement,
+    HTMLInputElement: dom.window.HTMLInputElement,
+    Element: dom.window.Element,
+    Node: dom.window.Node,
+    Event: dom.window.Event,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  };
+  const originals = new Map(
+    Object.keys(globals).map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]),
+  );
+  for (const [key, value] of Object.entries(globals))
+    Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
+  const { createRoot } = await import('react-dom/client');
+  const root = createRoot(dom.window.document.getElementById('root')!);
+  t.after(async () => {
+    await act(async () => root.unmount());
+    dom.window.close();
+    for (const [key, value] of originals)
+      if (value) Object.defineProperty(globalThis, key, value);
+      else Reflect.deleteProperty(globalThis, key);
+  });
+  const { InlineName } = await import('../src/web/components/inline-name.tsx');
+  await act(async () =>
+    root.render(
+      createElement(InlineName, {
+        value: 'Synthetic title',
+        label: 'task title',
+        save: async () => {},
+      }),
+    ),
+  );
+  const document = dom.window.document;
+  await act(async () => document.querySelector<HTMLElement>('button.inline-name')!.click());
+  const input = document.querySelector('input')!;
+  const press = async (init: KeyboardEventInit) =>
+    act(async () => {
+      input.dispatchEvent(
+        new dom.window.KeyboardEvent('keydown', {
+          key: 'Escape',
+          bubbles: true,
+          cancelable: true,
+          ...init,
+        }),
+      );
+    });
+  const setValue = Object.getOwnPropertyDescriptor(
+    dom.window.HTMLInputElement.prototype,
+    'value',
+  )!.set!;
+  await act(async () => {
+    setValue.call(input, 'Synthetic draft');
+    input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  });
+  for (const composing of [{ isComposing: true }, { keyCode: 229 }]) {
+    await press(composing);
+    assert.equal(document.querySelector('input')?.value, 'Synthetic draft');
+  }
+  await press({});
+  assert.equal(document.querySelector('input'), null);
+});
+
 test('Join sends fixed answers only with a matching confirmed share', async (t) => {
   const { JSDOM } = await import('jsdom');
   const { act, createElement } = await import('react');
