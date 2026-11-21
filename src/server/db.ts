@@ -140,7 +140,7 @@ export async function initializeDatabase() {
     ALTER TABLE turns ADD COLUMN IF NOT EXISTS handoff_browser_id text;
     DROP INDEX IF EXISTS messages_hidden_thread;
     CREATE INDEX IF NOT EXISTS messages_hidden_thread_recent ON messages(owner_id,thread_id,hidden_at DESC,id DESC) WHERE hidden_at IS NOT NULL;
-    CREATE INDEX IF NOT EXISTS messages_owner_agent_reaction_time ON messages(owner_id,assistant_reacted_at DESC) WHERE assistant_reacted_at IS NOT NULL;
+    DROP INDEX IF EXISTS messages_owner_agent_reaction_time;
     CREATE TABLE IF NOT EXISTS approvals (
       id uuid PRIMARY KEY, owner_id text NOT NULL, thread_id uuid REFERENCES threads(id),
       turn_id uuid REFERENCES turns(id), execution_turn_id uuid REFERENCES turns(id),

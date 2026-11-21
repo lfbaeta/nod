@@ -1011,11 +1011,11 @@ export function createLedger({
       AND count(*) FILTER (WHERE ${unpricedZero})=0`;
     const { rows } = await pool.query<WorkUsage & { recordedUsd: number; work: boolean }>(
       `WITH priced AS (
-        SELECT m.turn_id,u.source IN ('task','schedule') AS work,
-          row_number() OVER (PARTITION BY u.source IN ('task','schedule')
+        SELECT m.turn_id,(u.source IN ('task','schedule') OR u.task_id IS NOT NULL) AS work,
+          row_number() OVER (PARTITION BY u.source IN ('task','schedule') OR u.task_id IS NOT NULL
             ORDER BY max(m.created_at) DESC,m.turn_id DESC) AS position
         FROM model_usage m JOIN turns u ON u.id=m.turn_id AND u.owner_id=m.owner_id
-        WHERE m.owner_id=$1 AND u.status='succeeded' GROUP BY m.turn_id,u.source
+        WHERE m.owner_id=$1 AND u.status='succeeded' GROUP BY m.turn_id,u.source,u.task_id
         HAVING ${priced}
       ), recent AS (SELECT turn_id,work FROM priced WHERE position<=20),
       candidates AS (

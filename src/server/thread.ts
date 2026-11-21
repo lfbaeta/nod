@@ -1604,8 +1604,9 @@ async function failTurn(
               OR (author.created_at,author.id)<(SELECT created_at,id FROM origin)
               OR (author.id IS NULL AND m.created_at<(SELECT created_at FROM origin)))
           ORDER BY m.created_at DESC,m.id DESC LIMIT 1) AS latest_user_message_id
-         ,(u.outside_action_at IS NOT NULL OR EXISTS (SELECT 1 FROM approvals a WHERE a.owner_id=u.owner_id
-           AND u.id IN (a.turn_id,a.execution_turn_id) AND a.status IN ('executing','uncertain','executed'))) AS outside_action
+         ,(EXISTS (SELECT 1 FROM turns x JOIN chain c ON c.id=x.id WHERE x.outside_action_at IS NOT NULL)
+           OR EXISTS (SELECT 1 FROM approvals a JOIN chain c ON c.id IN (a.turn_id,a.execution_turn_id)
+             WHERE a.owner_id=u.owner_id AND a.status IN ('executing','uncertain','completed'))) AS outside_action
          FROM turns u WHERE u.id=$1 AND u.owner_id=$2 AND u.status='running' FOR UPDATE`,
         [turnId, ownerId, thread.id],
       )

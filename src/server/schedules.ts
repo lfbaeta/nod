@@ -812,10 +812,13 @@ export function createSchedules(dependencies: ScheduleDependencies) {
     const recentTurnMedian = async (target: WorkPrice | undefined) => {
       const recent = await (fallback ??=
         dependencies.recentTurnUsage?.(turnId, target !== undefined) ?? Promise.resolve([]));
-      const work = recent.filter((sample) => sample.work);
-      const samples = (work.length ? work : recent)
-        .map((sample) => forecast(sample, sample.recordedUsd, target))
-        .filter(hasPrice)
+      const priced = recent.flatMap((sample) => {
+        const cost = forecast(sample, sample.recordedUsd, target);
+        return hasPrice(cost) ? [{ cost, work: sample.work }] : [];
+      });
+      const work = priced.filter((sample) => sample.work);
+      const samples = (work.length ? work : priced)
+        .map((sample) => sample.cost)
         .sort((a, b) => a - b);
       if (!samples.length) return [];
       const middle = Math.floor(samples.length / 2);
