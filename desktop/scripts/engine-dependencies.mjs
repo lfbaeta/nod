@@ -141,6 +141,7 @@ export async function copyEngineDependencies({
       const item = packages.get(path);
       if (item && (!supports(item.os, platform) || !supports(item.cpu, arch))) return false;
     }
+    if (/\/@evan\/opus\/node(?:\/|$)/.test(normalized)) return false;
     const browserBinary = normalized.match(/\/agent-browser\/bin\/agent-browser-([^/]+)$/);
     if (browserBinary)
       return browserBinary[1] === `${platform}-${arch}${platform === 'win32' ? '.exe' : ''}`;

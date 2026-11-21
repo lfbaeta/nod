@@ -1,3 +1,81 @@
+import { createRequire } from 'node:module';
+
+const oggCrc = Uint32Array.from({ length: 256 }, (_, index) => {
+  let crc = index << 24;
+  for (let bit = 0; bit < 8; bit++) crc = (crc << 1) ^ (crc < 0 ? 0x04c11db7 : 0);
+  return crc >>> 0;
+});
+
+export function encodeVoiceNote(samples: Float32Array, sampleRate: 24000) {
+  const { Encoder } = createRequire(import.meta.url)('@evan/opus/wasm/index.js') as {
+    Encoder: new (options: { channels: 1; sample_rate: number; application: 'voip' }) => {
+      ctl(command: number): number;
+      encode(pcm: Int16Array): Uint8Array;
+      drop(): void;
+    };
+  };
+  const encoder = new Encoder({ channels: 1, sample_rate: sampleRate, application: 'voip' });
+  try {
+    const frame = sampleRate / 50;
+    const scale = 48000 / sampleRate;
+    const lookahead = encoder.ctl(4027);
+    const pages: Buffer[] = [];
+    const page = (packets: Uint8Array[], granule: number, flags: number) => {
+      const lacing = packets.flatMap((packet) => [
+        ...Array<number>(Math.floor(packet.length / 255)).fill(255),
+        packet.length % 255,
+      ]);
+      const header = Buffer.alloc(27 + lacing.length);
+      header.write('OggS');
+      header[5] = flags;
+      header.writeBigUInt64LE(BigInt(granule), 6);
+      header.writeUInt32LE(0x4e6f64, 14);
+      header.writeUInt32LE(pages.length, 18);
+      header[26] = lacing.length;
+      header.set(lacing, 27);
+      const bytes = Buffer.concat([header, ...packets]);
+      let crc = 0;
+      for (const value of bytes) crc = ((crc << 8) ^ oggCrc[((crc >>> 24) ^ value) & 255]) >>> 0;
+      bytes.writeUInt32LE(crc, 22);
+      pages.push(bytes);
+    };
+    const head = Buffer.alloc(19);
+    head.write('OpusHead');
+    head[8] = 1;
+    head[9] = 1;
+    head.writeUInt16LE(lookahead * scale, 10);
+    head.writeUInt32LE(sampleRate, 12);
+    page([head], 0, 2);
+    const tags = Buffer.alloc(16);
+    tags.write('OpusTags');
+    page([tags], 0, 0);
+    const frames = Math.ceil((samples.length + lookahead) / frame);
+    let packets: Uint8Array[] = [];
+    let segments = 0;
+    for (let index = 0; index < frames; index++) {
+      const pcm = new Int16Array(frame);
+      for (let offset = 0; offset < frame; offset++)
+        pcm[offset] = Math.max(-1, Math.min(1, samples[index * frame + offset] ?? 0)) * 32767;
+      const packet = encoder.encode(pcm);
+      const last = index === frames - 1;
+      packets.push(packet);
+      segments += Math.floor(packet.length / 255) + 1;
+      if (last || packets.length === 50 || segments > 200) {
+        page(
+          packets,
+          last ? (lookahead + samples.length) * scale : (index + 1) * frame * scale,
+          last ? 4 : 0,
+        );
+        packets = [];
+        segments = 0;
+      }
+    }
+    return Buffer.concat(pages);
+  } finally {
+    encoder.drop();
+  }
+}
+
 export async function decodeLocalAudio(bytes: Uint8Array, mimeType: string) {
   let input = new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const mime = mimeType.split(';')[0].trim();

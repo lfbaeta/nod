@@ -80,6 +80,9 @@ importers:
       '@earendil-works/pi-coding-agent':
         specifier: 1.5.2
         version: 1.5.2(patch_hash=d0bb250616598663804958959a0bd72f2872a2537f264616aced3f9c5bf3c6c7)(@aws-sdk/credential-provider-node@3.972.88)(@modelcontextprotocol/sdk@1.32.1(@cfworker/json-schema@4.1.1)(zod@4.6.7))(@smithy/signature-v4@5.7.4)(ws@8.22.0)(zod@4.6.7)
+      '@evan/opus':
+        specifier: 1.0.3
+        version: 1.0.3
       '@fastify/middie':
         specifier: ^9.3.6
         version: 9.3.6
@@ -798,6 +801,9 @@ packages:
 
   '@eshaz/web-worker@1.2.2':
     resolution: {integrity: sha512-WxXiHFmD9u/owrzempiDlBB1ZYqiLnm9s6aPc8AlFQalq2tKmqdmMr9GXOupDgzXtqnBipj8Un0gkIm7Sjf8mw==}
+
+  '@evan/opus@1.0.3':
+    resolution: {integrity: sha512-ADfwIad83W1LuiZDNMjDMDNQRsPz8rj5xnDLExhVWTnA5wGJCLntOn12Ir5rxGBqdfo10QhnNVdd2+gXiZ6xCg==}
 
   '@exodus/bytes@1.16.0':
     resolution: {integrity: sha512-IcpW84uEn3N7ETtNZMlxKhfl6Pec8rUNGOTBtWbK1FKhJxIFAptZyVrvVRVBimAJxJCgc3PxepxkdWWG4DVzfA==}
@@ -5530,6 +5536,8 @@ snapshots:
     optional: true
 
   '@eshaz/web-worker@1.2.2': {}
+
+  '@evan/opus@1.0.3': {}
 
   '@exodus/bytes@1.16.0(@noble/hashes@2.4.0)':
     optionalDependencies:

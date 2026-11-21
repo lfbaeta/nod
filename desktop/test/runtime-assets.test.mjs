@@ -2301,6 +2301,7 @@ test('packaged engine loads dynamic dependencies and binary links outside the ch
         'synthetic-linux': '1.0.0',
         '@synthetic/intel': '1.0.0',
         'onnxruntime-node': '1.0.0',
+        '@evan/opus': '1.0.0',
       },
       devDependencies: { 'synthetic-tool': '1.0.0' },
     }),
@@ -2341,8 +2342,16 @@ test('packaged engine loads dynamic dependencies and binary links outside the ch
       await writeFile(join(directory, 'onnxruntime_binding.node'), 'synthetic native binary');
     }
   }
+  const opus = join(source, 'node_modules', '@evan', 'opus');
+  for (const file of ['node/x64-linux.node', 'node/arm64-darwin.node', 'wasm/opus.wasm']) {
+    await mkdir(dirname(join(opus, file)), { recursive: true });
+    await writeFile(join(opus, file), 'synthetic codec binary');
+  }
+  await writeFile(join(opus, 'package.json'), JSON.stringify({ name: '@evan/opus' }));
   await copyEngineDependencies({ root: source, target });
+  assert.ok((await stat(join(target, 'node_modules/@evan/opus/wasm/opus.wasm'))).isFile());
   for (const path of [
+    '@evan/opus/node',
     'synthetic-linux',
     '@synthetic/intel',
     'synthetic-tool',

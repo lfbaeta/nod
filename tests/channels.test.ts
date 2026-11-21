@@ -32,7 +32,7 @@ import {
   readElevenLabsVoices,
 } from '../src/providers/elevenlabs/speech.ts';
 import { createLocalSpeechProvider } from '../src/providers/local-speech/index.ts';
-import { decodeLocalAudio } from '../src/providers/local-speech/audio.ts';
+import { decodeLocalAudio, encodeVoiceNote } from '../src/providers/local-speech/audio.ts';
 import { phonemizeSpeech } from '../src/providers/local-speech/phonemizer.ts';
 import {
   createOpenRouterSpeechProvider,
@@ -3557,7 +3557,7 @@ test('on-device speech starts only when enabled, isolates the worker environment
   await Promise.all([cancelled, queued, stopped]);
   assert.equal(children[0].signalCode, 'SIGKILL');
   assert.equal(children.length, 1);
-  assert.equal((await provider.synthesize('Synthetic new reply.')).mimeType, 'audio/wav');
+  assert.equal((await provider.synthesize('Synthetic new reply.')).mimeType, 'audio/ogg');
   assert.equal(children.length, 2);
   await assert.rejects(service.synthesize('Synthetic worker exit.'), (error: unknown) => {
     assert.equal((error as { statusCode?: number }).statusCode, 400);
@@ -3662,6 +3662,7 @@ const cache = process.argv[3];
 const require = createRequire(workerPath);
 const hf = await import(pathToFileURL(require.resolve('@huggingface/transformers')));
 const { phonemizeSpeech } = await import(new URL('./phonemizer.ts', pathToFileURL(workerPath)));
+const { encodeVoiceNote } = await import(new URL('./audio.ts', pathToFileURL(workerPath)));
 const tokenizer = new hf.PreTrainedTokenizer({
   model: { type: 'WordLevel', vocab: { '[UNK]': 0 }, unk_token: '[UNK]' },
   added_tokens: [], normalizer: null, post_processor: null, decoder: null,
@@ -3694,7 +3695,7 @@ const modules = {
   },
   '@pedrobef/vozz/g2p': { phonemize: () => { throw new Error('unused language'); } },
   './phonemizer.ts': { phonemizeSpeech }, './models.ts': { localSpeechModels: [] },
-  './audio.ts': { decodeLocalAudio: () => { throw new Error('unused decoder'); } },
+  './audio.ts': { decodeLocalAudio: () => { throw new Error('unused decoder'); }, encodeVoiceNote },
   './cache.ts': { localSpeechCacheMarker: '{}', localTranscriptionCacheMarker: '{}', matchesSpeechFile: async () => true, verifySpeechCache: async () => true },
 };
 await worker.link(async (specifier) => {
@@ -3770,7 +3771,7 @@ try {
   assert.equal(result.exitCode, 0, result.stderr);
 });
 
-test('local speech exports chunked audio as WAV and finds the silence token without loading a model', async () => {
+test('local speech exports chunked audio as a mono Ogg Opus voice note and finds the silence token without loading a model', async () => {
   const { RawAudio, PreTrainedTokenizer } = await import('@huggingface/transformers');
   const samples = Float32Array.from(
     { length: 24000 },
@@ -3778,11 +3779,15 @@ test('local speech exports chunked audio as WAV and finds the silence token with
   );
   const audio = new RawAudio([samples.subarray(0, 5000), samples.subarray(5000)], 24000);
   assert.deepEqual(audio.data, samples);
-  const bytes = new Uint8Array(await audio.toBlob().arrayBuffer());
-  const decoded = await decodeLocalAudio(bytes, 'audio/wav');
-  assert.equal(decoded.length, 16000);
+  const bytes = encodeVoiceNote(audio.data, 24000);
+  assert.equal(bytes.subarray(0, 4).toString(), 'OggS');
+  assert.equal(bytes.subarray(28, 36).toString(), 'OpusHead');
+  assert.equal(bytes[37], 1);
+  assert.ok(bytes.length < 8000);
+  const decoded = await decodeLocalAudio(bytes, 'audio/ogg');
+  assert.ok(Math.abs(decoded.length - 16000) < 160);
   const rms = Math.sqrt(decoded.reduce((sum, value) => sum + value * value, 0) / decoded.length);
-  assert.ok(rms > 0.17 && rms < 0.18);
+  assert.ok(rms > 0.16 && rms < 0.19);
   const tokenizer = new PreTrainedTokenizer(
     {
       model: {

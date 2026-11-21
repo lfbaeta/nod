@@ -12,7 +12,7 @@ import {
 import { phonemize } from '@pedrobef/vozz/g2p';
 import { phonemizeSpeech } from './phonemizer.ts';
 import { localSpeechModels } from './models.ts';
-import { decodeLocalAudio } from './audio.ts';
+import { decodeLocalAudio, encodeVoiceNote } from './audio.ts';
 import {
   localSpeechCacheMarker,
   localTranscriptionCacheMarker,
@@ -189,7 +189,7 @@ async function synthesize(text: string, voice: LocalVoice) {
     samples.set(chunk, offset);
     offset += chunk.length;
   }
-  return new Uint8Array(await new RawAudio(samples, 24000).toBlob().arrayBuffer());
+  return encodeVoiceNote(samples, 24000);
 }
 
 async function detectLanguage(samples: Float32Array) {

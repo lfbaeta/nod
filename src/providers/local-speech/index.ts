@@ -403,7 +403,7 @@ export function createLocalSpeechProvider(options: {
           signal,
         );
         if (reply.type !== 'audio') throw new SpeechProviderError('Local speech failed.');
-        return { bytes: Buffer.from(reply.bytes), mimeType: 'audio/wav', fileName: 'reply.wav' };
+        return { bytes: Buffer.from(reply.bytes), mimeType: 'audio/ogg', fileName: 'reply.ogg' };
       });
     },
     async transcribe(audio, signal, report) {
