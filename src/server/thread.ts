@@ -1638,7 +1638,7 @@ async function failTurn(
     typeof presented === 'string' && presented.trim()
       ? presented
       : error === interrupted
-        ? `I was interrupted before I finished${work ? ` “${work}”` : ''}. ${turn.outside_action ? 'Something I started outside Nod may not have finished, so check it before you ask me to continue.' : 'Nothing was sent or changed since your last message. Reply to continue.'}`
+        ? `I was interrupted before I finished${work ? ` “${work}”` : ''}. ${turn.outside_action ? 'Something I started outside Nod may not have finished, so check it before you ask me to continue.' : 'Nothing was sent, submitted or deleted since your last message. Reply to continue.'}`
         : `I couldn't finish ${work ? `“${work}”` : 'this'}. ${error}${next && (work || failure !== 'offline') ? ` ${next}` : ''}`;
   const message =
     failure === 'model'

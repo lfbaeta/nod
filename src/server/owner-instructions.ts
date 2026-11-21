@@ -275,8 +275,12 @@ export async function captureOwnerInstructions(
                AND EXISTS (SELECT 1 FROM turns c WHERE c.id=m.turn_id AND c.owner_id=$1 AND c.channel=latest.channel)))
              AND m.turn_id IS NOT NULL
            ORDER BY m.created_at DESC,m.id DESC LIMIT 1)
-         SELECT id,text,presentation FROM answered WHERE NOT ${withdrawnSql('answered')}`,
-      [ownerId, threadId, latest.id, since],
+         SELECT id,text,presentation FROM answered WHERE NOT ${withdrawnSql('answered')}
+           AND ($5::uuid IS NULL
+             OR EXISTS (SELECT 1 FROM turns u WHERE u.owner_id=$1 AND u.id=answered.turn_id AND to_jsonb(u)->>'task_id'=$5::text)
+             OR EXISTS (SELECT 1 FROM tasks t WHERE t.id=$5::uuid AND t.owner_id=$1
+               AND (t.message_id=answered.id OR t.source_message_id=$3::uuid)))`,
+      [ownerId, threadId, latest.id, since, taskId],
     )
   ).rows[0];
   const visual = answered && presentationSchema.safeParse(answered.presentation);
