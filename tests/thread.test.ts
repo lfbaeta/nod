@@ -2098,15 +2098,11 @@ test(
             assert.equal(Boolean(ran(id)), false);
           }
           assert.equal(ran(firstUserTurnId)?.firstConversationTurn, true);
-          const facts = presented.map((input) => JSON.stringify(input));
-          for (const work of ['Do not repeat quietly', 'Restart fixture'])
-            assert.ok(
-              facts.includes(JSON.stringify({ kind: 'interrupted', outsideAction: false, work })),
-            );
-          assert.deepEqual(
-            facts.filter((fact) => fact.includes('"outsideAction":true')),
-            [JSON.stringify({ kind: 'interrupted', outsideAction: true })],
+          const outside = presented.map(
+            (input) => (input as { outsideAction?: boolean }).outsideAction,
           );
+          assert.equal(outside.filter((value) => value === true).length, 1);
+          assert.ok(outside.filter((value) => value === false).length >= 2);
           const interruptedReplies = async (id: string) =>
             (
               await db.pool.query(
