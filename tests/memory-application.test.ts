@@ -378,6 +378,45 @@ test(
       );
       assert.ok(!(await memoryFile()).includes('4111'));
 
+      const nul = 'Synthetic\u0000text';
+      for (const [method, url, payload] of [
+        ['POST', '/api/messages', { clientMessageId: randomUUID(), text: nul }],
+        ['PATCH', '/api/preferences', { rules: nul }],
+        ['PATCH', '/api/preferences', { notificationRule: nul }],
+        [
+          'POST',
+          '/api/schedules',
+          {
+            title: nul,
+            prompt: 'Synthetic',
+            kind: 'recurring',
+            cron: '0 9 * * *',
+            timeZone: 'UTC',
+          },
+        ],
+        [
+          'POST',
+          '/api/schedules',
+          {
+            title: 'Synthetic',
+            prompt: nul,
+            kind: 'recurring',
+            cron: '0 9 * * *',
+            timeZone: 'UTC',
+          },
+        ],
+        ['GET', '/api/messages/search?q=%00', undefined],
+      ] as const) {
+        const refused = await application.app.inject({
+          method,
+          url,
+          headers: { ...headers, ...(payload ? { 'content-type': 'application/json' } : {}) },
+          payload,
+        });
+        assert.equal(refused.statusCode, 400, `${method} ${url}`);
+        assert.match(refused.json().error, /null character/);
+      }
+
       const explicit = 'Remember that I prefer short synthetic reports.';
       rememberAnswer = (input) => ({ ops: keep(input, [explicit], 'preferences') });
       const explicitTurn = await ask(explicit, [learn()]);

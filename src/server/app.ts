@@ -297,7 +297,8 @@ export async function createApp(dependencies: AppDependencies = {}) {
       error instanceof Error
         ? (error as Error & { statusCode?: number; retryable?: boolean; code?: string })
         : undefined;
-    const status = error instanceof z.ZodError ? 400 : known?.statusCode || 500;
+    const nullCharacter = known?.code === '22021' && /: 0x00$/.test(known.message);
+    const status = error instanceof z.ZodError || nullCharacter ? 400 : known?.statusCode || 500;
     const messageTooLong =
       (request.routeOptions.url === '/api/messages' ||
         request.routeOptions.url === '/api/messages/audio') &&
@@ -321,11 +322,13 @@ export async function createApp(dependencies: AppDependencies = {}) {
       ...(messageTooLong ? { code: 'message_too_long' } : {}),
       error: messageTooLong
         ? messageTooLongError
-        : error instanceof z.ZodError
-          ? 'Check the supplied values.'
-          : status < 500
-            ? known?.message
-            : 'This request could not be completed. Check the local service and try again.',
+        : nullCharacter
+          ? 'Text can’t contain a null character. Remove it and try again.'
+          : error instanceof z.ZodError
+            ? 'Check the supplied values.'
+            : status < 500
+              ? known?.message
+              : 'This request could not be completed. Check the local service and try again.',
     });
   });
   await app.register(rateLimit, {
