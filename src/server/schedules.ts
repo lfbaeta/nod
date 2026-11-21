@@ -823,6 +823,26 @@ export function createSchedules(dependencies: ScheduleDependencies) {
     };
     const from = now();
     const month = 30 * 86_400_000;
+    const runsPerMonth = (row: ScheduleRow) => {
+      const times: number[] = [];
+      try {
+        while (
+          times.length < 200 &&
+          (times.length < 2 || times.at(-1)! - times[0]! < 365 * 86_400_000)
+        ) {
+          const page = scheduler.previewSchedule(row.cron!, {
+            tz: row.timeZone,
+            count: times.length ? Math.min(20, 200 - times.length) : 2,
+            from: new Date(times.at(-1) ?? from.getTime()),
+          });
+          if (!page.length) break;
+          times.push(...page.map((date) => date.getTime()));
+        }
+      } catch {
+        if (times.length < 2) return null;
+      }
+      return times.length < 2 ? null : ((times.length - 1) * month) / (times.at(-1)! - times[0]!);
+    };
     for (const row of recurring) {
       const target = dependencies.workPricing?.(row.model);
       if (target?.plan || (dependencies.workPricing && !target)) continue;
@@ -834,12 +854,8 @@ export function createSchedules(dependencies: ScheduleDependencies) {
           ? recent
           : await recentTurnMedian(target);
       if (!priced.some((cost) => cost > 0)) continue;
-      const upcoming = scheduler.previewSchedule(row.cron!, { tz: row.timeZone, count: 200, from });
-      const last = upcoming.at(-1)?.getTime();
-      const count =
-        last !== undefined && last - from.getTime() < month
-          ? (upcoming.length * month) / Math.max(last - from.getTime(), 1)
-          : upcoming.filter((date) => date.getTime() - from.getTime() <= month).length;
+      const count = runsPerMonth(row);
+      if (count === null) continue;
       monthly.set(row.id, (priced.reduce((sum, cost) => sum + cost, 0) / priced.length) * count);
     }
     return monthly;

@@ -1162,6 +1162,20 @@ test(
             (await priced.listSchedules()).find((item) => item.id === planSchedule.id)!.monthlyUsd,
             null,
           );
+
+          const projection = async (id: string) =>
+            (await priced.listSchedules()).find((item) => item.id === id)!.monthlyUsd;
+          const daily = await create({ cron: '0 9 * * *' });
+          const dailyUsd = (await projection(daily.id))!;
+          assert.ok(dailyUsd > 0);
+          for (const start of ['2036-01-02T12:00:00.000Z', '2036-01-15T12:00:00.000Z']) {
+            clock = new Date(start);
+            const monthlyRun = await create({ cron: '0 9 15 * *' });
+            assert.ok(Math.abs((await projection(monthlyRun.id))! / dailyUsd - 1 / 30) < 0.002);
+          }
+          const leapDay = await create({ cron: '0 0 29 2 *' });
+          const yearly = await projection(leapDay.id);
+          assert.ok(yearly !== null && yearly > 0 && yearly < dailyUsd / 100);
         },
       );
       await t.test(
