@@ -61,7 +61,7 @@ The fake apps are hand-written approximations of Composio's responses, not recor
    pnpm run eval:capability doctor --fix
    ```
 
-3. Run all 121 controlled cases, three attempts each.
+3. Run all 123 controlled cases, three attempts each.
 
    ```sh title="Terminal"
    pnpm run eval:capability run
@@ -79,7 +79,7 @@ The release suite adds 254 cases: 207 of everyday work across every connected ap
 pnpm run eval:capability run --tier release --repeat 3 --concurrency 3 --budget 500
 ```
 
-`--tier release` runs the release cases together with every controlled case, 375 attempts per repeat before time-window skips. Each attempt starts its own workspace and browser containers; `--concurrency 6` fits in 8 GB of Docker memory. Database connections are a separate limit. Start with concurrency two when you use a standard disposable database. Each attempt starts several connection pools. Parallel campaigns add their load. Increase concurrency only when the database has spare connections. To run one area, add `--capability vault`, or name cases with `--scenario`.
+`--tier release` runs the release cases together with every controlled case, 377 attempts per repeat before time-window skips. Each attempt starts its own workspace and browser containers; `--concurrency 6` fits in 8 GB of Docker memory. Database connections are a separate limit. Start with concurrency two when you use a standard disposable database. Each attempt starts several connection pools. Parallel campaigns add their load. Increase concurrency only when the database has spare connections. To run one area, add `--capability vault`, or name cases with `--scenario`.
 
 Results go to `.local/capability-evals/<label>/`. Open `report.html` to read every transcript and check. A label never overwrites an earlier run. If a worker fails before it can save checks, its log records the phase: start, prepare, play, collect, or grade.
 
@@ -287,7 +287,7 @@ flowchart TD
 
 ## The suite
 
-The suite has 379 cases: 121 controlled cases, 254 release cases, three live web cases and the harness canary.
+The suite has 381 cases: 123 controlled cases, 254 release cases, three live web cases and the harness canary.
 
 | Status      | Meaning                                                                                                                    |
 | ----------- | -------------------------------------------------------------------------------------------------------------------------- |
