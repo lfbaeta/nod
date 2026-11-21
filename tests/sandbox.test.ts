@@ -643,7 +643,7 @@ test('an uncertain command is stopped once and the workspace keeps working', asy
   }
 });
 
-test('a command Nod stops at its output limit names the limit, and a Stop stays cancelled', async () => {
+test('a command Nod stops at its output limit names the limit, and a Stop stays cancelled', async (t) => {
   const docker = fakeDocker(async () => ({ code: 0 }));
   try {
     const flooding = docker.session.exec('flood');
@@ -674,6 +674,18 @@ test('a command Nod stops at its output limit names the limit, and a Stop stays 
       uncertain: false,
       message: 'The connected CLI install ran longer than its 600-second limit.',
     });
+
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const slow = docker.session.exec('slow', { timeoutMs: 90_000 });
+    await docker.launches[3]!.request;
+    t.mock.timers.tick(91_000);
+    await docker.launches[3]!.cancelled;
+    docker.exit(3, -15, 'cancelled');
+    await assert.rejects(slow, {
+      uncertain: false,
+      message: 'Workspace command ran longer than its 90-second limit.',
+    });
+    t.mock.timers.reset();
   } finally {
     await docker.workspace.dispose();
   }
