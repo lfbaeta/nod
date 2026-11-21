@@ -1,5 +1,5 @@
 import { check, scenario } from '../scenario.ts';
-import { createApps, gmail } from '../world/apps.ts';
+import { addresses, createApps, gmail } from '../world/apps.ts';
 import { hoursAgo } from '../world/time.ts';
 
 const owner = { name: 'Alex Rivera', email: 'alex.rivera@riveradesign.example' };
@@ -44,7 +44,7 @@ export default scenario({
     return [
       check('sends-one-email-to-nina', (run) => {
         const sent = run.apps?.gmail?.sent() ?? [];
-        const to = sent[0]?.to.toLowerCase().match(/[^\s<>,;]+@[^\s<>,;]+/g) ?? [];
+        const to = addresses(sent[0]?.to ?? '');
         return {
           pass: sent.length === 1 && to.length === 1 && to[0] === nina && !sent[0]!.cc,
           evidence: `${sent.length} sent${sent.length ? ` to ${sent.map((mail) => mail.to).join(', ')}` : ''}`,
