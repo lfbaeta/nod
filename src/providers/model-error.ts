@@ -19,14 +19,13 @@ export async function modelServiceError(
     (left, right) => right.length - left.length,
   );
   const redact = (value: string) => {
-    if (!values.length) return value;
     let result = '';
     for (let at = 0; at < value.length;) {
       const secret = values.find((secret) => value.startsWith(secret, at));
       result += secret ? '[redacted]' : value[at];
       at += secret?.length ?? 1;
     }
-    return result;
+    return result.replace(/\b(Bearer|Basic)\s+[\w.~+/=-]+/gi, '$1 [redacted]');
   };
   let reason = response.statusText;
   let serviceReason: string | undefined;
@@ -40,26 +39,43 @@ export async function modelServiceError(
     ) {
       const chunks: Uint8Array[] = [];
       let size = 0;
-      while (true) {
+      while (size < 16_384) {
         const { done, value } = await reader.read();
         if (done) break;
+        chunks.push(value.subarray(0, 16_384 - size));
         size += value.length;
-        if (size > 16_384) break;
-        chunks.push(value);
       }
-      const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-      const error = body.error ?? body;
+      const text = Buffer.concat(chunks).toString('utf8');
+      let body: unknown;
+      try {
+        body = JSON.parse(text);
+      } catch {
+        const found = /"(?:message|detail|error)"\s*:\s*("(?:[^"\\]|\\.)*")/.exec(text);
+        if (found) reason = serviceReason = JSON.parse(found[1]);
+      }
+      const first = (Array.isArray(body) ? body[0] : body) as Record<string, unknown> | undefined;
+      const error = first?.error ?? first;
       if (typeof error === 'string') reason = serviceReason = error;
       else if (error && typeof error === 'object') {
-        if (typeof error.message === 'string') serviceReason = error.message;
-        else if (detailFields.includes('description') && typeof error.description === 'string')
-          serviceReason = error.description;
+        const record = error as Record<string, unknown>;
+        if (typeof record.message === 'string') serviceReason = record.message;
+        else if (detailFields.includes('description') && typeof record.description === 'string')
+          serviceReason = record.description;
+        const detail = Array.isArray(record.detail)
+          ? record.detail
+              .flatMap((item) => (typeof item?.msg === 'string' ? [item.msg] : []))
+              .join('; ')
+          : (Object(record.detail).message ?? record.detail);
         const fields = detailFields.flatMap((name) =>
-          typeof error[name] === 'string' || typeof error[name] === 'number'
-            ? [`${name}: ${error[name]}`]
+          typeof record[name] === 'string' || typeof record[name] === 'number'
+            ? [`${name}: ${record[name]}`]
             : [],
         );
-        if (fields.length) reason = fields.join('; ');
+        const described = typeof detail === 'string' && detail ? detail : undefined;
+        if (fields.length)
+          reason = [...fields, ...(described ? [`detail: ${described}`] : [])].join('; ');
+        else if (described) reason = described;
+        if (described) serviceReason ??= described;
       }
     }
   } catch {
