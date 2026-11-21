@@ -55,6 +55,7 @@ import { trustSystemCertificates } from '../main/system-certificates.mjs';
 import { createStartupFeedbackClient } from '../main/feedback-client.mjs';
 import appPages from '../../src/shared/app-pages.json' with { type: 'json' };
 import posthogHost from '../../src/shared/posthog-host.json' with { type: 'json' };
+import startupSteps from '../../src/shared/startup-steps.json' with { type: 'json' };
 import { environmentSecrets } from '../../src/shared/environment-secrets.mjs';
 import { createLiteralMasker } from '../../src/shared/literal-masks.mjs';
 import {
@@ -598,7 +599,13 @@ async function runningDesktop(
   };
   const context = {
     readFileSync: (path) =>
-      JSON.stringify(path.endsWith('posthog-host.json') ? posthogHost : appPages),
+      JSON.stringify(
+        path.endsWith('posthog-host.json')
+          ? posthogHost
+          : path.endsWith('startup-steps.json')
+            ? startupSteps
+            : appPages,
+      ),
     appOpenPath,
     Buffer,
     trustSystemCertificates: trustCertificates,
@@ -4489,6 +4496,58 @@ test('a background service health timeout records the last failure without priva
         log,
       );
       assert.doesNotMatch(log, /synthetic-private-detail/);
+    });
+  }
+});
+
+test('a background service that reports new startup steps gets more time, up to a cap', async (t) => {
+  const valid = startupSteps;
+  for (const scenario of [
+    { name: 'progressing', steps: valid.slice(0, 6), ready: true },
+    { name: 'capped', steps: valid, ready: false, waited: /timed out after 6\d\d\.\ds\./ },
+    {
+      name: 'ignored',
+      steps: ['Database', 'x'.repeat(21), 42, 'unknown', 'loading', 'loading', 'loaded', 'loading'],
+      ready: false,
+      waited: /timed out after (?:29[5-9]|30[0-4])\.\ds\./,
+    },
+  ]) {
+    await t.test(scenario.name, async (t) => {
+      let clock = Date.now();
+      let reported = 0;
+      const f = await runningDesktop(
+        t,
+        async () => {
+          if (reported === scenario.steps.length) {
+            if (scenario.ready) return Response.json({ ok: true });
+            clock += scenario.name === 'ignored' ? 10_000 : 90_000;
+            return new Response(null, { status: 503 });
+          }
+          clock += scenario.name === 'ignored' ? 25_000 : 90_000;
+          f.children[0].emit('message', { type: 'nod-starting', step: scenario.steps[reported++] });
+          await new Promise((accept) => setTimeout(accept, 5));
+          return new Response(null, { status: 503 });
+        },
+        { allowStart: true, now: () => clock },
+      );
+      f.crash();
+      const status = await f.prepare();
+      const log = await readFile(join(f.profileRoot, 'logs/startup.log'), 'utf8');
+      if (scenario.ready) {
+        assert.equal(status.phase, 'ready');
+        assert.match(log, /Background service step: database after \d+\.\ds\./);
+        assert.doesNotMatch(log, /Background service health check timed out/);
+        await f.close();
+        return;
+      }
+      assert.equal(status.phase, 'error');
+      assert.match(status.error, /did not respond/);
+      assert.match(log, scenario.waited);
+      if (scenario.name === 'ignored') {
+        assert.equal(log.match(/Background service step:/g)?.length, 2);
+        assert.doesNotMatch(log, /step: (?:Database|x{21}|42|unknown)/);
+        assert.match(log, /Last startup step: loaded\./);
+      } else assert.match(log, /Last startup step: listening\./);
     });
   }
 });

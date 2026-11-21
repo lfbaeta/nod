@@ -109,7 +109,7 @@ On Mac and Linux, Nod records new first setups and marks them complete after the
 
 An interrupted Mac setup from an older version can lack that record. If retry still fails, keep its files and [report a bug with the startup log](#report-a-bug-with-a-diagnostic-report).
 
-If the background service does not respond within two minutes, the startup log records the elapsed wait and the last health check failure. It also records whether the service reported its port. An unexpected service exit has a separate log entry.
+The background service reports each startup step, and the startup log records each step with the time since the service started. Nod keeps waiting while new steps arrive. It stops when two minutes pass without a new step, or after ten minutes in total. The log then records the elapsed wait, the last health check failure, the last startup step and whether the service reported its port. An unexpected service exit has a separate log entry.
 
 On a Mac, setup keeps runtime files that passed their checks, even if a later download fails. **Try again** checks and reuses those files. It does not remove a verified image while the private computer loads it.
 

@@ -70,6 +70,9 @@ const engineRoot = app.isPackaged
   : resolve(desktopRoot, '..');
 const notificationIcon = join(engineRoot, app.isPackaged ? 'dist/web' : 'public', 'nod-logo.png');
 const appPages = JSON.parse(readFileSync(join(engineRoot, 'src/shared/app-pages.json'), 'utf8'));
+const startupSteps = JSON.parse(
+  readFileSync(join(engineRoot, 'src/shared/startup-steps.json'), 'utf8'),
+);
 const posthogConfig = JSON.parse(
   readFileSync(join(engineRoot, 'src/shared/posthog-host.json'), 'utf8'),
 );
@@ -2838,6 +2841,8 @@ async function startEngine({ runtime, signal, pending = false }) {
     needsRuntimeArchive: false,
     unlockingKeys: false,
   });
+  let step = 'none';
+  let deadline = started + 120_000;
   const child = utilityProcess.fork(join(engineRoot, 'desktop', 'main', 'engine.mjs'), [], {
     cwd: engineRoot,
     env: environment,
@@ -2848,6 +2853,17 @@ async function startEngine({ runtime, signal, pending = false }) {
   child.on('message', (message) => {
     if (engine === child && message?.type === 'nod-ready' && message.port === port) {
       engineBound = true;
+    }
+    if (
+      engine === child &&
+      message?.type === 'nod-starting' &&
+      startupSteps.indexOf(message.step) > startupSteps.indexOf(step)
+    ) {
+      step = message.step;
+      deadline = Math.min(Math.max(deadline, Date.now() + 120_000), started + 600_000);
+      void writeDiagnostic(
+        `Background service step: ${step} after ${((Date.now() - started) / 1000).toFixed(1)}s.`,
+      ).catch(() => {});
     }
     if (engine === child && message?.type === 'nod-1password-open') openOnePassword(child);
     if (engine === child && message?.type === 'nod-trash') void moveToTrash(child, message);
@@ -2923,7 +2939,6 @@ async function startEngine({ runtime, signal, pending = false }) {
       showSettings('general', true);
     }
   });
-  const deadline = started + 120_000;
   let ready = false;
   let lastFailure = 'none';
   let lastHealthStatus;
@@ -2947,7 +2962,7 @@ async function startEngine({ runtime, signal, pending = false }) {
   if (!ready && engine === child && !signal.aborted && Date.now() >= deadline) {
     const waited = ((Date.now() - started) / 1000).toFixed(1);
     await writeDiagnostic(
-      `Background service health check timed out after ${waited}s. Engine process still running: yes. Last health check: ${lastFailure}. Engine reported its port: ${engineBound ? 'yes' : 'no'}.`,
+      `Background service health check timed out after ${waited}s. Engine process still running: yes. Last health check: ${lastFailure}. Engine reported its port: ${engineBound ? 'yes' : 'no'}. Last startup step: ${step}.`,
       { event: 'health_timeout', durationMs: Date.now() - started, httpStatus: lastHealthStatus },
     ).catch(() => {});
   }

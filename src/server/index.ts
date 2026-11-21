@@ -2,6 +2,7 @@ import { pool } from './db.ts';
 import { authToken, dataRoot, desktopMode, host, port, publicOrigin, webRoot } from './config.ts';
 import { accessKey } from './access.ts';
 import { createApplication, createDefaultAdapters } from './composition.ts';
+import startupSteps from '../shared/startup-steps.json' with { type: 'json' };
 
 let stopping = false;
 let closeApplication: (() => Promise<void>) | undefined;
@@ -25,8 +26,17 @@ const runtimeReady =
         parent.on('message', ready);
       })
     : undefined;
+const progress = (step: string) => {
+  if (!startupSteps.includes(step)) throw new Error(`Unknown startup step: ${step}.`);
+  if (desktopMode)
+    (
+      process as NodeJS.Process & { parentPort?: { postMessage(message: unknown): void } }
+    ).parentPort?.postMessage({ type: 'nod-starting', step });
+};
+progress('loaded');
 const { app } = await createApplication(createDefaultAdapters(process.env), {
   runtimeReady,
+  progress,
 });
 closeApplication = () => app.close();
 if (!desktopMode && process.env.NODE_ENV !== 'production') {
@@ -95,6 +105,7 @@ if (desktopMode)
   process.on('disconnect', () => {
     void shutdown(true);
   });
+progress('listening');
 await app.listen({
   port,
   host,
