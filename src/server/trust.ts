@@ -268,6 +268,11 @@ export function createTrust(options: {
         JSON.stringify([words.userRules ?? '', words.standingInstruction ?? '']);
       if (permission(latest) !== permission(captured))
         throw new Error('The owner rules changed while this action was being checked.');
+      if (basis.kind !== 'read')
+        await pool.query(
+          'UPDATE turns SET outside_action_at=COALESCE(outside_action_at,now()) WHERE id=$1 AND owner_id=$2',
+          [turn.turnId, ownerId],
+        );
       return { confirm: false, basis, ...revision, ...instructionChange };
     }
     if (

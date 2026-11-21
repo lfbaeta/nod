@@ -119,7 +119,7 @@ export interface ScheduleDependencies {
   recentTurnUsage?(
     turnId?: string,
     projectAtApiRates?: boolean,
-  ): Promise<Array<WorkUsage & { recordedUsd: number }>>;
+  ): Promise<Array<WorkUsage & { recordedUsd: number; work?: boolean }>>;
   validateModel?(choice: ModelSelection): ModelSelection;
   sessionUsage?(sessionIds: string[]): Promise<Record<string, WorkUsage & { unpriced: boolean }>>;
   workPricing?(own: ModelSelection | null): WorkPrice | undefined;
@@ -808,12 +808,12 @@ export function createSchedules(dependencies: ScheduleDependencies) {
         const cost = forecast(spent, recorded, target);
         return hasPrice(cost) ? [cost] : [];
       });
-    let fallback: Promise<Array<WorkUsage & { recordedUsd: number }>> | undefined;
+    let fallback: Promise<Array<WorkUsage & { recordedUsd: number; work?: boolean }>> | undefined;
     const recentTurnMedian = async (target: WorkPrice | undefined) => {
-      const samples = (
-        await (fallback ??=
-          dependencies.recentTurnUsage?.(turnId, target !== undefined) ?? Promise.resolve([]))
-      )
+      const recent = await (fallback ??=
+        dependencies.recentTurnUsage?.(turnId, target !== undefined) ?? Promise.resolve([]));
+      const work = recent.filter((sample) => sample.work);
+      const samples = (work.length ? work : recent)
         .map((sample) => forecast(sample, sample.recordedUsd, target))
         .filter(hasPrice)
         .sort((a, b) => a - b);
