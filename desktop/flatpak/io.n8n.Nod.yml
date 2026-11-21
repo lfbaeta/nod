@@ -15,6 +15,7 @@ finish-args:
   - --device=dri
   - --device=kvm
   - --filesystem=home
+  - --filesystem=host-etc:ro
   - --filesystem=/media
   - --filesystem=/run/media
   - --talk-name=org.freedesktop.Notifications
