@@ -461,6 +461,17 @@ test('payment explanations cannot add links beside the private approval action',
   );
 });
 
+test('bare payment links render as links in chat messages and resolve as Vault setup links', () => {
+  const url = '/payments/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+  const rendered = render(`Approve this payment at ${url}.`);
+  assert.match(rendered, new RegExp(`<a\\b[^>]*href="${url}"`));
+  assert.deepEqual(
+    messageSetupLinks(`Approve this payment at ${url}.`, 'https://nod.fixture.test'),
+    [{ href: url, setup: 'vault', label: 'Open Vault' }],
+  );
+  assert.doesNotMatch(render(paymentExplanation(`Reference ${url}`)), /<a\b/i);
+});
+
 test('reply excerpts cannot load media or expose nested actions', () => {
   const result = renderToStaticMarkup(
     createElement(MessageQuote, {
