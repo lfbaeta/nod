@@ -562,7 +562,9 @@ export function presentationText(value: Presentation) {
         lines.push(
           [
             `Rating: ${rating.value}/${rating.scale}`,
-            rating.count === undefined ? undefined : `${rating.count} reviews`,
+            rating.count === undefined
+              ? undefined
+              : `${rating.count.toLocaleString('en-US')} ${rating.count === 1 ? 'review' : 'reviews'}`,
             `${rating.sourceLabel}: ${rating.url}`,
             rating.summary,
           ]
