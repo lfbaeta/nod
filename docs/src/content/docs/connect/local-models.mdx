@@ -136,6 +136,8 @@ For services listed in **Models**, such as Groq, Together AI, and DeepSeek, use 
 
 Use an OpenAI-compatible connection for other hosted services that offer this API. Enter the service's address and your API key.
 
+For example, [AI/ML API](https://docs.aimlapi.com/faq/openai-sdk-doesnt-work) documents OpenAI-compatible access at `https://api.aimlapi.com/v1`. Add that address and your AI/ML API key to an **OpenAI-compatible** connection, then choose a chat model that supports tool calls. The service's model catalogue is available through its [`/v1/models` endpoint](https://docs.aimlapi.com/api-references/service-endpoints/complete-model-list).
+
 Without model details, Nod lists every model the service returns, including ones that cannot chat. Pick a chat model that supports tools.
 
 If the server offers Ollama model details, Nod uses its capability list to filter models, even when other details are missing. An empty list, or a list without tool support, excludes the model. A missing or invalid list leaves tool support unknown, so Nod lists the model.
