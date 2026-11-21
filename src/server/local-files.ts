@@ -434,13 +434,8 @@ export function createLocalFiles(
         throw error;
       });
     }
-    if (info.isDirectory() && process.platform !== 'win32') {
-      await mkdir(target).catch(fail);
-      return rename(source, target).catch(async (error: NodeJS.ErrnoException) => {
-        if (error.code !== 'EXDEV') {
-          await rmdir(target).catch(() => undefined);
-          throw error;
-        }
+    if (info.isDirectory()) {
+      const copyDirectory = async () => {
         try {
           for (const name of await readdir(source))
             await cp(nodePath.join(source, name), nodePath.join(target, name), {
@@ -455,6 +450,21 @@ export function createLocalFiles(
           throw copy;
         }
         await rm(source, { recursive: true });
+      };
+      if (process.platform === 'win32') {
+        return rename(source, target).catch(async (error: NodeJS.ErrnoException) => {
+          if (error.code !== 'EXDEV') return fail(error);
+          await mkdir(target).catch(fail);
+          await copyDirectory();
+        });
+      }
+      await mkdir(target).catch(fail);
+      return rename(source, target).catch(async (error: NodeJS.ErrnoException) => {
+        if (error.code !== 'EXDEV') {
+          await rmdir(target).catch(() => undefined);
+          throw error;
+        }
+        await copyDirectory();
       });
     }
     if (info.isSymbolicLink()) {
@@ -469,9 +479,7 @@ export function createLocalFiles(
         throw error;
       });
     }
-    if (process.platform !== 'win32')
-      throw new IntegrationError(`${source} is not a file, folder or link.`);
-    await rename(source, target);
+    throw new IntegrationError(`${source} is not a file, folder or link.`);
   }
 
   async function regularFile(path: string) {
