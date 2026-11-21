@@ -1938,6 +1938,7 @@ describe('account routes', () => {
     key?: string,
     onboardingMissing?: () => Promise<'brain' | 'email' | null>,
     model?: Parameters<typeof createAccountSession>[0]['model'],
+    extra: Partial<Parameters<typeof createAccountSession>[0]> = {},
   ) {
     let record: AccountSettings = {
       theme: 'system',
@@ -1997,6 +1998,7 @@ describe('account routes', () => {
       onTraces,
       onboardingMissing,
       model,
+      ...extra,
     }).register(app);
     await app.ready();
     return { app, calls, activity, record: () => record };
@@ -2044,6 +2046,43 @@ describe('account routes', () => {
     });
     assert.ok(reopened.statusCode >= 400);
     assert.equal(f.record().onboardingCompleted, true);
+  });
+
+  test('setup failures keep their reason without secrets and are logged', async (t) => {
+    const reason = 'The local computer could not start: Docker daemon is not running';
+    const failure = new Error(`${reason} (Bearer synthetic-secret-token-0123456789)`);
+    const preparing = await fixture(undefined, undefined, undefined, async () => null, undefined, {
+      async prepare() {
+        throw failure;
+      },
+    });
+    const verifying = await fixture(undefined, undefined, undefined, async () => {
+      throw failure;
+    });
+    t.after(() => Promise.all([preparing.app.close(), verifying.app.close()]));
+    const logged = t.mock.method(console, 'error', () => {});
+    const send = (f: typeof preparing, method: 'PATCH' | 'POST', url: string, payload: object) =>
+      f.app.inject({ method, url, headers: { origin }, payload });
+    const responses = [
+      await send(preparing, 'PATCH', '/api/account', { onboardingCompleted: true }),
+      await send(preparing, 'POST', '/api/account/prepare', {}),
+      await send(verifying, 'PATCH', '/api/account', { onboardingCompleted: true }),
+    ];
+    assert.deepEqual(
+      responses.map((response) => [response.statusCode, response.json().error]),
+      [
+        [503, `Setup could not be completed. ${reason} ([redacted])`],
+        [503, `Setup could not be completed. ${reason} ([redacted])`],
+        [503, `Could not verify setup. ${reason} ([redacted])`],
+      ],
+    );
+    assert.deepEqual(
+      logged.mock.calls.map((call) => JSON.parse(String(call.arguments[0])).event),
+      ['setup_failed', 'setup_failed', 'setup_failed'],
+    );
+    const written = JSON.stringify(logged.mock.calls.map((call) => call.arguments));
+    assert.doesNotMatch(written, /synthetic-secret-token|Docker daemon/);
+    assert.equal(verifying.record().onboardingCompleted, false);
   });
 
   test('usage data stays off until the owner opts in and the environment switch always wins', async (t) => {
