@@ -1847,6 +1847,43 @@ test(
     assert.ok(!inputs.join('\n').includes('Foreign Maple detail.'));
     assert.ok(!inputs.join('\n').includes('Archived Maple detail.'));
     assert.deepEqual(await memory.load(), before);
+    const emojiMessage = randomUUID();
+    await pool.query(
+      'INSERT INTO messages(id,owner_id,thread_id,turn_id,role,text,created_at) VALUES($1,$2,$3,NULL,$4,$5,$6)',
+      [emojiMessage, 'owner-a', active, 'user', `Maple fair ${'😀'.repeat(700)}`, new Date()],
+    );
+    const emojiInputs: unknown[] = [];
+    const emojiRecall = createMemoryRecall({
+      pool,
+      ownerId: 'owner-a',
+      memory,
+      curator: {
+        id: 'fixture',
+        configured: true,
+        async curate({ input }) {
+          emojiInputs.push(input);
+          return 'mode' in input
+            ? { paths: [], messages: [emojiMessage] }
+            : { mode: 'recall', paths: [], queries: ['Maple fair'] };
+        },
+      },
+    });
+    const emojiPrompt = `a${'😀'.repeat(3000)}`;
+    const emojiBrief = await emojiRecall.prepare({
+      ...context,
+      prompt: emojiPrompt,
+      history: [{ id: randomUUID(), role: 'user', text: emojiPrompt }],
+    } as unknown as Parameters<typeof recall.prepare>[0]);
+    assert.ok(emojiBrief?.messages.some((message) => message.id === emojiMessage));
+    assert.ok(JSON.stringify(emojiInputs).includes('Middle of message omitted'));
+    for (const value of [emojiInputs, emojiBrief]) {
+      const text = JSON.stringify(value);
+      assert.doesNotMatch(
+        text,
+        /\\ud[89ab][0-9a-f]{2}(?!\\ud[c-f][0-9a-f]{2})|(?<!\\ud[89ab][0-9a-f]{2})\\ud[c-f][0-9a-f]{2}/,
+      );
+    }
+    await pool.query('DELETE FROM messages WHERE id=$1', [emojiMessage]);
     await pool.query('UPDATE messages SET text=$1 WHERE id=$2', [
       'The source was changed.',
       old.id,

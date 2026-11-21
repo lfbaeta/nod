@@ -4,6 +4,7 @@ import { z } from 'zod';
 import type { MemoryCurator } from '../ports/memory-curator.ts';
 import { taskType, type AnalyticsEvent } from './analytics-events.ts';
 import { snapshotAnalytics, type CaptureAnalytics } from './analytics.ts';
+import { previewSlice } from './message-preview.ts';
 import { createTextRedactor } from './redaction.ts';
 
 const response = z.object({ task_type: taskType }).strict();
@@ -133,7 +134,7 @@ export function createTaskClassification(options: {
       const text = messages.length
         ? messages.map(({ text }) => text).join('\n')
         : task?.brief?.trim() || task?.done_when?.trim() || root.prompt;
-      const request = redact(text).slice(0, 6000).trim();
+      const request = previewSlice(redact(text), 6000).trim();
       if (!request) classified = result('not_applicable');
       else if (current(consent) && (await active(root.id))) {
         try {

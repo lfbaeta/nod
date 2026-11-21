@@ -11,7 +11,7 @@ const markdown = unified().use(remarkParse).use(remarkGfm).use(remarkStringify, 
   fences: true,
 });
 
-function previewSlice(value: string, length: number): string {
+export function previewSlice(value: string, length: number): string {
   let end = Math.min(length, value.length);
   if (
     (value.charCodeAt(end - 1) & 0xfc00) === 0xd800 &&

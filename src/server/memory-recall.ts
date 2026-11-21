@@ -5,6 +5,7 @@ import type { RuntimeContext } from '../ports/agent.ts';
 import type { MemoryBrief } from '../ports/memory-recall.ts';
 import type { MemoryService } from './memory.ts';
 import { createHistorySearch } from './history.ts';
+import { previewSlice } from './message-preview.ts';
 import { unsafe } from './memory-tree.ts';
 
 const planSchema = z.object({
@@ -25,7 +26,13 @@ function selectionText(value: string, limit: number) {
   if (value.length <= limit) return value;
   const marker = '\n[Middle of message omitted]\n';
   const first = Math.ceil((limit - marker.length) / 2);
-  return `${value.slice(0, first)}${marker}${value.slice(-(limit - marker.length - first))}`;
+  let last = value.length - (limit - marker.length - first);
+  if (
+    (value.charCodeAt(last) & 0xfc00) === 0xdc00 &&
+    (value.charCodeAt(last - 1) & 0xfc00) === 0xd800
+  )
+    last++;
+  return `${previewSlice(value, first)}${marker}${value.slice(last)}`;
 }
 
 export function createMemoryRecall(options: {
@@ -131,7 +138,7 @@ export function createMemoryRecall(options: {
     const messages = new Map<string, MemoryBrief['messages'][number]>();
     const searches: MemoryBrief['searches'] = [];
     let truncated = false;
-    const queries = [...new Set([context.prompt.slice(0, 4000), ...plan.queries])].slice(0, 5);
+    const queries = [...new Set([previewSlice(context.prompt, 4000), ...plan.queries])].slice(0, 5);
     for (const query of queries) {
       let cursor: string | undefined;
       for (let page = 0; page < (plan.mode === 'aggregate' ? 5 : 1); page++) {
@@ -147,7 +154,7 @@ export function createMemoryRecall(options: {
           messages.set(message.id, {
             id: message.id,
             role: message.role,
-            text: message.text.slice(0, 1200),
+            text: previewSlice(message.text, 1200),
             at: message.created_at.toISOString(),
             shortened: message.shortened || message.text.length > 1200,
           });

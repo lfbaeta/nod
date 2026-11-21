@@ -673,6 +673,12 @@ test(
       assert.ok(request.length <= 6000);
       assert.ok(!JSON.stringify(f.captured).includes(secret));
     });
+    await t.test('classifier input is cut on a whole character', async (t) => {
+      const f = await fixture(t);
+      await f.run(await f.turn(`${'a'.repeat(5999)}😀 and then some more text`));
+      const request = (f.requests[0].input as { request: string }).request;
+      assert.equal(request, 'a'.repeat(5999));
+    });
     await t.test(
       'reverse-order completions preserve their originating analytics run',
       async (t) => {
