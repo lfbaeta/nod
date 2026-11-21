@@ -785,6 +785,22 @@ test('Join sends fixed answers only with a matching confirmed share', async (t) 
   assert.equal(completed, 4);
 });
 
+test('a failed export keeps the server reason and status', async (t) => {
+  const { downloadExport } = await import('../src/web/lib/download.ts');
+  const fetch = t.mock.method(globalThis, 'fetch', async () =>
+    Response.json({ error: 'The export is too large.' }, { status: 413 }),
+  );
+  await assert.rejects(downloadExport('/api/memory/export', 'memory.json', 'Your memory'), {
+    message: 'Your memory could not be exported: The export is too large.',
+    status: 413,
+  });
+  fetch.mock.mockImplementation(async () => new Response('<html>502</html>', { status: 502 }));
+  await assert.rejects(downloadExport('/api/memory/export', 'memory.json', 'Your memory'), {
+    message: 'Your memory could not be exported (HTTP 502).',
+    status: 502,
+  });
+});
+
 test('decision catalog filters native text decisions, expires and refuses failed lookups', async (t) => {
   t.mock.timers.enable({ apis: ['Date'], now: 1_000 });
   let calls = 0;
